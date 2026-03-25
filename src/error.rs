@@ -26,6 +26,18 @@ pub enum UshmaError {
 
     #[error("invalid parameter: {reason}")]
     InvalidParameter { reason: String },
+
+    #[error("substance not found: {name}")]
+    SubstanceNotFound { name: String },
+
+    #[error("steam table out of range: T={temperature} K, P={pressure} Pa")]
+    SteamTableOutOfRange { temperature: f64, pressure: f64 },
+
+    #[error("invalid quality (dryness fraction): x={quality}, must be in [0, 1]")]
+    InvalidQuality { quality: f64 },
+
+    #[error("superheated steam lookup out of range: T={temperature} K, P={pressure} Pa")]
+    SuperheatOutOfRange { temperature: f64, pressure: f64 },
 }
 
 pub type Result<T> = std::result::Result<T, UshmaError>;
@@ -98,6 +110,44 @@ mod tests {
         assert!(ok.is_ok());
         let err: Result<f64> = Err(UshmaError::InvalidTemperature { kelvin: -1.0 });
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_substance_not_found() {
+        let e = UshmaError::SubstanceNotFound {
+            name: "unobtainium".into(),
+        };
+        assert!(e.to_string().contains("unobtainium"));
+    }
+
+    #[test]
+    fn test_steam_table_out_of_range() {
+        let e = UshmaError::SteamTableOutOfRange {
+            temperature: 700.0,
+            pressure: 1e8,
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("700"));
+        assert!(msg.contains("steam table"));
+    }
+
+    #[test]
+    fn test_invalid_quality() {
+        let e = UshmaError::InvalidQuality { quality: 1.5 };
+        let msg = e.to_string();
+        assert!(msg.contains("1.5"));
+        assert!(msg.contains("[0, 1]"));
+    }
+
+    #[test]
+    fn test_superheat_out_of_range() {
+        let e = UshmaError::SuperheatOutOfRange {
+            temperature: 200.0,
+            pressure: 101325.0,
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("200"));
+        assert!(msg.contains("superheated"));
     }
 
     #[test]

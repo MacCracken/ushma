@@ -4,6 +4,7 @@ use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 use ushma::entropy;
 use ushma::material;
+use ushma::phase;
 use ushma::state;
 use ushma::transfer;
 
@@ -225,6 +226,33 @@ fn bench_material_volumetric_heat_capacity(c: &mut Criterion) {
     });
 }
 
+// --- Phase benchmarks ---
+
+fn bench_clausius_clapeyron_slope(c: &mut Criterion) {
+    c.bench_function("phase/clausius_clapeyron_slope", |b| {
+        b.iter(|| {
+            phase::clausius_clapeyron_slope(
+                black_box(2_260_000.0),
+                black_box(373.15),
+                black_box(1.672),
+            )
+        });
+    });
+}
+
+fn bench_clausius_clapeyron_pressure(c: &mut Criterion) {
+    c.bench_function("phase/clausius_clapeyron_pressure", |b| {
+        b.iter(|| {
+            phase::clausius_clapeyron_pressure(
+                black_box(101_325.0),
+                black_box(373.15),
+                black_box(383.15),
+                black_box(40_714.0),
+            )
+        });
+    });
+}
+
 criterion_group!(
     benches,
     // transfer
@@ -254,6 +282,9 @@ criterion_group!(
     // material
     bench_material_diffusivity,
     bench_material_volumetric_heat_capacity,
+    // phase
+    bench_clausius_clapeyron_slope,
+    bench_clausius_clapeyron_pressure,
 );
 
 criterion_main!(benches);

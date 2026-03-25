@@ -5,50 +5,58 @@ Three-point tracking: **baseline** (first run) / **previous** / **latest**
 | Point | Date | Commit |
 |-------|------|--------|
 | Baseline | 2026-03-25T01:33:49Z | `a9565aa` |
-| Latest | 2026-03-25T02:39:01Z | `a9565aa` |
+| Previous | 2026-03-25T02:39:01Z | `a9565aa` |
+| Latest | 2026-03-25T03:17:37Z | `90e55ac` |
 
 ## transfer
 
-| Benchmark | Baseline | Latest |
-|-----------|----------|--------|
-| `conduction` | 3.04 ns | 3.27 ns |
-| `convection` | 1.32 ns | 1.42 ns |
-| `radiation` | 2.31 ns | 3.75 ns |
-| `resistance_series` | 2.67 ns | 2.23 ns |
-| `resistance_parallel` | 4.87 ns | 4.97 ns |
-| `heat_stored` | 1.11 ns | 1.07 ns |
-| `diffusivity` | 3.16 ns | 2.88 ns |
-| `biot_number` | 2.49 ns | 2.95 ns |
-| `lumped_capacitance` | 6.44 ns | 6.55 ns |
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `conduction` | 3.04 ns | 3.27 ns | 3.57 ns |
+| `convection` | 1.32 ns | 1.42 ns | 1.63 ns |
+| `radiation` | 2.31 ns | 3.75 ns | 3.98 ns |
+| `resistance_series` | 2.67 ns | 2.23 ns | 2.59 ns |
+| `resistance_parallel` | 4.87 ns | 4.97 ns | 5.83 ns |
+| `heat_stored` | 1.11 ns | 1.07 ns | 1.29 ns |
+| `diffusivity` | 3.16 ns | 2.88 ns | 3.39 ns |
+| `biot_number` | 2.49 ns | 2.95 ns | 3.16 ns |
+| `lumped_capacitance` | 6.44 ns | 6.55 ns | 7.70 ns |
 
 ## state
 
-| Benchmark | Baseline | Latest |
-|-----------|----------|--------|
-| `ideal_gas_pressure` | 2.16 ns | 2.01 ns |
-| `ideal_gas_volume` | 3.55 ns | 2.18 ns |
-| `van_der_waals` | 6.76 ns | 4.06 ns |
-| `isothermal_work` | 9.74 ns | 7.88 ns |
-| `adiabatic_temperature` | 14.62 ns | 17.21 ns |
-| `compressibility_factor` | 3.08 ns | 3.49 ns |
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `ideal_gas_pressure` | 2.16 ns | 2.01 ns | 2.31 ns |
+| `ideal_gas_volume` | 3.55 ns | 2.18 ns | 2.20 ns |
+| `van_der_waals` | 6.76 ns | 4.06 ns | 3.96 ns |
+| `isothermal_work` | 9.74 ns | 7.88 ns | 7.48 ns |
+| `adiabatic_temperature` | 14.62 ns | 17.21 ns | 16.47 ns |
+| `compressibility_factor` | 3.08 ns | 3.49 ns | 2.87 ns |
 
 ## entropy
 
-| Benchmark | Baseline | Latest |
-|-----------|----------|--------|
-| `carnot_efficiency` | 2.75 ns | 3.10 ns |
-| `carnot_cop` | 2.26 ns | 2.58 ns |
-| `helmholtz` | 1.10 ns | 1.21 ns |
-| `gibbs` | 1.13 ns | 1.20 ns |
-| `mixing` | 18.73 ns | 21.64 ns |
-| `ideal_gas_ds` | 13.97 ns | 14.66 ns |
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `carnot_efficiency` | 2.75 ns | 3.10 ns | 2.66 ns |
+| `carnot_cop` | 2.26 ns | 2.58 ns | 2.11 ns |
+| `helmholtz` | 1.10 ns | 1.21 ns | 1.04 ns |
+| `gibbs` | 1.13 ns | 1.20 ns | 1.06 ns |
+| `mixing` | 18.73 ns | 21.64 ns | 18.97 ns |
+| `ideal_gas_ds` | 13.97 ns | 14.66 ns | 13.04 ns |
 
 ## material
 
-| Benchmark | Baseline | Latest |
-|-----------|----------|--------|
-| `diffusivity` | 270.70 ps | 279.40 ps |
-| `volumetric_cp` | 274.20 ps | 274.40 ps |
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `diffusivity` | 270.70 ps | 279.40 ps | 265.80 ps |
+| `volumetric_cp` | 274.20 ps | 274.40 ps | 266.90 ps |
+
+## phase
+
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `clausius_clapeyron_slope` | — | — | 3.24 ns |
+| `clausius_clapeyron_pressure` | — | — | 9.34 ns |
 
 ---
 

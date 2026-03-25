@@ -28,6 +28,12 @@ pub mod entropy;
 #[cfg(feature = "material")]
 pub mod material;
 
+#[cfg(feature = "phase")]
+pub mod phase;
+
+#[cfg(feature = "steam")]
+pub mod steam;
+
 #[cfg(feature = "logging")]
 pub mod logging;
 

@@ -14,14 +14,16 @@ categories = ["science", "simulation"]
 exclude = [".claude/", ".github/", "docs/", "scripts/"]
 
 [features]
-default = ["transfer", "state", "entropy", "material"]
+default = ["transfer", "state", "entropy", "material", "phase"]
 transfer = []
 state = []
-entropy = []
+entropy = ["state"]
+phase = ["state"]
+steam = ["phase"]
 material = []
 ai = ["dep:reqwest", "dep:tokio", "dep:serde_json"]
 logging = ["dep:tracing-subscriber"]
-full = ["transfer", "state", "entropy", "material", "ai", "logging"]
+full = ["transfer", "state", "entropy", "material", "phase", "steam", "ai", "logging"]
 
 [dependencies]
 hisab = "0.22.4"
@@ -43,7 +45,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "benchmarks"
 harness = false
-required-features = ["transfer", "state", "entropy", "material"]
+required-features = ["transfer", "state", "entropy", "material", "phase"]
 
 [[test]]
 name = "integration"
