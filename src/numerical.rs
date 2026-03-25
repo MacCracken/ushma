@@ -351,6 +351,9 @@ impl ThermalGrid2D {
                 }
             }
 
+            // Update non-fixed boundary nodes (insulated = zero gradient)
+            self.apply_insulated_boundaries();
+
             if max_change < tolerance {
                 return Ok(iter + 1);
             }
@@ -359,6 +362,30 @@ impl ThermalGrid2D {
         Err(UshmaError::InvalidParameter {
             reason: format!("Gauss-Seidel did not converge in {max_iterations} iterations"),
         })
+    }
+
+    fn apply_insulated_boundaries(&mut self) {
+        // Zero gradient: boundary node = nearest interior node
+        if matches!(self.bc_left, BoundaryCondition::Insulated) {
+            for j in 1..self.ny - 1 {
+                self.nodes[j][0] = self.nodes[j][1];
+            }
+        }
+        if matches!(self.bc_right, BoundaryCondition::Insulated) {
+            for j in 1..self.ny - 1 {
+                self.nodes[j][self.nx - 1] = self.nodes[j][self.nx - 2];
+            }
+        }
+        if matches!(self.bc_bottom, BoundaryCondition::Insulated) {
+            for i in 1..self.nx - 1 {
+                self.nodes[0][i] = self.nodes[1][i];
+            }
+        }
+        if matches!(self.bc_top, BoundaryCondition::Insulated) {
+            for i in 1..self.nx - 1 {
+                self.nodes[self.ny - 1][i] = self.nodes[self.ny - 2][i];
+            }
+        }
     }
 
     fn apply_boundaries(&mut self) {
