@@ -473,6 +473,56 @@ pub fn heat_exchanger_ntu(effectiveness: f64, c_min: f64, t_h_in: f64, t_c_in: f
 
 // --- Radiation view factors ---
 
+/// View factor between two identical, directly opposed, parallel rectangles.
+///
+/// F₁₂ for two aligned parallel rectangles of width W and height H separated by distance D.
+/// Uses the Hottel crossed-string formula.
+pub fn view_factor_parallel_plates(width: f64, height: f64, distance: f64) -> Result<f64> {
+    if width <= 0.0 || height <= 0.0 || distance <= 0.0 {
+        return Err(UshmaError::InvalidParameter {
+            reason: format!("dimensions must be positive: W={width}, H={height}, D={distance}"),
+        });
+    }
+    let x = width / distance;
+    let y = height / distance;
+    let x2 = x * x;
+    let y2 = y * y;
+
+    let term1 = ((1.0 + x2) * (1.0 + y2) / (1.0 + x2 + y2)).sqrt().ln();
+    let term2 = x * (1.0 + y2).sqrt() * (x / (1.0 + y2).sqrt()).atan();
+    let term3 = y * (1.0 + x2).sqrt() * (y / (1.0 + x2).sqrt()).atan();
+    let term4 = x * x.atan();
+    let term5 = y * y.atan();
+
+    let f12 = (2.0 / (std::f64::consts::PI * x * y)) * (term1 + term2 + term3 - term4 - term5);
+    Ok(f12)
+}
+
+/// View factor between two perpendicular rectangles sharing a common edge.
+///
+/// F₁₂ for rectangle 1 (W × H₁) perpendicular to rectangle 2 (W × H₂)
+/// sharing edge of length W.
+pub fn view_factor_perpendicular_plates(width: f64, h1: f64, h2: f64) -> Result<f64> {
+    if width <= 0.0 || h1 <= 0.0 || h2 <= 0.0 {
+        return Err(UshmaError::InvalidParameter {
+            reason: format!("dimensions must be positive: W={width}, H1={h1}, H2={h2}"),
+        });
+    }
+    let h = h1 / width;
+    let w = h2 / width;
+    let h2v = h * h;
+    let w2 = w * w;
+
+    let a = (1.0 + h2v) * (1.0 + w2);
+    let b = 1.0 + h2v + w2;
+
+    let term1 = w * (1.0 + h2v).sqrt().atan() + h * (1.0 + w2).sqrt().atan();
+
+    // Simplified Hottel formula
+    let f12 = (1.0 / (std::f64::consts::PI * h)) * (term1 - b.sqrt().atan() + 0.25 * (a / b).ln());
+    Ok(f12.clamp(0.0, 1.0))
+}
+
 /// View factor between two coaxial parallel disks.
 ///
 /// F₁₂ for disk 1 (radius r₁) seeing disk 2 (radius r₂) at distance d.
@@ -853,6 +903,44 @@ mod tests {
     }
 
     // --- View factor tests ---
+
+    #[test]
+    fn test_view_factor_parallel_plates_close() {
+        // Large plates close together → F approaches 1
+        let f = view_factor_parallel_plates(10.0, 10.0, 0.1).unwrap();
+        assert!(f > 0.9, "F={f} should be close to 1 for large close plates");
+    }
+
+    #[test]
+    fn test_view_factor_parallel_plates_far() {
+        // Small plates far apart → F approaches 0
+        let f = view_factor_parallel_plates(0.1, 0.1, 10.0).unwrap();
+        assert!(f < 0.01);
+    }
+
+    #[test]
+    fn test_view_factor_parallel_plates_range() {
+        let f = view_factor_parallel_plates(1.0, 1.0, 1.0).unwrap();
+        assert!(f > 0.0 && f < 1.0);
+    }
+
+    #[test]
+    fn test_view_factor_parallel_plates_invalid() {
+        assert!(view_factor_parallel_plates(0.0, 1.0, 1.0).is_err());
+        assert!(view_factor_parallel_plates(1.0, 0.0, 1.0).is_err());
+        assert!(view_factor_parallel_plates(1.0, 1.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_view_factor_perpendicular_range() {
+        let f = view_factor_perpendicular_plates(1.0, 1.0, 1.0).unwrap();
+        assert!(f > 0.0 && f < 1.0);
+    }
+
+    #[test]
+    fn test_view_factor_perpendicular_invalid() {
+        assert!(view_factor_perpendicular_plates(0.0, 1.0, 1.0).is_err());
+    }
 
     #[test]
     fn test_view_factor_coaxial_disks_equal() {
