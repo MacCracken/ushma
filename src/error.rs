@@ -38,6 +38,18 @@ pub enum UshmaError {
 
     #[error("superheated steam lookup out of range: T={temperature} K, P={pressure} Pa")]
     SuperheatOutOfRange { temperature: f64, pressure: f64 },
+
+    #[error("invalid compression ratio: r={ratio}, must be > 1")]
+    InvalidCompressionRatio { ratio: f64 },
+
+    #[error("invalid cutoff ratio: rc={ratio}, must be > 1")]
+    InvalidCutoffRatio { ratio: f64 },
+
+    #[error("invalid pressure ratio: rp={ratio}, must be > 1")]
+    InvalidPressureRatio { ratio: f64 },
+
+    #[error("invalid cycle parameter: {reason}")]
+    InvalidCycleParameter { reason: String },
 }
 
 pub type Result<T> = std::result::Result<T, UshmaError>;
@@ -148,6 +160,34 @@ mod tests {
         let msg = e.to_string();
         assert!(msg.contains("200"));
         assert!(msg.contains("superheated"));
+    }
+
+    #[test]
+    fn test_invalid_compression_ratio() {
+        let e = UshmaError::InvalidCompressionRatio { ratio: 0.5 };
+        let msg = e.to_string();
+        assert!(msg.contains("0.5"));
+        assert!(msg.contains("compression"));
+    }
+
+    #[test]
+    fn test_invalid_cutoff_ratio() {
+        let e = UshmaError::InvalidCutoffRatio { ratio: 0.8 };
+        assert!(e.to_string().contains("cutoff"));
+    }
+
+    #[test]
+    fn test_invalid_pressure_ratio() {
+        let e = UshmaError::InvalidPressureRatio { ratio: -1.0 };
+        assert!(e.to_string().contains("pressure ratio"));
+    }
+
+    #[test]
+    fn test_invalid_cycle_parameter() {
+        let e = UshmaError::InvalidCycleParameter {
+            reason: "T3 must exceed T2".into(),
+        };
+        assert!(e.to_string().contains("T3 must exceed T2"));
     }
 
     #[test]

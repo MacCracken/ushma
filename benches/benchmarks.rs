@@ -2,6 +2,7 @@
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
+use ushma::cycle;
 use ushma::entropy;
 use ushma::material;
 use ushma::phase;
@@ -307,6 +308,51 @@ fn bench_wet_steam_properties(c: &mut Criterion) {
     });
 }
 
+fn bench_otto_cycle(c: &mut Criterion) {
+    c.bench_function("cycle/otto", |b| {
+        b.iter(|| {
+            cycle::otto_cycle(
+                black_box(300.0),
+                black_box(101_325.0),
+                black_box(8.0),
+                black_box(50_000.0),
+                black_box(1.4),
+                black_box(1.0),
+            )
+        });
+    });
+}
+
+fn bench_diesel_cycle(c: &mut Criterion) {
+    c.bench_function("cycle/diesel", |b| {
+        b.iter(|| {
+            cycle::diesel_cycle(
+                black_box(300.0),
+                black_box(101_325.0),
+                black_box(20.0),
+                black_box(2.0),
+                black_box(1.4),
+                black_box(1.0),
+            )
+        });
+    });
+}
+
+fn bench_brayton_cycle(c: &mut Criterion) {
+    c.bench_function("cycle/brayton", |b| {
+        b.iter(|| {
+            cycle::brayton_cycle(
+                black_box(300.0),
+                black_box(101_325.0),
+                black_box(10.0),
+                black_box(1400.0),
+                black_box(1.4),
+                black_box(1.0),
+            )
+        });
+    });
+}
+
 fn bench_superheated_lookup(c: &mut Criterion) {
     c.bench_function("steam/superheated_lookup", |b| {
         b.iter(|| steam::superheated_lookup(black_box(573.15), black_box(500_000.0)));
@@ -355,6 +401,10 @@ criterion_group!(
     bench_heat_of_fusion,
     bench_heat_of_vaporization,
     bench_heat_for_phase_change,
+    // cycle
+    bench_otto_cycle,
+    bench_diesel_cycle,
+    bench_brayton_cycle,
     // steam
     bench_saturated_by_temp,
     bench_saturated_by_pressure,
