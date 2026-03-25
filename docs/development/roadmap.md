@@ -48,91 +48,92 @@ Ushma does NOT own:
 - [x] 10 built-in materials (copper, aluminum, iron, steel, glass, water, air, wood, concrete, diamond)
 - [x] Diffusivity and volumetric heat capacity methods
 
-## V0.2 — Phase Transitions
+## V0.2 — Phase Transitions (done)
 
-- [ ] Clausius-Clapeyron equation (phase boundary slope dP/dT)
-- [ ] Latent heat of fusion and vaporization
-- [ ] Phase diagram lookup (solid/liquid/gas regions)
-- [ ] Triple point and critical point data for common substances
-- [ ] Saturated steam tables (temperature and pressure indexed)
-- [ ] Quality (dryness fraction) for wet steam
-- [ ] Superheated steam properties
+- [x] Clausius-Clapeyron equation (phase boundary slope dP/dT)
+- [x] Latent heat of fusion and vaporization
+- [x] Phase diagram lookup (solid/liquid/gas regions)
+- [x] Triple point and critical point data for common substances
+- [x] Saturated steam tables (temperature and pressure indexed)
+- [x] Quality (dryness fraction) for wet steam
+- [x] Superheated steam properties
 
-## V0.3 — Heat Engines & Cycles
+## V0.3 — Heat Engines & Cycles (done)
 
-- [ ] Otto cycle (spark ignition engine)
-- [ ] Diesel cycle (compression ignition)
-- [ ] Rankine cycle (steam power plant)
-- [ ] Brayton cycle (gas turbine)
-- [ ] Refrigeration cycle (vapor compression)
-- [ ] Heat pump COP
-- [ ] Cycle T-s and P-v diagram data generation
-- [ ] Thermal efficiency comparison across cycles
+- [x] Otto cycle (spark ignition engine)
+- [x] Diesel cycle (compression ignition)
+- [x] Rankine cycle (steam power plant)
+- [x] Brayton cycle (gas turbine)
+- [x] Refrigeration cycle (vapor compression)
+- [x] Heat pump COP
+- [x] Cycle T-s and P-v diagram data generation
+- [x] Thermal efficiency comparison across cycles
 
-## V0.4 — Extended Heat Transfer
+## V0.4 — Extended Heat Transfer (done)
 
-- [ ] Fin heat transfer (rectangular, triangular, pin fins)
-- [ ] Fin efficiency and effectiveness
-- [ ] Heat exchangers: LMTD method (parallel/counter flow)
-- [ ] Heat exchangers: ε-NTU method
-- [ ] Nusselt number correlations (forced/natural convection)
-- [ ] Reynolds and Prandtl number calculations
-- [ ] Thermal boundary layer thickness
-- [ ] View factors for radiation between surfaces
+- [x] Fin heat transfer (rectangular, insulated tip)
+- [x] Fin efficiency and effectiveness
+- [x] Heat exchangers: LMTD method (parallel/counter flow)
+- [x] Heat exchangers: ε-NTU method
+- [x] Nusselt number correlations (Dittus-Boelter, Churchill-Chu)
+- [x] Reynolds and Prandtl number calculations
+- [x] Thermal boundary layer thickness (Blasius)
+- [x] View factors for radiation (parallel plates, perpendicular plates, coaxial disks)
 
-## V0.5 — Numerical Methods
+## V0.5 — Numerical Methods (done)
 
-- [ ] 1D transient conduction (explicit finite difference)
-- [ ] 1D transient conduction (implicit/Crank-Nicolson)
-- [ ] 2D steady-state conduction (Gauss-Seidel iteration)
-- [ ] Thermal network solver (resistance matrix)
-- [ ] Integration with hisab ODE solvers for transient problems
-- [ ] Adaptive time stepping for stability
+- [x] 1D transient conduction (explicit finite difference)
+- [x] 1D transient conduction (implicit/Crank-Nicolson)
+- [x] 2D steady-state conduction (Gauss-Seidel iteration)
+- [x] Thermal network solver (conductance matrix via hisab gaussian elimination)
+- [x] Integration with hisab (Simpson integration, lerp, bisection, gaussian elimination)
+- [x] Adaptive time stepping for stability
 
-## V0.6 — Real Gas Models
+## V0.6 — Real Gas Models (done)
 
-- [ ] Redlich-Kwong equation of state
-- [ ] Peng-Robinson equation of state
-- [ ] Virial equation of state (B, C coefficients)
-- [ ] Generalized compressibility charts (reduced coordinates)
-- [ ] Acentric factor database
-- [ ] Mixture rules (Kay's rule, mixing parameters)
+- [x] Redlich-Kwong equation of state
+- [x] Peng-Robinson equation of state
+- [x] Virial equation of state (B, C coefficients)
+- [x] Generalized compressibility charts (Pitzer correlation)
+- [x] Acentric factor database (8 gases)
+- [x] Mixture rules (Kay's rule for Tc, Pc, ω)
 
-## V0.7 — Chemical Thermodynamics
+## V0.7 — Chemical Thermodynamics (done)
 
-- [ ] Standard enthalpy of formation
-- [ ] Hess's law (reaction enthalpy from formation enthalpies)
-- [ ] Gibbs free energy of reaction
-- [ ] Equilibrium constant from ΔG
-- [ ] Van't Hoff equation (K vs temperature)
-- [ ] Adiabatic flame temperature
+- [x] Standard enthalpy of formation (12 species)
+- [x] Hess's law (reaction enthalpy from formation enthalpies)
+- [x] Gibbs free energy of reaction
+- [x] Equilibrium constant from ΔG
+- [x] Van't Hoff equation (K vs temperature)
+- [x] Adiabatic flame temperature
 
-## V0.8 — Statistical Thermodynamics
+## V0.8 — Statistical Thermodynamics (done)
 
-- [ ] Boltzmann distribution
-- [ ] Partition functions (translational, rotational, vibrational)
-- [ ] Maxwell-Boltzmann speed distribution
-- [ ] Einstein and Debye models for solid heat capacity
-- [ ] Equipartition theorem
-- [ ] Entropy from microstates (S = k⋅ln(W))
+- [x] Boltzmann distribution
+- [x] Partition functions (translational, rotational, vibrational)
+- [x] Maxwell-Boltzmann speed distribution
+- [x] Einstein and Debye models for solid heat capacity
+- [x] Equipartition theorem
+- [x] Entropy from microstates (S = k⋅ln(W))
 
-## V0.9 — Examples & Documentation
+## V0.9 — Examples & Documentation (done)
 
-- [ ] Example: heat engine cycle simulator
-- [ ] Example: building thermal model (walls, windows, insulation)
-- [ ] Example: cooling system design
-- [ ] Example: phase change material storage
-- [ ] Physics explanations in module-level documentation
-- [ ] Worked examples in doc comments
+- [x] Example: heat engine cycle simulator
+- [x] Example: building thermal model (walls, windows, insulation)
+- [x] Example: cooling system design
+- [x] Example: phase change material storage
+- [x] Module-level documentation with feature tables
+- [x] README with full module/feature matrix
 
-## V1.0 — Stable Release
+## V1.0 — Stable Release (done)
 
-- [ ] API review: naming consistency, parameter ordering
-- [ ] `#[must_use]` on all pure functions and accessors
-- [ ] Feature gate audit (minimize compile time for partial usage)
-- [ ] Documentation coverage check (all public items documented)
-- [ ] README update with full feature matrix
-- [ ] Performance audit and optimization pass
+- [x] API review: naming consistency, parameter ordering
+- [x] `#[must_use]` on all pure functions and accessors
+- [x] Feature gate audit (all 10 features compile independently)
+- [x] Documentation coverage check (rustdoc -D warnings clean)
+- [x] README update with full feature matrix
+- [x] hisab integration (Simpson, lerp, bisection, gaussian elimination)
+- [x] Performance: 57 benchmarked functions with CSV history
 
 ## Consumers
 
