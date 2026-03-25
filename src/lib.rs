@@ -12,6 +12,8 @@
 //! - [`state`] — Equations of state, ideal gas, phase diagrams
 //! - [`entropy`] — Entropy, free energy, thermodynamic potentials
 //! - [`material`] — Thermal properties, specific heat, conductivity tables
+//! - [`phase`] — Phase transitions, Clausius-Clapeyron, substance data
+//! - [`steam`] — Saturated and superheated steam tables
 //! - [`error`] — Error types
 
 pub mod error;

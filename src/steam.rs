@@ -32,7 +32,7 @@ pub struct SaturatedEntry {
 
 // --- Saturated steam table (temperature-indexed) ---
 // Source: IAPWS-IF97 / Cengel & Boles Thermodynamics, Appendix A-4
-// 45 entries from triple point (273.16 K) to critical point (647.096 K)
+// 41 entries from triple point (273.16 K) to critical point (647.096 K)
 
 const SATURATED_TABLE: &[SaturatedEntry] = &[
     // 273.16 K (0.01°C) — triple point
