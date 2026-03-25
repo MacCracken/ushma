@@ -2,6 +2,7 @@
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
+use ushma::chem;
 use ushma::cycle;
 use ushma::entropy;
 use ushma::material;
@@ -522,12 +523,45 @@ criterion_group!(
     bench_quality_from_enthalpy,
     bench_wet_steam_properties,
     bench_superheated_lookup,
+    // chem
+    bench_reaction_enthalpy,
+    bench_equilibrium_constant,
+    bench_adiabatic_flame,
     // numerical
     bench_explicit_1d_step,
     bench_crank_nicolson_1d_step,
     bench_gauss_seidel_2d,
     bench_thermal_network,
 );
+
+fn bench_reaction_enthalpy(c: &mut Criterion) {
+    c.bench_function("chem/reaction_enthalpy", |b| {
+        b.iter(|| {
+            chem::reaction_enthalpy(
+                black_box(&[(1.0, &chem::CO2), (2.0, &chem::H2O_GAS)]),
+                black_box(&[(1.0, &chem::CH4), (2.0, &chem::O2)]),
+            )
+        });
+    });
+}
+
+fn bench_equilibrium_constant(c: &mut Criterion) {
+    c.bench_function("chem/equilibrium_constant", |b| {
+        b.iter(|| chem::equilibrium_constant(black_box(-800_000.0), black_box(298.15)));
+    });
+}
+
+fn bench_adiabatic_flame(c: &mut Criterion) {
+    c.bench_function("chem/adiabatic_flame", |b| {
+        b.iter(|| {
+            chem::adiabatic_flame_temperature(
+                black_box(&[(1.0, &chem::CH4), (2.0, &chem::O2), (7.52, &chem::N2)]),
+                black_box(&[(1.0, &chem::CO2), (2.0, &chem::H2O_GAS), (7.52, &chem::N2)]),
+                black_box(298.15),
+            )
+        });
+    });
+}
 
 fn bench_explicit_1d_step(c: &mut Criterion) {
     let mut g = numerical::ThermalGrid1D::new(

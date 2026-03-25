@@ -16,6 +16,7 @@
 //! - [`steam`] — Saturated and superheated steam tables
 //! - [`cycle`] — Thermodynamic cycles (Otto, Diesel, Brayton, Rankine)
 //! - [`numerical`] — Finite difference solvers, thermal networks
+//! - [`chem`] — Chemical thermodynamics, Hess's law, equilibrium
 //! - [`error`] — Error types
 
 pub mod error;
@@ -43,6 +44,9 @@ pub mod cycle;
 
 #[cfg(feature = "numerical")]
 pub mod numerical;
+
+#[cfg(feature = "chem")]
+pub mod chem;
 
 #[cfg(feature = "logging")]
 pub mod logging;

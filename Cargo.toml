@@ -14,7 +14,7 @@ categories = ["science", "simulation"]
 exclude = [".claude/", ".github/", "docs/", "scripts/"]
 
 [features]
-default = ["transfer", "state", "entropy", "material", "phase", "cycle", "numerical"]
+default = ["transfer", "state", "entropy", "material", "phase", "cycle", "numerical", "chem"]
 transfer = []
 state = []
 entropy = ["state"]
@@ -22,10 +22,11 @@ phase = ["state"]
 steam = ["phase"]
 cycle = ["state", "entropy"]
 numerical = ["transfer"]
+chem = ["state", "entropy"]
 material = []
 ai = ["dep:reqwest", "dep:tokio", "dep:serde_json"]
 logging = ["dep:tracing-subscriber"]
-full = ["transfer", "state", "entropy", "material", "phase", "steam", "cycle", "numerical", "ai", "logging"]
+full = ["transfer", "state", "entropy", "material", "phase", "steam", "cycle", "numerical", "chem", "ai", "logging"]
 
 [dependencies]
 hisab = "0.22.4"
@@ -47,11 +48,11 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "benchmarks"
 harness = false
-required-features = ["transfer", "state", "entropy", "material", "phase", "steam", "cycle", "numerical"]
+required-features = ["transfer", "state", "entropy", "material", "phase", "steam", "cycle", "numerical", "chem"]
 
 [[test]]
 name = "integration"
-required-features = ["transfer", "state", "entropy", "material", "phase", "steam", "cycle", "numerical"]
+required-features = ["transfer", "state", "entropy", "material", "phase", "steam", "cycle", "numerical", "chem"]
 
 [[example]]
 name = "basic_thermo"

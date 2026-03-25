@@ -1,5 +1,6 @@
 //! Integration tests for ushma — cross-module thermodynamics.
 
+use ushma::chem;
 use ushma::cycle;
 use ushma::entropy;
 use ushma::material;
@@ -495,4 +496,81 @@ fn mixture_z_factor_kays_rule() {
 
     // Z should be between 0 and 2 for physical gas
     assert!(z > 0.5 && z < 1.5, "mixture Z={z} out of physical range");
+}
+
+// --- Chemical thermodynamics integration tests ---
+
+#[test]
+fn hess_law_indirect_path() {
+    // C + O₂ → CO₂ via direct vs indirect (C→CO→CO₂)
+    // Direct: ΔH = ΔHf(CO₂) = -393510
+    // Step 1: C + ½O₂ → CO: ΔH₁ = ΔHf(CO) = -110530
+    // Step 2: CO + ½O₂ → CO₂: ΔH₂ = ΔHf(CO₂) - ΔHf(CO) = -393510 - (-110530) = -282980
+    // Total: ΔH₁ + ΔH₂ = -110530 + -282980 = -393510 ✓
+    let dh_step1 = chem::reaction_enthalpy(&[(1.0, &chem::CO)], &[(0.5, &chem::O2)]);
+    let dh_step2 =
+        chem::reaction_enthalpy(&[(1.0, &chem::CO2)], &[(1.0, &chem::CO), (0.5, &chem::O2)]);
+    let dh_direct = chem::CO2.delta_hf; // C(s) is reference, ΔHf = 0
+
+    assert!(
+        (dh_step1 + dh_step2 - dh_direct).abs() < 1.0,
+        "Hess's law violated: {} + {} != {}",
+        dh_step1,
+        dh_step2,
+        dh_direct
+    );
+}
+
+#[test]
+fn equilibrium_k_consistent_with_vant_hoff() {
+    // K at 298.15 K from ΔG, then Van't Hoff to 298.15 K should return same K
+    let dg = chem::reaction_gibbs(
+        &[(1.0, &chem::CO2), (2.0, &chem::H2O_GAS)],
+        &[(1.0, &chem::CH4), (2.0, &chem::O2)],
+    );
+    let dh = chem::reaction_enthalpy(
+        &[(1.0, &chem::CO2), (2.0, &chem::H2O_GAS)],
+        &[(1.0, &chem::CH4), (2.0, &chem::O2)],
+    );
+    let k_298 = chem::equilibrium_constant(dg, 298.15).unwrap();
+
+    // Van't Hoff from 298.15 to 500 K and back
+    let k_500 = chem::vant_hoff_k(k_298, dh, 298.15, 500.0).unwrap();
+    let k_back = chem::vant_hoff_k(k_500, dh, 500.0, 298.15).unwrap();
+
+    assert!(
+        (k_back - k_298).abs() / k_298 < 1e-6,
+        "Van't Hoff roundtrip failed: {} vs {}",
+        k_back,
+        k_298
+    );
+}
+
+#[test]
+fn excess_air_lowers_flame_temperature() {
+    // Stoichiometric: CH₄ + 2O₂ + 7.52N₂
+    let t_stoich = chem::adiabatic_flame_temperature(
+        &[(1.0, &chem::CH4), (2.0, &chem::O2), (7.52, &chem::N2)],
+        &[(1.0, &chem::CO2), (2.0, &chem::H2O_GAS), (7.52, &chem::N2)],
+        298.15,
+    )
+    .unwrap();
+
+    // 50% excess air: CH₄ + 3O₂ + 11.28N₂ → CO₂ + 2H₂O + O₂ + 11.28N₂
+    let t_excess = chem::adiabatic_flame_temperature(
+        &[(1.0, &chem::CH4), (3.0, &chem::O2), (11.28, &chem::N2)],
+        &[
+            (1.0, &chem::CO2),
+            (2.0, &chem::H2O_GAS),
+            (1.0, &chem::O2),
+            (11.28, &chem::N2),
+        ],
+        298.15,
+    )
+    .unwrap();
+
+    assert!(
+        t_excess < t_stoich,
+        "excess air T={t_excess:.0} should be < stoich T={t_stoich:.0}"
+    );
 }
