@@ -363,3 +363,75 @@ fn cycle_comparison_all_below_carnot() {
         );
     }
 }
+
+// --- Extended heat transfer integration tests ---
+
+#[test]
+fn nusselt_to_h_to_convection_chain() {
+    // Air over a 0.1m plate: Re=50000, Pr=0.7
+    // Dittus-Boelter → Nu → h → Q via convection
+    let nu = transfer::nusselt_dittus_boelter(50_000.0, 0.7).unwrap();
+    let k_air = 0.026; // W/(m·K)
+    let length = 0.1;
+    let h = nu * k_air / length;
+
+    let area = 0.1; // m²
+    let q = transfer::convection(h, area, 373.15, 293.15);
+    assert!(q > 0.0);
+    // h should be reasonable for forced convection (10-500 W/(m²·K))
+    assert!(h > 1.0 && h < 1000.0);
+}
+
+#[test]
+fn lmtd_vs_ntu_same_heat_exchanger() {
+    // Same HX computed both ways should give same Q
+    let t_h_in = 400.0;
+    let t_h_out = 350.0;
+    let t_c_in = 300.0;
+    let t_c_out = 330.0;
+    let u = 500.0;
+    let area = 2.0;
+
+    // LMTD method (counter-flow)
+    let lmtd = transfer::lmtd_counter(t_h_in, t_h_out, t_c_in, t_c_out).unwrap();
+    let q_lmtd = transfer::heat_exchanger_lmtd(u, area, lmtd);
+
+    // ε-NTU method
+    // C_h = Q_h / ΔT_h, C_c = Q_c / ΔT_c
+    // Q = C_h(T_h_in - T_h_out) = C_c(T_c_out - T_c_in)
+    // Use Q from LMTD to find C values
+    let c_h = q_lmtd / (t_h_in - t_h_out);
+    let c_c = q_lmtd / (t_c_out - t_c_in);
+    let c_min = c_h.min(c_c);
+    let c_max = c_h.max(c_c);
+    let cr = c_min / c_max;
+    let ntu_val = transfer::ntu(u, area, c_min).unwrap();
+    let eff = transfer::effectiveness_counter(ntu_val, cr).unwrap();
+    let q_ntu = transfer::heat_exchanger_ntu(eff, c_min, t_h_in, t_c_in);
+
+    assert!(
+        (q_lmtd - q_ntu).abs() / q_lmtd < 0.01,
+        "LMTD Q={q_lmtd} vs NTU Q={q_ntu}"
+    );
+}
+
+#[test]
+fn view_factor_reciprocity() {
+    // A₁F₁₂ = A₂F₂₁ for coaxial disks
+    let r1 = 0.3;
+    let r2 = 0.5;
+    let d = 0.4;
+    let f12 = transfer::view_factor_coaxial_disks(r1, r2, d).unwrap();
+    let f21 = transfer::view_factor_coaxial_disks(r2, r1, d).unwrap();
+
+    let a1 = std::f64::consts::PI * r1 * r1;
+    let a2 = std::f64::consts::PI * r2 * r2;
+
+    let diff = (a1 * f12 - a2 * f21).abs();
+    assert!(
+        diff / (a1 * f12) < 0.01,
+        "Reciprocity violated: A1*F12={}, A2*F21={}",
+        a1 * f12,
+        a2 * f21
+    );
+}

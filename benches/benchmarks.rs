@@ -99,6 +99,61 @@ fn bench_lumped_capacitance(c: &mut Criterion) {
     });
 }
 
+fn bench_reynolds_number(c: &mut Criterion) {
+    c.bench_function("transfer/reynolds", |b| {
+        b.iter(|| transfer::reynolds_number(black_box(1.0), black_box(0.1), black_box(1e-6)));
+    });
+}
+
+fn bench_nusselt_dittus_boelter(c: &mut Criterion) {
+    c.bench_function("transfer/nusselt_db", |b| {
+        b.iter(|| transfer::nusselt_dittus_boelter(black_box(50_000.0), black_box(0.7)));
+    });
+}
+
+fn bench_fin_rectangular_heat(c: &mut Criterion) {
+    c.bench_function("transfer/fin_rect_heat", |b| {
+        b.iter(|| {
+            transfer::fin_rectangular_heat(
+                black_box(25.0),
+                black_box(0.02),
+                black_box(237.0),
+                black_box(1e-4),
+                black_box(0.05),
+                black_box(373.15),
+                black_box(293.15),
+            )
+        });
+    });
+}
+
+fn bench_lmtd_counter(c: &mut Criterion) {
+    c.bench_function("transfer/lmtd_counter", |b| {
+        b.iter(|| {
+            transfer::lmtd_counter(
+                black_box(400.0),
+                black_box(350.0),
+                black_box(300.0),
+                black_box(330.0),
+            )
+        });
+    });
+}
+
+fn bench_effectiveness_counter(c: &mut Criterion) {
+    c.bench_function("transfer/eff_counter", |b| {
+        b.iter(|| transfer::effectiveness_counter(black_box(2.0), black_box(0.5)));
+    });
+}
+
+fn bench_view_factor_disks(c: &mut Criterion) {
+    c.bench_function("transfer/view_factor_disks", |b| {
+        b.iter(|| {
+            transfer::view_factor_coaxial_disks(black_box(0.5), black_box(0.5), black_box(1.0))
+        });
+    });
+}
+
 // --- State benchmarks ---
 
 fn bench_ideal_gas_pressure(c: &mut Criterion) {
@@ -395,6 +450,12 @@ criterion_group!(
     bench_thermal_diffusivity,
     bench_biot_number,
     bench_lumped_capacitance,
+    bench_reynolds_number,
+    bench_nusselt_dittus_boelter,
+    bench_fin_rectangular_heat,
+    bench_lmtd_counter,
+    bench_effectiveness_counter,
+    bench_view_factor_disks,
     // state
     bench_ideal_gas_pressure,
     bench_ideal_gas_volume,
