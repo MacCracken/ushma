@@ -15,6 +15,7 @@
 //! - [`phase`] — Phase transitions, Clausius-Clapeyron, substance data
 //! - [`steam`] — Saturated and superheated steam tables
 //! - [`cycle`] — Thermodynamic cycles (Otto, Diesel, Brayton, Rankine)
+//! - [`numerical`] — Finite difference solvers, thermal networks
 //! - [`error`] — Error types
 
 pub mod error;
@@ -39,6 +40,9 @@ pub mod steam;
 
 #[cfg(feature = "cycle")]
 pub mod cycle;
+
+#[cfg(feature = "numerical")]
+pub mod numerical;
 
 #[cfg(feature = "logging")]
 pub mod logging;

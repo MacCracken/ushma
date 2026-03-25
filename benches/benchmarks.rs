@@ -5,6 +5,7 @@ use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use ushma::cycle;
 use ushma::entropy;
 use ushma::material;
+use ushma::numerical;
 use ushma::phase;
 use ushma::state;
 use ushma::steam;
@@ -492,6 +493,73 @@ criterion_group!(
     bench_quality_from_enthalpy,
     bench_wet_steam_properties,
     bench_superheated_lookup,
+    // numerical
+    bench_explicit_1d_step,
+    bench_crank_nicolson_1d_step,
+    bench_gauss_seidel_2d,
+    bench_thermal_network,
 );
+
+fn bench_explicit_1d_step(c: &mut Criterion) {
+    let mut g = numerical::ThermalGrid1D::new(
+        100,
+        1.0,
+        1e-4,
+        300.0,
+        numerical::BoundaryCondition::Fixed(400.0),
+        numerical::BoundaryCondition::Fixed(300.0),
+    )
+    .unwrap();
+    let dt = 0.4 * g.dx * g.dx / g.alpha;
+    c.bench_function("numerical/explicit_1d", |b| {
+        b.iter(|| g.step_explicit(black_box(dt)));
+    });
+}
+
+fn bench_crank_nicolson_1d_step(c: &mut Criterion) {
+    let mut g = numerical::ThermalGrid1D::new(
+        100,
+        1.0,
+        1e-4,
+        300.0,
+        numerical::BoundaryCondition::Fixed(400.0),
+        numerical::BoundaryCondition::Fixed(300.0),
+    )
+    .unwrap();
+    c.bench_function("numerical/crank_nicolson_1d", |b| {
+        b.iter(|| g.step_crank_nicolson(black_box(1.0)));
+    });
+}
+
+fn bench_gauss_seidel_2d(c: &mut Criterion) {
+    let mut g = numerical::ThermalGrid2D::new(20, 20, 1.0, 1.0, 300.0).unwrap();
+    g.set_boundary(
+        numerical::Side::Left,
+        numerical::BoundaryCondition::Fixed(400.0),
+    );
+    g.set_boundary(
+        numerical::Side::Right,
+        numerical::BoundaryCondition::Fixed(300.0),
+    );
+    c.bench_function("numerical/gauss_seidel_2d_20x20", |b| {
+        b.iter(|| {
+            let mut g2 = g.clone();
+            g2.solve_steady_state(black_box(1e-4), black_box(10_000))
+        });
+    });
+}
+
+fn bench_thermal_network(c: &mut Criterion) {
+    let mut net = numerical::ThermalNetwork::new(5);
+    net.add_resistance(0, 1, 1.0).unwrap();
+    net.add_resistance(1, 2, 1.0).unwrap();
+    net.add_resistance(2, 3, 1.0).unwrap();
+    net.add_resistance(3, 4, 1.0).unwrap();
+    net.set_fixed_temperature(0, 400.0).unwrap();
+    net.set_fixed_temperature(4, 300.0).unwrap();
+    c.bench_function("numerical/thermal_network_5", |b| {
+        b.iter(|| net.solve());
+    });
+}
 
 criterion_main!(benches);
