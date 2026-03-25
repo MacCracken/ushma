@@ -2,7 +2,9 @@
 
 use ushma::entropy;
 use ushma::material;
+use ushma::phase;
 use ushma::state;
+use ushma::steam;
 use ushma::transfer;
 
 #[test]
@@ -140,4 +142,115 @@ fn van_der_waals_vs_ideal_gas() {
     // But at standard conditions the difference should be small
     let relative_diff = (p_ideal - p_vdw).abs() / p_ideal;
     assert!(relative_diff < 0.05); // within 5%
+}
+
+// --- Phase transition integration tests ---
+
+#[test]
+fn water_boiling_point_consistency() {
+    // material::WATER and phase::WATER_PHASE should agree on boiling point
+    assert!(
+        (material::WATER.boiling_point - phase::WATER_PHASE.boiling_point).abs() < 0.01,
+        "material ({}) vs phase ({}) boiling points disagree",
+        material::WATER.boiling_point,
+        phase::WATER_PHASE.boiling_point
+    );
+}
+
+#[test]
+fn clausius_clapeyron_vs_steam_table() {
+    // Compare CC-predicted P_sat at 120°C against steam table
+    let l_molar = phase::WATER_PHASE.latent_heat_vaporization * phase::WATER_PHASE.molar_mass;
+    let p_cc = phase::clausius_clapeyron_pressure(
+        state::ATM,
+        phase::WATER_PHASE.boiling_point,
+        393.15,
+        l_molar,
+    )
+    .unwrap();
+
+    let e = steam::saturated_by_temperature(393.15).unwrap();
+
+    // CC approximation should be within 5% of steam table
+    let rel_err = (p_cc - e.pressure).abs() / e.pressure;
+    assert!(
+        rel_err < 0.05,
+        "CC ({:.0} Pa) vs steam table ({:.0} Pa): {:.1}% error",
+        p_cc,
+        e.pressure,
+        rel_err * 100.0
+    );
+}
+
+#[test]
+fn quality_consistency_across_methods() {
+    // At 373.15 K, compute quality from v, h, and s for the same mixture
+    let entry = steam::saturated_by_temperature(373.15).unwrap();
+    let target_x = 0.6;
+
+    let props = steam::wet_steam_properties(target_x, &entry).unwrap();
+    let x_from_v = steam::quality_from_volume(props.specific_volume, &entry).unwrap();
+    let x_from_h = steam::quality_from_enthalpy(props.specific_enthalpy, &entry).unwrap();
+    let x_from_s = steam::quality_from_entropy(props.specific_entropy, &entry).unwrap();
+
+    assert!((x_from_v - target_x).abs() < 0.01);
+    assert!((x_from_h - target_x).abs() < 0.01);
+    assert!((x_from_s - target_x).abs() < 0.01);
+}
+
+#[test]
+fn simple_rankine_cycle_energy_balance() {
+    // Simplified Rankine cycle at 2 MPa / condenser at 10 kPa
+    // State 1: saturated liquid at condenser pressure (10 kPa)
+    let cond = steam::saturated_by_pressure(10_000.0).unwrap();
+    let h1 = cond.h_f; // pump inlet
+
+    // State 2: compressed liquid (approximate as h1 + v_f * dP)
+    let p_boiler = 2_000_000.0;
+    let w_pump = cond.v_f * (p_boiler - 10_000.0); // J/kg
+    let h2 = h1 + w_pump;
+
+    // State 3: superheated steam at boiler exit (2 MPa, 573.15 K / 300°C)
+    let sh = steam::superheated_lookup(573.15, p_boiler).unwrap();
+    let h3 = sh.specific_enthalpy;
+
+    // State 4: wet steam after turbine (isentropic to condenser pressure)
+    // s3 = s4, find quality at condenser pressure
+    let x4 = steam::quality_from_entropy(sh.specific_entropy, &cond).unwrap();
+    let h4 = cond.h_f + x4 * cond.h_fg;
+
+    // Energy balance
+    let q_in = h3 - h2; // heat added in boiler
+    let w_turbine = h3 - h4; // work out of turbine
+    let q_out = h4 - h1; // heat rejected in condenser
+    let w_net = w_turbine - w_pump;
+
+    // First law: q_in = w_net + q_out (within rounding tolerance)
+    let balance = (q_in - w_net - q_out).abs();
+    assert!(
+        balance < 5000.0, // within 5 kJ/kg for rounded table values
+        "Energy balance error: {balance} J/kg"
+    );
+
+    // Thermal efficiency should be reasonable (20-35% for this cycle)
+    let eta = w_net / q_in;
+    assert!(
+        eta > 0.15 && eta < 0.40,
+        "Rankine efficiency {eta} out of range"
+    );
+}
+
+#[test]
+fn phase_lookup_agrees_with_steam_table() {
+    // Water at 300 K should be liquid per phase lookup
+    let p = phase::WATER_PHASE.phase_at(300.0, state::ATM).unwrap();
+    assert_eq!(p, phase::Phase::Liquid);
+
+    // Steam table at 373.15 K: P_sat ≈ 101,350 Pa
+    // At slightly above P_sat, phase should be liquid
+    let sat = steam::saturated_by_temperature(373.15).unwrap();
+    let p_above = phase::WATER_PHASE
+        .phase_at(373.15, sat.pressure * 1.1)
+        .unwrap();
+    assert_eq!(p_above, phase::Phase::Liquid);
 }

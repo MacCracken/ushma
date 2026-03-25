@@ -45,11 +45,11 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "benchmarks"
 harness = false
-required-features = ["transfer", "state", "entropy", "material", "phase"]
+required-features = ["transfer", "state", "entropy", "material", "phase", "steam"]
 
 [[test]]
 name = "integration"
-required-features = ["transfer", "state", "entropy", "material"]
+required-features = ["transfer", "state", "entropy", "material", "phase", "steam"]
 
 [[example]]
 name = "basic_thermo"

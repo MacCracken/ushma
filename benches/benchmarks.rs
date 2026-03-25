@@ -6,6 +6,7 @@ use ushma::entropy;
 use ushma::material;
 use ushma::phase;
 use ushma::state;
+use ushma::steam;
 use ushma::transfer;
 
 // --- Transfer benchmarks ---
@@ -253,6 +254,71 @@ fn bench_clausius_clapeyron_pressure(c: &mut Criterion) {
     });
 }
 
+fn bench_heat_of_fusion(c: &mut Criterion) {
+    c.bench_function("phase/heat_of_fusion", |b| {
+        b.iter(|| phase::heat_of_fusion(black_box(&phase::WATER_PHASE), black_box(1.0)));
+    });
+}
+
+fn bench_heat_of_vaporization(c: &mut Criterion) {
+    c.bench_function("phase/heat_of_vaporization", |b| {
+        b.iter(|| phase::heat_of_vaporization(black_box(&phase::WATER_PHASE), black_box(1.0)));
+    });
+}
+
+fn bench_heat_for_phase_change(c: &mut Criterion) {
+    c.bench_function("phase/heat_for_phase_change", |b| {
+        b.iter(|| {
+            phase::heat_for_phase_change(
+                black_box(1.0),
+                black_box(2500.0),
+                black_box(263.0),
+                black_box(383.0),
+                black_box(&phase::WATER_PHASE),
+            )
+        });
+    });
+}
+
+fn bench_saturated_by_temp(c: &mut Criterion) {
+    c.bench_function("steam/saturated_by_temp", |b| {
+        b.iter(|| steam::saturated_by_temperature(black_box(373.15)));
+    });
+}
+
+fn bench_saturated_by_pressure(c: &mut Criterion) {
+    c.bench_function("steam/saturated_by_pressure", |b| {
+        b.iter(|| steam::saturated_by_pressure(black_box(101_325.0)));
+    });
+}
+
+fn bench_quality_from_enthalpy(c: &mut Criterion) {
+    let entry = steam::saturated_by_temperature(373.15).unwrap();
+    let h_mid = entry.h_f + 0.5 * entry.h_fg;
+    c.bench_function("steam/quality_from_enthalpy", |b| {
+        b.iter(|| steam::quality_from_enthalpy(black_box(h_mid), black_box(&entry)));
+    });
+}
+
+fn bench_wet_steam_properties(c: &mut Criterion) {
+    let entry = steam::saturated_by_temperature(373.15).unwrap();
+    c.bench_function("steam/wet_steam_properties", |b| {
+        b.iter(|| steam::wet_steam_properties(black_box(0.75), black_box(&entry)));
+    });
+}
+
+fn bench_superheated_lookup(c: &mut Criterion) {
+    c.bench_function("steam/superheated_lookup", |b| {
+        b.iter(|| steam::superheated_lookup(black_box(573.15), black_box(500_000.0)));
+    });
+}
+
+fn bench_phase_lookup(c: &mut Criterion) {
+    c.bench_function("phase/phase_lookup", |b| {
+        b.iter(|| phase::WATER_PHASE.phase_at(black_box(300.0), black_box(101_325.0)));
+    });
+}
+
 criterion_group!(
     benches,
     // transfer
@@ -285,6 +351,16 @@ criterion_group!(
     // phase
     bench_clausius_clapeyron_slope,
     bench_clausius_clapeyron_pressure,
+    bench_phase_lookup,
+    bench_heat_of_fusion,
+    bench_heat_of_vaporization,
+    bench_heat_for_phase_change,
+    // steam
+    bench_saturated_by_temp,
+    bench_saturated_by_pressure,
+    bench_quality_from_enthalpy,
+    bench_wet_steam_properties,
+    bench_superheated_lookup,
 );
 
 criterion_main!(benches);
