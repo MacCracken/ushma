@@ -209,6 +209,33 @@ fn bench_adiabatic_temperature(c: &mut Criterion) {
     });
 }
 
+fn bench_redlich_kwong(c: &mut Criterion) {
+    c.bench_function("state/redlich_kwong", |b| {
+        b.iter(|| {
+            state::redlich_kwong_pressure(
+                black_box(300.0),
+                black_box(0.02241),
+                black_box(304.13),
+                black_box(7_375_000.0),
+            )
+        });
+    });
+}
+
+fn bench_peng_robinson(c: &mut Criterion) {
+    c.bench_function("state/peng_robinson", |b| {
+        b.iter(|| {
+            state::peng_robinson_pressure(
+                black_box(300.0),
+                black_box(0.02241),
+                black_box(304.13),
+                black_box(7_375_000.0),
+                black_box(0.224),
+            )
+        });
+    });
+}
+
 fn bench_compressibility_factor(c: &mut Criterion) {
     c.bench_function("state/compressibility_factor", |b| {
         b.iter(|| {
@@ -464,6 +491,8 @@ criterion_group!(
     bench_isothermal_work,
     bench_adiabatic_temperature,
     bench_compressibility_factor,
+    bench_redlich_kwong,
+    bench_peng_robinson,
     // entropy
     bench_carnot_efficiency,
     bench_carnot_cop,

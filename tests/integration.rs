@@ -435,3 +435,64 @@ fn view_factor_reciprocity() {
         a2 * f21
     );
 }
+
+// --- Real gas model integration tests ---
+
+#[test]
+fn eos_comparison_co2_stp() {
+    // CO₂ at STP: compare vdW, RK, PR against ideal gas
+    let vm = 0.02241; // molar volume at STP
+    let t = state::STANDARD_TEMP;
+    let tc = 304.13;
+    let pc = 7_375_000.0;
+
+    let p_ideal = state::ideal_gas_pressure(1.0, t, vm).unwrap();
+    let p_vdw = state::van_der_waals_pressure(1.0, t, vm, 0.3658, 4.286e-5).unwrap();
+    let p_rk = state::redlich_kwong_pressure(t, vm, tc, pc).unwrap();
+    let p_pr = state::peng_robinson_pressure(t, vm, tc, pc, 0.224).unwrap();
+
+    // All should be near ATM at STP
+    for (name, p) in [
+        ("ideal", p_ideal),
+        ("vdW", p_vdw),
+        ("RK", p_rk),
+        ("PR", p_pr),
+    ] {
+        assert!(
+            (p - state::ATM).abs() / state::ATM < 0.05,
+            "{name} pressure {p:.0} Pa too far from ATM"
+        );
+    }
+}
+
+#[test]
+fn virial_approaches_ideal_at_low_density() {
+    let vm_large = 1.0; // 1 m³/mol — very dilute
+    let b = state::pitzer_second_virial(300.0, 304.13, 7_375_000.0, 0.224);
+    let p_virial = state::virial_pressure_2nd(300.0, vm_large, b).unwrap();
+    let p_ideal = state::GAS_CONSTANT * 300.0 / vm_large;
+    assert!(
+        (p_virial - p_ideal).abs() / p_ideal < 0.001,
+        "virial not converging to ideal at low density"
+    );
+}
+
+#[test]
+fn mixture_z_factor_kays_rule() {
+    // 70% N₂ + 30% CO₂ at 300 K, 5 MPa
+    let y = [0.7, 0.3];
+    let tc = [126.19, 304.13];
+    let pc = [3_390_000.0, 7_375_000.0];
+    let omega = [0.037, 0.224];
+
+    let tc_mix = state::kays_rule_tc(&y, &tc).unwrap();
+    let pc_mix = state::kays_rule_pc(&y, &pc).unwrap();
+    let omega_mix = state::kays_rule_omega(&y, &omega).unwrap();
+
+    let tr = state::reduced_temperature(300.0, tc_mix);
+    let pr = state::reduced_pressure(5_000_000.0, pc_mix);
+    let z = state::compressibility_pitzer(pr, tr, omega_mix).unwrap();
+
+    // Z should be between 0 and 2 for physical gas
+    assert!(z > 0.5 && z < 1.5, "mixture Z={z} out of physical range");
+}
