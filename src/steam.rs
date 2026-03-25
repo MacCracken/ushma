@@ -610,16 +610,17 @@ fn interpolate_by(
 
     let frac = (target - ka) / (kb - ka);
 
+    let l = hisab::calc::lerp;
     Ok(SaturatedEntry {
-        temperature: a.temperature + frac * (b.temperature - a.temperature),
-        pressure: a.pressure + frac * (b.pressure - a.pressure),
-        v_f: a.v_f + frac * (b.v_f - a.v_f),
-        v_g: a.v_g + frac * (b.v_g - a.v_g),
-        h_f: a.h_f + frac * (b.h_f - a.h_f),
-        h_fg: a.h_fg + frac * (b.h_fg - a.h_fg),
-        h_g: a.h_g + frac * (b.h_g - a.h_g),
-        s_f: a.s_f + frac * (b.s_f - a.s_f),
-        s_g: a.s_g + frac * (b.s_g - a.s_g),
+        temperature: l(a.temperature, b.temperature, frac),
+        pressure: l(a.pressure, b.pressure, frac),
+        v_f: l(a.v_f, b.v_f, frac),
+        v_g: l(a.v_g, b.v_g, frac),
+        h_f: l(a.h_f, b.h_f, frac),
+        h_fg: l(a.h_fg, b.h_fg, frac),
+        h_g: l(a.h_g, b.h_g, frac),
+        s_f: l(a.s_f, b.s_f, frac),
+        s_g: l(a.s_g, b.s_g, frac),
     })
 }
 
@@ -1300,15 +1301,13 @@ pub fn superheated_lookup(temperature: f64, pressure: f64) -> Result<Superheated
     }
     let frac = (pressure - pressures[p_lo]) / (pressures[p_hi] - pressures[p_lo]);
 
+    let l = hisab::calc::lerp;
     Ok(SuperheatedEntry {
         temperature,
         pressure,
-        specific_volume: entry_lo.specific_volume
-            + frac * (entry_hi.specific_volume - entry_lo.specific_volume),
-        specific_enthalpy: entry_lo.specific_enthalpy
-            + frac * (entry_hi.specific_enthalpy - entry_lo.specific_enthalpy),
-        specific_entropy: entry_lo.specific_entropy
-            + frac * (entry_hi.specific_entropy - entry_lo.specific_entropy),
+        specific_volume: l(entry_lo.specific_volume, entry_hi.specific_volume, frac),
+        specific_enthalpy: l(entry_lo.specific_enthalpy, entry_hi.specific_enthalpy, frac),
+        specific_entropy: l(entry_lo.specific_entropy, entry_hi.specific_entropy, frac),
     })
 }
 
@@ -1343,12 +1342,13 @@ fn interp_tier(tier: &[SuperheatedEntry], temperature: f64) -> Result<Superheate
     }
     let frac = (temperature - a.temperature) / dt;
 
+    let l = hisab::calc::lerp;
     Ok(SuperheatedEntry {
         temperature,
         pressure: a.pressure,
-        specific_volume: a.specific_volume + frac * (b.specific_volume - a.specific_volume),
-        specific_enthalpy: a.specific_enthalpy + frac * (b.specific_enthalpy - a.specific_enthalpy),
-        specific_entropy: a.specific_entropy + frac * (b.specific_entropy - a.specific_entropy),
+        specific_volume: l(a.specific_volume, b.specific_volume, frac),
+        specific_enthalpy: l(a.specific_enthalpy, b.specific_enthalpy, frac),
+        specific_entropy: l(a.specific_entropy, b.specific_entropy, frac),
     })
 }
 

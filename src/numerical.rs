@@ -274,7 +274,7 @@ impl ThermalGrid1D {
 /// 2D steady-state conduction grid.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThermalGrid2D {
-    /// Temperature at each node (K). Row-major: nodes[row][col].
+    /// Temperature at each node (K). Row-major: `nodes[row][col]`.
     pub nodes: Vec<Vec<f64>>,
     /// Number of columns (x-direction).
     pub nx: usize,
@@ -469,60 +469,68 @@ impl ThermalNetwork {
 
     /// Solve for steady-state temperatures at all nodes.
     ///
-    /// Uses Gauss-Seidel iteration on the conductance matrix.
+    /// Builds a conductance matrix and solves via [`hisab::num::gaussian_elimination`].
     pub fn solve(&self) -> Result<Vec<f64>> {
         let n = self.num_nodes;
-        let mut temps = vec![0.0; n];
 
-        // Initialize fixed nodes
         let mut is_fixed = vec![false; n];
+        let mut fixed_t = vec![0.0; n];
         for &(node, t) in &self.fixed {
-            temps[node] = t;
             is_fixed[node] = true;
+            fixed_t[node] = t;
         }
 
-        // Build conductance for each node pair
-        // G_ij = 1/R_ij
-        let max_iter = 10_000;
-        let tol = 1e-10;
+        // Count free (unknown) nodes
+        let free_indices: Vec<usize> = (0..n).filter(|i| !is_fixed[*i]).collect();
+        let nf = free_indices.len();
 
-        for _ in 0..max_iter {
-            let mut max_change = 0.0_f64;
+        if nf == 0 {
+            return Ok(fixed_t);
+        }
 
-            for i in 0..n {
-                if is_fixed[i] {
-                    continue;
-                }
+        // Map node index → free index
+        let mut free_map = vec![usize::MAX; n];
+        for (fi, &ni) in free_indices.iter().enumerate() {
+            free_map[ni] = fi;
+        }
 
-                let mut sum_g = 0.0;
-                let mut sum_gt = 0.0;
+        // Build augmented matrix [G | b] for free nodes
+        let mut matrix = vec![vec![0.0; nf + 1]; nf];
 
-                for &(a, b, r) in &self.resistances {
-                    let g = 1.0 / r;
-                    if a == i {
-                        sum_g += g;
-                        sum_gt += g * temps[b];
-                    } else if b == i {
-                        sum_g += g;
-                        sum_gt += g * temps[a];
-                    }
-                }
+        for &(a, b, r) in &self.resistances {
+            let g = 1.0 / r;
 
-                if sum_g > 0.0 {
-                    let new_t = sum_gt / sum_g;
-                    max_change = max_change.max((new_t - temps[i]).abs());
-                    temps[i] = new_t;
-                }
-            }
-
-            if max_change < tol {
-                return Ok(temps);
+            if !is_fixed[a] && !is_fixed[b] {
+                let fa = free_map[a];
+                let fb = free_map[b];
+                matrix[fa][fa] += g;
+                matrix[fa][fb] -= g;
+                matrix[fb][fb] += g;
+                matrix[fb][fa] -= g;
+            } else if !is_fixed[a] && is_fixed[b] {
+                let fa = free_map[a];
+                matrix[fa][fa] += g;
+                matrix[fa][nf] += g * fixed_t[b]; // RHS
+            } else if is_fixed[a] && !is_fixed[b] {
+                let fb = free_map[b];
+                matrix[fb][fb] += g;
+                matrix[fb][nf] += g * fixed_t[a]; // RHS
             }
         }
 
-        Err(UshmaError::InvalidParameter {
-            reason: "thermal network did not converge".into(),
-        })
+        let solution = hisab::num::gaussian_elimination(&mut matrix).map_err(|e| {
+            UshmaError::InvalidParameter {
+                reason: format!("network solve failed: {e}"),
+            }
+        })?;
+
+        // Assemble full temperature vector
+        let mut temps = fixed_t;
+        for (fi, &ni) in free_indices.iter().enumerate() {
+            temps[ni] = solution[fi];
+        }
+
+        Ok(temps)
     }
 }
 

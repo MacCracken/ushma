@@ -72,19 +72,26 @@ fn main() {
     println!("  NTU = {:.2}, ε = {:.3}", ntu_val, eff);
     println!("  ε-NTU verification: Q = {:.0} W", q_check);
 
-    // --- Dimensionless analysis ---
-    println!("\n--- Dimensionless Numbers (air at 300 K) ---");
+    // --- Dimensionless analysis (turbulent pipe flow) ---
+    println!("\n--- Pipe Flow Convection (air at 300 K) ---");
     let nu_air = 1.6e-5; // kinematic viscosity (m²/s)
     let alpha_air = 2.2e-5; // thermal diffusivity (m²/s)
-    let velocity = 5.0; // m/s
-    let length = 0.1; // 10 cm plate
+    let k_air = material::AIR.conductivity; // 0.026 W/(m·K)
+    let velocity = 10.0; // m/s
+    let diameter = 0.025; // 25 mm pipe
 
-    let re = transfer::reynolds_number(velocity, length, nu_air).unwrap();
+    let re = transfer::reynolds_number(velocity, diameter, nu_air).unwrap();
     let pr = transfer::prandtl_number(nu_air, alpha_air).unwrap();
+    // Dittus-Boelter: valid for turbulent internal pipe flow (Re > 10,000)
     let nu = transfer::nusselt_dittus_boelter(re, pr).unwrap();
-    let h_calc = nu * 0.026 / length; // k_air ≈ 0.026 W/(m·K)
+    let h_calc = nu * k_air / diameter;
 
-    println!("  Re = {:.0}", re);
+    println!(
+        "  Pipe D = {:.0} mm, v = {:.0} m/s",
+        diameter * 1000.0,
+        velocity
+    );
+    println!("  Re = {:.0} (turbulent)", re);
     println!("  Pr = {:.2}", pr);
     println!("  Nu (Dittus-Boelter) = {:.1}", nu);
     println!("  h = {:.1} W/(m²·K)", h_calc);

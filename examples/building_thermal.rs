@@ -63,8 +63,12 @@ fn main() {
     // --- Transient cooling simulation ---
     println!("\n--- Transient Wall Cooling (1D FDM) ---");
     // Concrete wall suddenly exposed to cold outside
-    let alpha = material::CONCRETE.conductivity
-        / (material::CONCRETE.density * material::CONCRETE.specific_heat);
+    let alpha = transfer::thermal_diffusivity(
+        material::CONCRETE.conductivity,
+        material::CONCRETE.density,
+        material::CONCRETE.specific_heat,
+    )
+    .unwrap();
     let mut grid = ThermalGrid1D::new(
         21,
         thickness,
@@ -76,7 +80,7 @@ fn main() {
     .unwrap();
 
     let dt = 0.4 * grid.dx * grid.dx / grid.alpha;
-    let steps_per_hour = (3600.0 / dt) as usize;
+    let steps_per_hour = (3600.0 / dt).ceil() as usize;
 
     for hour in 1..=4 {
         for _ in 0..steps_per_hour {

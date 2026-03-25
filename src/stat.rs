@@ -243,7 +243,7 @@ pub fn einstein_cv(einstein_temp: f64, temperature: f64) -> Result<f64> {
 ///
 /// Cv = 9R·(T/Θ_D)³·∫₀^(Θ_D/T) x⁴eˣ/(eˣ-1)² dx
 ///
-/// Uses numerical integration (Simpson's rule, 200 intervals).
+/// Uses [`hisab::calc::integral_simpson`] (200 intervals).
 pub fn debye_cv(debye_temp: f64, temperature: f64) -> Result<f64> {
     if debye_temp <= 0.0 {
         return Err(UshmaError::InvalidParameter {
@@ -262,9 +262,7 @@ pub fn debye_cv(debye_temp: f64, temperature: f64) -> Result<f64> {
         return Ok(3.0 * GAS_CONSTANT);
     }
 
-    // Numerical integration via Simpson's rule
-    let n = 200; // must be even
-    let h = td_t / n as f64;
+    // Numerical integration via hisab Simpson's rule
     let integrand = |x: f64| -> f64 {
         if x < 1e-30 {
             return 0.0; // limit as x→0
@@ -277,13 +275,7 @@ pub fn debye_cv(debye_temp: f64, temperature: f64) -> Result<f64> {
         x * x * x * x * ex / denom
     };
 
-    let mut sum = integrand(0.0) + integrand(td_t);
-    for i in 1..n {
-        let x = i as f64 * h;
-        let weight = if i % 2 == 0 { 2.0 } else { 4.0 };
-        sum += weight * integrand(x);
-    }
-    let integral = sum * h / 3.0;
+    let integral = hisab::calc::integral_simpson(integrand, 0.0, td_t, 200).unwrap_or(0.0);
 
     let ratio = temperature / debye_temp;
     Ok(9.0 * GAS_CONSTANT * ratio * ratio * ratio * integral)

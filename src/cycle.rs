@@ -730,32 +730,27 @@ pub fn refrigeration_cycle(p_evaporator: f64, p_condenser: f64) -> Result<Refrig
     let v1 = sat_evap.v_g;
 
     // State 2: isentropic compression to condenser pressure
-    // Find superheated state where s ≈ s1 at p_condenser via bisection
+    // Find T where s(T, P_cond) = s1 via hisab bisection
     let s_target = s1;
     let t_lo_search = sat_cond.temperature + 1.0;
-    // Upper bound: try progressively higher temperatures
     let mut t_hi_search = sat_cond.temperature + 200.0;
-    // Ensure upper bound is within superheated table range
     if steam::superheated_lookup(t_hi_search, p_condenser).is_err() {
         t_hi_search = sat_cond.temperature + 100.0;
     }
 
-    let mut t_lo_b = t_lo_search;
-    let mut t_hi_b = t_hi_search;
-    for _ in 0..50 {
-        let t_mid = 0.5 * (t_lo_b + t_hi_b);
-        if let Ok(sh) = steam::superheated_lookup(t_mid, p_condenser) {
-            if sh.specific_entropy < s_target {
-                t_lo_b = t_mid;
-            } else {
-                t_hi_b = t_mid;
-            }
-        } else {
-            // Lookup failed — T is out of superheated range (too low), go higher
-            t_lo_b = t_mid;
-        }
-    }
-    let t2 = 0.5 * (t_lo_b + t_hi_b);
+    let p_cond = p_condenser;
+    let t2 = hisab::num::bisection(
+        |t| {
+            steam::superheated_lookup(t, p_cond)
+                .map(|sh| sh.specific_entropy - s_target)
+                .unwrap_or(-1.0) // below range → negative → push higher
+        },
+        t_lo_search,
+        t_hi_search,
+        0.01,
+        50,
+    )
+    .unwrap_or(0.5 * (t_lo_search + t_hi_search));
     let sh2 = steam::superheated_lookup(t2, p_condenser)?;
     let h2 = sh2.specific_enthalpy;
     let s2 = s1;
