@@ -58,3 +58,19 @@ required-features = ["transfer", "state", "entropy", "material", "phase", "steam
 [[example]]
 name = "basic_thermo"
 required-features = ["transfer", "state", "material"]
+
+[[example]]
+name = "heat_engine"
+required-features = ["cycle", "state", "entropy"]
+
+[[example]]
+name = "building_thermal"
+required-features = ["transfer", "material", "numerical"]
+
+[[example]]
+name = "cooling_system"
+required-features = ["transfer", "material"]
+
+[[example]]
+name = "phase_change"
+required-features = ["phase", "transfer"]
