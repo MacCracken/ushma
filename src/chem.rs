@@ -189,7 +189,7 @@ pub fn vant_hoff_k(k_ref: f64, delta_h: f64, t_ref: f64, t_target: f64) -> Resul
 /// Finds T where the heat released by combustion equals the heat absorbed
 /// by products: -ΔH°rxn + Σ n_r·Cp·(T_in - 298.15) = Σ n_p·Cp·(T_flame - 298.15)
 ///
-/// Uses bisection. Returns the flame temperature.
+/// Uses constant-Cp assumption (Cp at 298.15 K). Direct analytical solution.
 pub fn adiabatic_flame_temperature(
     reactants: &[(f64, &Species)],
     products: &[(f64, &Species)],
