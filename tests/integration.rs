@@ -1,5 +1,6 @@
 //! Integration tests for ushma — cross-module thermodynamics.
 
+use ushma::cycle;
 use ushma::entropy;
 use ushma::material;
 use ushma::phase;
@@ -253,4 +254,112 @@ fn phase_lookup_agrees_with_steam_table() {
         .phase_at(373.15, sat.pressure * 1.1)
         .unwrap();
     assert_eq!(p_above, phase::Phase::Liquid);
+}
+
+// --- Cycle integration tests ---
+
+#[test]
+fn ideal_gas_cycle_efficiency_ordering() {
+    // At comparable conditions, Otto and Brayton efficiencies follow analytical formulas
+    // Otto r=8: η = 1 - 1/8^0.4 = 0.5647
+    // Brayton rp=10: η = 1 - 1/10^(0.4/1.4) = 0.4820
+    let otto = cycle::otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).unwrap();
+    let brayton = cycle::brayton_cycle(300.0, 101_325.0, 10.0, 1400.0, 1.4, 1.0).unwrap();
+    let diesel = cycle::diesel_cycle(300.0, 101_325.0, 20.0, 2.0, 1.4, 1.0).unwrap();
+
+    // All should have positive efficiency below Carnot
+    assert!(otto.efficiency > 0.0 && otto.efficiency < 1.0);
+    assert!(brayton.efficiency > 0.0 && brayton.efficiency < 1.0);
+    assert!(diesel.efficiency > 0.0 && diesel.efficiency < 1.0);
+
+    // All satisfy first law
+    for c in [&otto, &brayton, &diesel] {
+        let balance = (c.heat_in - c.net_work - c.heat_out).abs();
+        assert!(balance < 1e-6, "Energy balance violation");
+    }
+}
+
+#[test]
+fn rankine_with_steam_tables_end_to_end() {
+    // Simple Rankine: 10 kPa condenser, 2 MPa boiler, 300°C superheat
+    let r = cycle::rankine_cycle(10_000.0, 2_000_000.0, Some(573.15)).unwrap();
+
+    assert_eq!(r.state_points.len(), 4);
+    assert!(r.efficiency > 0.15);
+    assert!(r.net_work > 0.0);
+
+    // Should be less efficient than Carnot between same temperature limits
+    let t_hot = r.state_points[2].temperature;
+    let t_cold = r.state_points[0].temperature;
+    let eta_carnot = entropy::carnot_efficiency(t_hot, t_cold).unwrap();
+    assert!(r.efficiency < eta_carnot);
+}
+
+#[test]
+fn refrigeration_vs_carnot_cop() {
+    let r = cycle::refrigeration_cycle(7_384.0, 47_390.0).unwrap();
+
+    let t_cold = r.cycle.state_points[0].temperature;
+    let t_hot = r.cycle.state_points[2].temperature;
+    let cop_carnot = entropy::carnot_cop_refrigeration(t_hot, t_cold).unwrap();
+
+    // Real COP must be less than Carnot COP
+    assert!(
+        r.cop_refrigeration < cop_carnot,
+        "COP {} exceeds Carnot {}",
+        r.cop_refrigeration,
+        cop_carnot
+    );
+}
+
+#[test]
+fn cycle_pv_diagram_closed_loop_all_types() {
+    let otto = cycle::otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).unwrap();
+    let diesel = cycle::diesel_cycle(300.0, 101_325.0, 20.0, 2.0, 1.4, 1.0).unwrap();
+    let brayton = cycle::brayton_cycle(300.0, 101_325.0, 10.0, 1400.0, 1.4, 1.0).unwrap();
+
+    for (name, result) in [("Otto", &otto), ("Diesel", &diesel), ("Brayton", &brayton)] {
+        let pts = cycle::cycle_pv_diagram(result, 10);
+        let first = &pts[0];
+        let last = &pts[pts.len() - 1];
+        assert!(
+            (first.x - last.x).abs() / first.x < 1e-6,
+            "{name} P-v loop not closed (V)"
+        );
+        assert!(
+            (first.y - last.y).abs() / first.y < 1e-6,
+            "{name} P-v loop not closed (P)"
+        );
+    }
+}
+
+#[test]
+fn cycle_comparison_all_below_carnot() {
+    let otto = cycle::otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).unwrap();
+    let brayton = cycle::brayton_cycle(300.0, 101_325.0, 10.0, 1400.0, 1.4, 1.0).unwrap();
+
+    let entries = vec![
+        (
+            cycle::CycleKind::Otto,
+            &otto,
+            otto.state_points[2].temperature,
+            otto.state_points[0].temperature,
+        ),
+        (
+            cycle::CycleKind::Brayton,
+            &brayton,
+            brayton.state_points[2].temperature,
+            brayton.state_points[0].temperature,
+        ),
+    ];
+
+    let comparison = cycle::compare_cycles(&entries);
+    for entry in &comparison {
+        assert!(
+            entry.second_law_efficiency <= 1.0,
+            "{:?} η_II={} > 1",
+            entry.kind,
+            entry.second_law_efficiency
+        );
+    }
 }

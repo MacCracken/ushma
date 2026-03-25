@@ -353,6 +353,24 @@ fn bench_brayton_cycle(c: &mut Criterion) {
     });
 }
 
+fn bench_rankine_cycle(c: &mut Criterion) {
+    c.bench_function("cycle/rankine", |b| {
+        b.iter(|| {
+            cycle::rankine_cycle(
+                black_box(10_000.0),
+                black_box(2_000_000.0),
+                black_box(Some(573.15)),
+            )
+        });
+    });
+}
+
+fn bench_refrigeration_cycle(c: &mut Criterion) {
+    c.bench_function("cycle/refrigeration", |b| {
+        b.iter(|| cycle::refrigeration_cycle(black_box(7_384.0), black_box(47_390.0)));
+    });
+}
+
 fn bench_superheated_lookup(c: &mut Criterion) {
     c.bench_function("steam/superheated_lookup", |b| {
         b.iter(|| steam::superheated_lookup(black_box(573.15), black_box(500_000.0)));
@@ -405,6 +423,8 @@ criterion_group!(
     bench_otto_cycle,
     bench_diesel_cycle,
     bench_brayton_cycle,
+    bench_rankine_cycle,
+    bench_refrigeration_cycle,
     // steam
     bench_saturated_by_temp,
     bench_saturated_by_pressure,

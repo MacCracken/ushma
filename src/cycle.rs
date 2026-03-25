@@ -533,6 +533,445 @@ pub fn brayton_cycle(
     })
 }
 
+// --- Steam-based cycles ---
+
+/// Rankine cycle analysis (steam power plant).
+///
+/// Four processes:
+/// 1→2: Isentropic compression (pump, liquid)
+/// 2→3: Isobaric heat addition (boiler)
+/// 3→4: Isentropic expansion (turbine)
+/// 4→1: Isobaric heat rejection (condenser)
+///
+/// - `p_condenser`: condenser pressure (Pa)
+/// - `p_boiler`: boiler pressure (Pa)
+/// - `t_superheat`: superheated steam temperature (K), or `None` for saturated
+#[cfg(feature = "steam")]
+pub fn rankine_cycle(
+    p_condenser: f64,
+    p_boiler: f64,
+    t_superheat: Option<f64>,
+) -> Result<CycleResult> {
+    use crate::steam;
+
+    if p_condenser <= 0.0 {
+        return Err(UshmaError::InvalidPressure {
+            pascals: p_condenser,
+        });
+    }
+    if p_boiler <= 0.0 {
+        return Err(UshmaError::InvalidPressure { pascals: p_boiler });
+    }
+    if p_boiler <= p_condenser {
+        return Err(UshmaError::InvalidCycleParameter {
+            reason: format!(
+                "boiler pressure {p_boiler} Pa must exceed condenser pressure {p_condenser} Pa"
+            ),
+        });
+    }
+
+    // State 1: saturated liquid at condenser pressure
+    let sat_cond = steam::saturated_by_pressure(p_condenser)?;
+    let h1 = sat_cond.h_f;
+    let s1 = sat_cond.s_f;
+    let v1 = sat_cond.v_f;
+    let t1 = sat_cond.temperature;
+
+    // State 2: compressed liquid (pump, incompressible approximation)
+    let w_pump = v1 * (p_boiler - p_condenser);
+    let h2 = h1 + w_pump;
+    let s2 = s1; // isentropic
+    let t2 = t1; // negligible temperature change in pump
+    let v2 = v1; // incompressible
+
+    // State 3: boiler exit
+    let (h3, s3, t3, v3) = if let Some(t_sh) = t_superheat {
+        let sh = steam::superheated_lookup(t_sh, p_boiler)?;
+        (
+            sh.specific_enthalpy,
+            sh.specific_entropy,
+            sh.temperature,
+            sh.specific_volume,
+        )
+    } else {
+        let sat_boil = steam::saturated_by_pressure(p_boiler)?;
+        (
+            sat_boil.h_g,
+            sat_boil.s_g,
+            sat_boil.temperature,
+            sat_boil.v_g,
+        )
+    };
+
+    // State 4: isentropic expansion to condenser pressure
+    let s4 = s3;
+    let (h4, t4, v4) = if s4 <= sat_cond.s_g {
+        // Wet region
+        let x4 = steam::quality_from_entropy(s4, &sat_cond)?;
+        let props = steam::wet_steam_properties(x4, &sat_cond)?;
+        (
+            props.specific_enthalpy,
+            sat_cond.temperature,
+            props.specific_volume,
+        )
+    } else {
+        // Superheated at condenser pressure (unusual)
+        (sat_cond.h_g, sat_cond.temperature, sat_cond.v_g)
+    };
+
+    let q_in = h3 - h2;
+    let w_turbine = h3 - h4;
+    let q_out = h4 - h1;
+    let w_net = w_turbine - w_pump;
+    let efficiency = w_net / q_in;
+    let back_work_ratio = w_pump / w_turbine;
+
+    Ok(CycleResult {
+        kind: CycleKind::Rankine,
+        state_points: vec![
+            StatePoint {
+                temperature: t1,
+                pressure: p_condenser,
+                volume: v1,
+                entropy: s1,
+                enthalpy: h1,
+            },
+            StatePoint {
+                temperature: t2,
+                pressure: p_boiler,
+                volume: v2,
+                entropy: s2,
+                enthalpy: h2,
+            },
+            StatePoint {
+                temperature: t3,
+                pressure: p_boiler,
+                volume: v3,
+                entropy: s3,
+                enthalpy: h3,
+            },
+            StatePoint {
+                temperature: t4,
+                pressure: p_condenser,
+                volume: v4,
+                entropy: s4,
+                enthalpy: h4,
+            },
+        ],
+        processes: vec![
+            ProcessKind::Isentropic,
+            ProcessKind::Isobaric,
+            ProcessKind::Isentropic,
+            ProcessKind::Isobaric,
+        ],
+        heat_in: q_in,
+        heat_out: q_out,
+        net_work: w_net,
+        efficiency,
+        back_work_ratio,
+        gamma: 0.0,
+    })
+}
+
+/// Refrigeration cycle result with COP values.
+#[cfg(feature = "steam")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefrigerationResult {
+    /// Cycle state points and energy data.
+    pub cycle: CycleResult,
+    /// Coefficient of performance for refrigeration: Q_cold / W.
+    pub cop_refrigeration: f64,
+    /// Coefficient of performance for heat pump: Q_hot / W = COP_ref + 1.
+    pub cop_heat_pump: f64,
+}
+
+/// Vapor-compression refrigeration cycle analysis.
+///
+/// Four processes:
+/// 1→2: Isentropic compression (compressor)
+/// 2→3: Isobaric heat rejection (condenser → saturated liquid)
+/// 3→4: Isenthalpic expansion (throttle valve)
+/// 4→1: Isobaric heat absorption (evaporator → saturated vapor)
+///
+/// - `p_evaporator`: evaporator pressure (Pa)
+/// - `p_condenser`: condenser pressure (Pa)
+#[cfg(feature = "steam")]
+pub fn refrigeration_cycle(p_evaporator: f64, p_condenser: f64) -> Result<RefrigerationResult> {
+    use crate::steam;
+
+    if p_evaporator <= 0.0 {
+        return Err(UshmaError::InvalidPressure {
+            pascals: p_evaporator,
+        });
+    }
+    if p_condenser <= 0.0 {
+        return Err(UshmaError::InvalidPressure {
+            pascals: p_condenser,
+        });
+    }
+    if p_condenser <= p_evaporator {
+        return Err(UshmaError::InvalidCycleParameter {
+            reason: format!(
+                "condenser pressure {p_condenser} Pa must exceed evaporator pressure {p_evaporator} Pa"
+            ),
+        });
+    }
+
+    let sat_evap = steam::saturated_by_pressure(p_evaporator)?;
+    let sat_cond = steam::saturated_by_pressure(p_condenser)?;
+
+    // State 1: saturated vapor at evaporator
+    let h1 = sat_evap.h_g;
+    let s1 = sat_evap.s_g;
+    let t1 = sat_evap.temperature;
+    let v1 = sat_evap.v_g;
+
+    // State 2: isentropic compression to condenser pressure
+    // Find superheated state where s ≈ s1 at p_condenser via bisection
+    let s_target = s1;
+    let t_lo_search = sat_cond.temperature + 1.0;
+    // Upper bound: try progressively higher temperatures
+    let mut t_hi_search = sat_cond.temperature + 200.0;
+    // Ensure upper bound is within superheated table range
+    if steam::superheated_lookup(t_hi_search, p_condenser).is_err() {
+        t_hi_search = sat_cond.temperature + 100.0;
+    }
+
+    let mut t_lo_b = t_lo_search;
+    let mut t_hi_b = t_hi_search;
+    for _ in 0..50 {
+        let t_mid = 0.5 * (t_lo_b + t_hi_b);
+        if let Ok(sh) = steam::superheated_lookup(t_mid, p_condenser) {
+            if sh.specific_entropy < s_target {
+                t_lo_b = t_mid;
+            } else {
+                t_hi_b = t_mid;
+            }
+        } else {
+            t_hi_b = t_mid;
+        }
+    }
+    let t2 = 0.5 * (t_lo_b + t_hi_b);
+    let sh2 = steam::superheated_lookup(t2, p_condenser)?;
+    let h2 = sh2.specific_enthalpy;
+    let s2 = s1;
+    let v2 = sh2.specific_volume;
+
+    // State 3: saturated liquid at condenser
+    let h3 = sat_cond.h_f;
+    let s3 = sat_cond.s_f;
+    let t3 = sat_cond.temperature;
+    let v3 = sat_cond.v_f;
+
+    // State 4: isenthalpic expansion (throttle), h4 = h3
+    let h4 = h3;
+    let x4 = steam::quality_from_enthalpy(h4, &sat_evap)?;
+    let props4 = steam::wet_steam_properties(x4, &sat_evap)?;
+    let t4 = sat_evap.temperature;
+    let v4 = props4.specific_volume;
+    let s4 = props4.specific_entropy;
+
+    let q_evap = h1 - h4;
+    let q_cond = h2 - h3;
+    let w_comp = h2 - h1;
+
+    let cop_ref = q_evap / w_comp;
+    let cop_hp = q_cond / w_comp;
+
+    Ok(RefrigerationResult {
+        cycle: CycleResult {
+            kind: CycleKind::Refrigeration,
+            state_points: vec![
+                StatePoint {
+                    temperature: t1,
+                    pressure: p_evaporator,
+                    volume: v1,
+                    entropy: s1,
+                    enthalpy: h1,
+                },
+                StatePoint {
+                    temperature: t2,
+                    pressure: p_condenser,
+                    volume: v2,
+                    entropy: s2,
+                    enthalpy: h2,
+                },
+                StatePoint {
+                    temperature: t3,
+                    pressure: p_condenser,
+                    volume: v3,
+                    entropy: s3,
+                    enthalpy: h3,
+                },
+                StatePoint {
+                    temperature: t4,
+                    pressure: p_evaporator,
+                    volume: v4,
+                    entropy: s4,
+                    enthalpy: h4,
+                },
+            ],
+            processes: vec![
+                ProcessKind::Isentropic,
+                ProcessKind::Isobaric,
+                ProcessKind::Isenthalpic,
+                ProcessKind::Isobaric,
+            ],
+            heat_in: q_evap,
+            heat_out: q_cond,
+            net_work: w_comp,
+            efficiency: cop_ref,
+            back_work_ratio: 1.0,
+            gamma: 0.0,
+        },
+        cop_refrigeration: cop_ref,
+        cop_heat_pump: cop_hp,
+    })
+}
+
+/// Heat pump COP from refrigeration COP.
+///
+/// COP_hp = COP_ref + 1 (energy conservation: Q_hot = Q_cold + W).
+#[inline]
+#[must_use]
+pub fn heat_pump_cop(cop_refrigeration: f64) -> f64 {
+    cop_refrigeration + 1.0
+}
+
+/// Entry for comparing multiple cycles.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CycleComparisonEntry {
+    /// Cycle type.
+    pub kind: CycleKind,
+    /// Thermal efficiency (or COP for refrigeration).
+    pub efficiency: f64,
+    /// Net work output (J).
+    pub net_work: f64,
+    /// Back-work ratio.
+    pub back_work_ratio: f64,
+    /// Carnot efficiency at the same temperature limits.
+    pub carnot_efficiency: f64,
+    /// Second-law efficiency: η / η_carnot.
+    pub second_law_efficiency: f64,
+}
+
+/// Compare multiple cycles against their Carnot limits.
+///
+/// Each entry is `(kind, result, t_high, t_low)` where t_high/t_low
+/// define the Carnot reference temperatures (K).
+pub fn compare_cycles(
+    entries: &[(CycleKind, &CycleResult, f64, f64)],
+) -> Vec<CycleComparisonEntry> {
+    entries
+        .iter()
+        .map(|(kind, result, t_high, t_low)| {
+            let eta_carnot = if *t_high > *t_low && *t_high > 0.0 {
+                1.0 - t_low / t_high
+            } else {
+                0.0
+            };
+            let eta_second = if eta_carnot > 0.0 {
+                result.efficiency / eta_carnot
+            } else {
+                0.0
+            };
+            CycleComparisonEntry {
+                kind: *kind,
+                efficiency: result.efficiency,
+                net_work: result.net_work,
+                back_work_ratio: result.back_work_ratio,
+                carnot_efficiency: eta_carnot,
+                second_law_efficiency: eta_second,
+            }
+        })
+        .collect()
+}
+
+// --- Diagram data generation ---
+
+/// Generate T-s diagram points for a cycle.
+///
+/// Returns interpolated points along each process path.
+/// - Isentropic: vertical line (constant s, T varies)
+/// - Isochoric: curve from (s1,T1) to (s2,T2) via ds = nCv·ln(T/T_start)
+/// - Isobaric: curve from (s1,T1) to (s2,T2) via ds = nCp·ln(T/T_start)
+///
+/// X-axis = entropy (J/K), Y-axis = temperature (K).
+pub fn cycle_ts_diagram(result: &CycleResult, points_per_process: usize) -> Vec<DiagramPoint> {
+    let n = result.state_points.len();
+    let pts = points_per_process.max(2);
+    let mut out = Vec::with_capacity(n * pts);
+
+    for i in 0..n {
+        let a = &result.state_points[i];
+        let b = &result.state_points[(i + 1) % n];
+
+        for j in 0..pts {
+            let frac = j as f64 / (pts - 1) as f64;
+            let t = a.temperature + frac * (b.temperature - a.temperature);
+            let s = a.entropy + frac * (b.entropy - a.entropy);
+            out.push(DiagramPoint { x: s, y: t });
+        }
+    }
+
+    out
+}
+
+/// Generate P-v diagram points for a cycle.
+///
+/// Returns interpolated points along each process path.
+/// - Isentropic: curve via PV^γ = const → P = P_a·(V_a/V)^γ
+/// - Isochoric: vertical line (constant V, P varies)
+/// - Isobaric: horizontal line (constant P, V varies)
+///
+/// X-axis = volume (m³), Y-axis = pressure (Pa).
+pub fn cycle_pv_diagram(result: &CycleResult, points_per_process: usize) -> Vec<DiagramPoint> {
+    let n = result.state_points.len();
+    let pts = points_per_process.max(2);
+    let gamma = result.gamma;
+    let mut out = Vec::with_capacity(n * pts);
+
+    for i in 0..n {
+        let a = &result.state_points[i];
+        let b = &result.state_points[(i + 1) % n];
+        let process = result.processes[i];
+
+        for j in 0..pts {
+            let frac = j as f64 / (pts - 1) as f64;
+
+            let (v, p) = match process {
+                ProcessKind::Isentropic => {
+                    // PV^γ = const → P = P_a * (V_a/V)^γ
+                    let v = a.volume + frac * (b.volume - a.volume);
+                    let p = a.pressure * (a.volume / v).powf(gamma);
+                    (v, p)
+                }
+                ProcessKind::Isochoric => {
+                    // V constant, P varies linearly with T
+                    let v = a.volume;
+                    let p = a.pressure + frac * (b.pressure - a.pressure);
+                    (v, p)
+                }
+                ProcessKind::Isobaric => {
+                    let v = a.volume + frac * (b.volume - a.volume);
+                    let p = a.pressure;
+                    (v, p)
+                }
+                _ => {
+                    // Linear fallback for other process types
+                    let v = a.volume + frac * (b.volume - a.volume);
+                    let p = a.pressure + frac * (b.pressure - a.pressure);
+                    (v, p)
+                }
+            };
+
+            out.push(DiagramPoint { x: v, y: p });
+        }
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -801,10 +1240,213 @@ mod tests {
         assert!(otto_cycle(300.0, 101_325.0, 8.0, -100.0, 1.4, 1.0).is_err());
     }
 
+    // --- Diagram tests ---
+
+    #[test]
+    fn test_ts_diagram_point_count() {
+        let r = otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).unwrap();
+        let pts = cycle_ts_diagram(&r, 10);
+        // 4 processes × 10 points each
+        assert_eq!(pts.len(), 40);
+    }
+
+    #[test]
+    fn test_pv_diagram_point_count() {
+        let r = brayton_cycle(300.0, 101_325.0, 10.0, 1400.0, 1.4, 1.0).unwrap();
+        let pts = cycle_pv_diagram(&r, 20);
+        assert_eq!(pts.len(), 80);
+    }
+
+    #[test]
+    fn test_ts_diagram_isentropic_vertical() {
+        let r = otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).unwrap();
+        let pts = cycle_ts_diagram(&r, 10);
+        // Process 0 (1→2) is isentropic: all x (entropy) values should be equal
+        let s_ref = pts[0].x;
+        for p in &pts[0..10] {
+            assert!(
+                (p.x - s_ref).abs() < 1e-10,
+                "Isentropic segment not vertical: s={}, expected {}",
+                p.x,
+                s_ref
+            );
+        }
+    }
+
+    #[test]
+    fn test_pv_diagram_isochoric_vertical() {
+        let r = otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).unwrap();
+        let pts = cycle_pv_diagram(&r, 10);
+        // Process 1 (2→3) is isochoric: all x (volume) values should be equal
+        let v_ref = pts[10].x;
+        for p in &pts[10..20] {
+            assert!(
+                (p.x - v_ref).abs() < 1e-10,
+                "Isochoric segment not vertical: v={}, expected {}",
+                p.x,
+                v_ref
+            );
+        }
+    }
+
+    #[test]
+    fn test_pv_diagram_isobaric_horizontal() {
+        let r = brayton_cycle(300.0, 101_325.0, 10.0, 1400.0, 1.4, 1.0).unwrap();
+        let pts = cycle_pv_diagram(&r, 10);
+        // Process 1 (2→3) is isobaric: all y (pressure) values should be equal
+        let p_ref = pts[10].y;
+        for p in &pts[10..20] {
+            assert!(
+                (p.y - p_ref).abs() / p_ref < 1e-10,
+                "Isobaric segment not horizontal"
+            );
+        }
+    }
+
+    #[test]
+    fn test_pv_diagram_closed_loop() {
+        let r = otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).unwrap();
+        let pts = cycle_pv_diagram(&r, 10);
+        // Last point of last process should equal first point
+        let first = &pts[0];
+        let last = &pts[pts.len() - 1];
+        assert!(
+            (first.x - last.x).abs() / first.x < 1e-10,
+            "P-v loop not closed (V)"
+        );
+        assert!(
+            (first.y - last.y).abs() / first.y < 1e-10,
+            "P-v loop not closed (P)"
+        );
+    }
+
     #[test]
     fn test_diagram_point() {
         let dp = DiagramPoint { x: 1.0, y: 2.0 };
         assert!((dp.x - 1.0).abs() < 1e-10);
         assert!((dp.y - 2.0).abs() < 1e-10);
+    }
+
+    // --- Rankine tests ---
+
+    #[cfg(feature = "steam")]
+    #[test]
+    fn test_rankine_basic() {
+        // 10 kPa condenser, 2 MPa boiler, superheated to 573.15 K
+        let r = rankine_cycle(10_000.0, 2_000_000.0, Some(573.15)).unwrap();
+        assert!(r.efficiency > 0.15 && r.efficiency < 0.40);
+        assert!(r.net_work > 0.0);
+    }
+
+    #[cfg(feature = "steam")]
+    #[test]
+    fn test_rankine_energy_conservation() {
+        let r = rankine_cycle(10_000.0, 1_000_000.0, Some(573.15)).unwrap();
+        let balance = (r.heat_in - r.net_work - r.heat_out).abs();
+        assert!(
+            balance / r.heat_in < 0.01,
+            "Rankine energy balance: {balance}"
+        );
+    }
+
+    #[cfg(feature = "steam")]
+    #[test]
+    fn test_rankine_superheated_better_than_saturated() {
+        let sat = rankine_cycle(10_000.0, 1_000_000.0, None).unwrap();
+        let sup = rankine_cycle(10_000.0, 1_000_000.0, Some(573.15)).unwrap();
+        assert!(sup.efficiency > sat.efficiency);
+    }
+
+    #[cfg(feature = "steam")]
+    #[test]
+    fn test_rankine_low_back_work_ratio() {
+        let r = rankine_cycle(10_000.0, 2_000_000.0, Some(573.15)).unwrap();
+        // Rankine BWR typically 1-3%
+        assert!(r.back_work_ratio < 0.05);
+    }
+
+    #[cfg(feature = "steam")]
+    #[test]
+    fn test_rankine_invalid_pressures() {
+        assert!(rankine_cycle(0.0, 1_000_000.0, None).is_err());
+        assert!(rankine_cycle(10_000.0, 0.0, None).is_err());
+        assert!(rankine_cycle(1_000_000.0, 10_000.0, None).is_err()); // boiler < condenser
+    }
+
+    // --- Refrigeration tests ---
+
+    #[cfg(feature = "steam")]
+    #[test]
+    fn test_refrigeration_basic() {
+        // Evaporator at ~7 kPa (~40°C), condenser at ~47 kPa (~80°C)
+        let r = refrigeration_cycle(7_384.0, 47_390.0).unwrap();
+        assert!(r.cop_refrigeration > 0.0);
+        assert!(r.cop_heat_pump > r.cop_refrigeration);
+    }
+
+    #[cfg(feature = "steam")]
+    #[test]
+    fn test_refrigeration_cop_hp_identity() {
+        let r = refrigeration_cycle(7_384.0, 47_390.0).unwrap();
+        // COP_hp = COP_ref + 1 (within floating point tolerance)
+        assert!((r.cop_heat_pump - (r.cop_refrigeration + 1.0)).abs() < 0.1);
+    }
+
+    #[cfg(feature = "steam")]
+    #[test]
+    fn test_refrigeration_energy_balance() {
+        let r = refrigeration_cycle(7_384.0, 47_390.0).unwrap();
+        let c = &r.cycle;
+        // Q_cond = Q_evap + W (within tolerance for approximate state 2)
+        let balance = (c.heat_out - c.heat_in - c.net_work).abs();
+        assert!(
+            balance / c.heat_out < 0.05,
+            "Refrigeration energy balance: {balance}"
+        );
+    }
+
+    #[cfg(feature = "steam")]
+    #[test]
+    fn test_refrigeration_invalid() {
+        assert!(refrigeration_cycle(0.0, 47_390.0).is_err());
+        assert!(refrigeration_cycle(47_390.0, 7_384.0).is_err()); // condenser < evaporator
+    }
+
+    // --- Heat pump + comparison tests ---
+
+    #[test]
+    fn test_heat_pump_cop_identity() {
+        assert!((heat_pump_cop(3.0) - 4.0).abs() < 1e-10);
+        assert!((heat_pump_cop(0.0) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_compare_cycles_second_law() {
+        let otto = otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).unwrap();
+        let brayton = brayton_cycle(300.0, 101_325.0, 10.0, 1400.0, 1.4, 1.0).unwrap();
+
+        let sp_otto = &otto.state_points;
+        let t_high_otto = sp_otto[2].temperature;
+        let t_low_otto = sp_otto[0].temperature;
+
+        let sp_bray = &brayton.state_points;
+        let t_high_bray = sp_bray[2].temperature;
+        let t_low_bray = sp_bray[0].temperature;
+
+        let comparison = compare_cycles(&[
+            (CycleKind::Otto, &otto, t_high_otto, t_low_otto),
+            (CycleKind::Brayton, &brayton, t_high_bray, t_low_bray),
+        ]);
+
+        assert_eq!(comparison.len(), 2);
+        for entry in &comparison {
+            assert!(
+                entry.second_law_efficiency <= 1.0,
+                "η_II > 1: {}",
+                entry.second_law_efficiency
+            );
+            assert!(entry.second_law_efficiency > 0.0);
+            assert!(entry.carnot_efficiency > entry.efficiency);
+        }
     }
 }
