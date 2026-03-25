@@ -8,6 +8,7 @@ use ushma::entropy;
 use ushma::material;
 use ushma::numerical;
 use ushma::phase;
+use ushma::stat;
 use ushma::state;
 use ushma::steam;
 use ushma::transfer;
@@ -523,6 +524,10 @@ criterion_group!(
     bench_quality_from_enthalpy,
     bench_wet_steam_properties,
     bench_superheated_lookup,
+    // stat
+    bench_mb_rms_speed,
+    bench_einstein_cv,
+    bench_debye_cv,
     // chem
     bench_reaction_enthalpy,
     bench_equilibrium_constant,
@@ -533,6 +538,25 @@ criterion_group!(
     bench_gauss_seidel_2d,
     bench_thermal_network,
 );
+
+fn bench_mb_rms_speed(c: &mut Criterion) {
+    let m = 28.014e-3 / stat::AVOGADRO;
+    c.bench_function("stat/rms_speed", |b| {
+        b.iter(|| stat::rms_speed(black_box(m), black_box(300.0)));
+    });
+}
+
+fn bench_einstein_cv(c: &mut Criterion) {
+    c.bench_function("stat/einstein_cv", |b| {
+        b.iter(|| stat::einstein_cv(black_box(300.0), black_box(200.0)));
+    });
+}
+
+fn bench_debye_cv(c: &mut Criterion) {
+    c.bench_function("stat/debye_cv", |b| {
+        b.iter(|| stat::debye_cv(black_box(300.0), black_box(200.0)));
+    });
+}
 
 fn bench_reaction_enthalpy(c: &mut Criterion) {
     c.bench_function("chem/reaction_enthalpy", |b| {

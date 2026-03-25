@@ -5,6 +5,7 @@ use ushma::cycle;
 use ushma::entropy;
 use ushma::material;
 use ushma::phase;
+use ushma::stat;
 use ushma::state;
 use ushma::steam;
 use ushma::transfer;
@@ -573,4 +574,35 @@ fn excess_air_lowers_flame_temperature() {
         t_excess < t_stoich,
         "excess air T={t_excess:.0} should be < stoich T={t_stoich:.0}"
     );
+}
+
+// --- Statistical thermodynamics integration tests ---
+
+#[test]
+fn mb_speed_ordering_any_gas() {
+    // v_p < v_avg < v_rms for O₂ at 500 K
+    let m = 32.0e-3 / stat::AVOGADRO;
+    let vp = stat::most_probable_speed(m, 500.0).unwrap();
+    let va = stat::mean_speed(m, 500.0).unwrap();
+    let vr = stat::rms_speed(m, 500.0).unwrap();
+    assert!(vp < va && va < vr);
+}
+
+#[test]
+fn debye_high_t_matches_dulong_petit() {
+    // Copper Θ_D ≈ 343 K. At T=2000 K, Cv ≈ 3R = 24.94 J/(mol·K)
+    // Copper molar Cp ≈ 24.44 J/(mol·K) (from material::COPPER: 385 J/(kg·K) * 0.06355 kg/mol)
+    let cv = stat::debye_cv(343.0, 2000.0).unwrap();
+    assert!(
+        (cv - 3.0 * state::GAS_CONSTANT).abs() < 1.0,
+        "Debye Cv={cv:.2}, expected ~{:.2}",
+        3.0 * state::GAS_CONSTANT
+    );
+}
+
+#[test]
+fn equipartition_cv_monatomic_matches_kinetic_theory() {
+    // Monatomic ideal gas: f=3, Cv = 3R/2 = 12.47 J/(mol·K)
+    let cv = stat::equipartition_cv(3.0);
+    assert!((cv - 1.5 * state::GAS_CONSTANT).abs() < 1e-10);
 }

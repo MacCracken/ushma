@@ -17,6 +17,7 @@
 //! - [`cycle`] — Thermodynamic cycles (Otto, Diesel, Brayton, Rankine)
 //! - [`numerical`] — Finite difference solvers, thermal networks
 //! - [`chem`] — Chemical thermodynamics, Hess's law, equilibrium
+//! - [`stat`] — Statistical thermodynamics, Boltzmann, partition functions
 //! - [`error`] — Error types
 
 pub mod error;
@@ -47,6 +48,9 @@ pub mod numerical;
 
 #[cfg(feature = "chem")]
 pub mod chem;
+
+#[cfg(feature = "stat")]
+pub mod stat;
 
 #[cfg(feature = "logging")]
 pub mod logging;
