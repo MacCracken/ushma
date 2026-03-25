@@ -65,29 +65,21 @@ fn bench_thermal_resistance_parallel(c: &mut Criterion) {
 
 fn bench_heat_stored(c: &mut Criterion) {
     c.bench_function("transfer/heat_stored", |b| {
-        b.iter(|| {
-            transfer::heat_stored(black_box(1.0), black_box(4186.0), black_box(10.0))
-        });
+        b.iter(|| transfer::heat_stored(black_box(1.0), black_box(4186.0), black_box(10.0)));
     });
 }
 
 fn bench_thermal_diffusivity(c: &mut Criterion) {
     c.bench_function("transfer/diffusivity", |b| {
         b.iter(|| {
-            transfer::thermal_diffusivity(
-                black_box(401.0),
-                black_box(8960.0),
-                black_box(385.0),
-            )
+            transfer::thermal_diffusivity(black_box(401.0), black_box(8960.0), black_box(385.0))
         });
     });
 }
 
 fn bench_biot_number(c: &mut Criterion) {
     c.bench_function("transfer/biot_number", |b| {
-        b.iter(|| {
-            transfer::biot_number(black_box(25.0), black_box(0.01), black_box(401.0))
-        });
+        b.iter(|| transfer::biot_number(black_box(25.0), black_box(0.01), black_box(401.0)));
     });
 }
 
@@ -108,17 +100,13 @@ fn bench_lumped_capacitance(c: &mut Criterion) {
 
 fn bench_ideal_gas_pressure(c: &mut Criterion) {
     c.bench_function("state/ideal_gas_pressure", |b| {
-        b.iter(|| {
-            state::ideal_gas_pressure(black_box(1.0), black_box(300.0), black_box(0.025))
-        });
+        b.iter(|| state::ideal_gas_pressure(black_box(1.0), black_box(300.0), black_box(0.025)));
     });
 }
 
 fn bench_ideal_gas_volume(c: &mut Criterion) {
     c.bench_function("state/ideal_gas_volume", |b| {
-        b.iter(|| {
-            state::ideal_gas_volume(black_box(1.0), black_box(300.0), black_box(101325.0))
-        });
+        b.iter(|| state::ideal_gas_volume(black_box(1.0), black_box(300.0), black_box(101325.0)));
     });
 }
 
@@ -191,9 +179,7 @@ fn bench_carnot_cop(c: &mut Criterion) {
 
 fn bench_helmholtz(c: &mut Criterion) {
     c.bench_function("entropy/helmholtz", |b| {
-        b.iter(|| {
-            entropy::helmholtz(black_box(1000.0), black_box(300.0), black_box(5.0))
-        });
+        b.iter(|| entropy::helmholtz(black_box(1000.0), black_box(300.0), black_box(5.0)));
     });
 }
 

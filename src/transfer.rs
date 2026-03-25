@@ -2,9 +2,7 @@
 //!
 //! All SI units: watts, meters, kelvins, seconds.
 
-use serde::{Deserialize, Serialize};
-
-use crate::error::{UshmaError, Result};
+use crate::error::{Result, UshmaError};
 
 /// Stefan-Boltzmann constant σ (W/(m²⋅K⁴)).
 pub const STEFAN_BOLTZMANN: f64 = 5.670_374_419e-8;
@@ -14,7 +12,7 @@ pub const BOLTZMANN_K: f64 = 1.380_649e-23;
 
 /// Fourier's law: heat flux through conduction.
 ///
-/// q = -k⋅A⋅(T_hot - T_cold)/L (watts)
+/// q = k⋅A⋅(T_hot - T_cold)/L (watts)
 ///
 /// - `conductivity`: thermal conductivity k (W/(m⋅K))
 /// - `area`: cross-sectional area A (m²)
@@ -60,16 +58,14 @@ pub fn convection(h: f64, area: f64, t_surface: f64, t_fluid: f64) -> f64 {
 /// - `emissivity`: surface emissivity ε (0-1)
 /// - `area`: surface area (m²)
 /// - `t_surface`, `t_surrounding`: temperatures (K)
-pub fn radiation(
-    emissivity: f64,
-    area: f64,
-    t_surface: f64,
-    t_surrounding: f64,
-) -> Result<f64> {
-    if t_surface < 0.0 {
-        return Err(UshmaError::InvalidTemperature {
-            kelvin: t_surface,
+pub fn radiation(emissivity: f64, area: f64, t_surface: f64, t_surrounding: f64) -> Result<f64> {
+    if !(0.0..=1.0).contains(&emissivity) {
+        return Err(UshmaError::InvalidParameter {
+            reason: format!("emissivity {emissivity} must be in [0, 1]"),
         });
+    }
+    if t_surface < 0.0 {
+        return Err(UshmaError::InvalidTemperature { kelvin: t_surface });
     }
     if t_surrounding < 0.0 {
         return Err(UshmaError::InvalidTemperature {
@@ -82,11 +78,7 @@ pub fn radiation(
 }
 
 /// Thermal resistance for conduction: R = L/(k⋅A) (K/W).
-pub fn thermal_resistance_conduction(
-    conductivity: f64,
-    area: f64,
-    thickness: f64,
-) -> Result<f64> {
+pub fn thermal_resistance_conduction(conductivity: f64, area: f64, thickness: f64) -> Result<f64> {
     let denom = conductivity * area;
     if denom.abs() < 1e-30 {
         return Err(UshmaError::DivisionByZero {
@@ -108,6 +100,7 @@ pub fn thermal_resistance_convection(h: f64, area: f64) -> Result<f64> {
 }
 
 /// Series thermal resistance: R_total = R₁ + R₂ + ... (K/W).
+#[inline]
 #[must_use]
 pub fn thermal_resistance_series(resistances: &[f64]) -> f64 {
     resistances.iter().sum()
@@ -134,11 +127,7 @@ pub fn heat_stored(mass: f64, specific_heat: f64, delta_t: f64) -> f64 {
 /// Thermal diffusivity: α = k/(ρ⋅c_p) (m²/s).
 ///
 /// How quickly heat diffuses through a material.
-pub fn thermal_diffusivity(
-    conductivity: f64,
-    density: f64,
-    specific_heat: f64,
-) -> Result<f64> {
+pub fn thermal_diffusivity(conductivity: f64, density: f64, specific_heat: f64) -> Result<f64> {
     let denom = density * specific_heat;
     if denom.abs() < 1e-30 {
         return Err(UshmaError::DivisionByZero {
@@ -264,5 +253,62 @@ mod tests {
     #[test]
     fn test_invalid_conductivity() {
         assert!(conduction(-1.0, 1.0, 373.0, 293.0, 0.1).is_err());
+    }
+
+    #[test]
+    fn test_radiation_invalid_emissivity() {
+        assert!(radiation(-0.1, 1.0, 373.0, 293.0).is_err());
+        assert!(radiation(1.1, 1.0, 373.0, 293.0).is_err());
+        // Boundary values should work
+        assert!(radiation(0.0, 1.0, 373.0, 293.0).is_ok());
+        assert!(radiation(1.0, 1.0, 373.0, 293.0).is_ok());
+    }
+
+    #[test]
+    fn test_conduction_zero_thickness() {
+        assert!(conduction(401.0, 1.0, 373.0, 293.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_thermal_resistance_convection_zero() {
+        assert!(thermal_resistance_convection(0.0, 1.0).is_err());
+        assert!(thermal_resistance_convection(25.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_thermal_diffusivity_zero_density() {
+        assert!(thermal_diffusivity(401.0, 0.0, 385.0).is_err());
+    }
+
+    #[test]
+    fn test_biot_number_zero_conductivity() {
+        assert!(biot_number(25.0, 0.01, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_conduction_nan_propagation() {
+        let result = conduction(f64::NAN, 1.0, 373.0, 293.0, 0.1);
+        // NaN conductivity should be caught by validation (NaN < 0.0 is false)
+        // so it passes through — result contains NaN
+        assert!(result.unwrap().is_nan());
+    }
+
+    #[test]
+    fn test_radiation_nan_emissivity() {
+        // NaN is not in [0, 1] so should be rejected
+        assert!(radiation(f64::NAN, 1.0, 373.0, 293.0).is_err());
+    }
+
+    #[test]
+    fn test_heat_stored_negative_delta() {
+        // Cooling: negative ΔT → negative heat stored (heat lost)
+        let q = heat_stored(1.0, 4186.0, -10.0);
+        assert!(q < 0.0);
+    }
+
+    #[test]
+    fn test_thermal_resistance_parallel_single() {
+        let r = thermal_resistance_parallel(&[5.0]).unwrap();
+        assert!((r - 5.0).abs() < 1e-10);
     }
 }

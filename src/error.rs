@@ -50,9 +50,7 @@ mod tests {
 
     #[test]
     fn test_invalid_volume() {
-        let e = UshmaError::InvalidVolume {
-            cubic_meters: -0.5,
-        };
+        let e = UshmaError::InvalidVolume { cubic_meters: -0.5 };
         assert!(e.to_string().contains("-0.5"));
     }
 

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{UshmaError, Result};
+use crate::error::{Result, UshmaError};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaimonConfig {
@@ -53,15 +53,16 @@ impl DaimonClient {
             "name": "ushma",
             "capabilities": ["heat_transfer", "thermodynamics", "entropy", "thermal_materials"],
         });
-        let resp = self
+        let mut req = self
             .client
             .post(format!("{}/v1/agents/register", self.config.endpoint))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| UshmaError::InvalidParameter {
-                reason: format!("registration request failed: {e}"),
-            })?;
+            .json(&body);
+        if let Some(ref key) = self.config.api_key {
+            req = req.bearer_auth(key);
+        }
+        let resp = req.send().await.map_err(|e| UshmaError::InvalidParameter {
+            reason: format!("registration request failed: {e}"),
+        })?;
         let data: serde_json::Value =
             resp.json()
                 .await

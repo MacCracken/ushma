@@ -2,9 +2,7 @@
 //!
 //! All SI units: pascals, cubic meters, kelvins, moles.
 
-use serde::{Deserialize, Serialize};
-
-use crate::error::{UshmaError, Result};
+use crate::error::{Result, UshmaError};
 
 /// Universal gas constant R (J/(mol⋅K)).
 pub const GAS_CONSTANT: f64 = 8.314_462_618;
@@ -86,6 +84,11 @@ pub fn van_der_waals_pressure(
 ///
 /// W = nRT⋅ln(V₂/V₁) (joules)
 pub fn isothermal_work(moles: f64, temperature: f64, v1: f64, v2: f64) -> Result<f64> {
+    if temperature < 0.0 {
+        return Err(UshmaError::InvalidTemperature {
+            kelvin: temperature,
+        });
+    }
     if v1 <= 0.0 {
         return Err(UshmaError::InvalidVolume { cubic_meters: v1 });
     }
@@ -109,6 +112,11 @@ pub fn isobaric_work(pressure: f64, v1: f64, v2: f64) -> f64 {
 /// Returns final temperature for adiabatic expansion/compression.
 /// T₂ = T₁(V₁/V₂)^(γ-1)
 pub fn adiabatic_temperature(t1: f64, v1: f64, v2: f64, gamma: f64) -> Result<f64> {
+    if gamma <= 1.0 {
+        return Err(UshmaError::InvalidParameter {
+            reason: format!("heat capacity ratio γ={gamma} must be > 1"),
+        });
+    }
     if v1 <= 0.0 {
         return Err(UshmaError::InvalidVolume { cubic_meters: v1 });
     }
@@ -211,5 +219,60 @@ mod tests {
     #[test]
     fn test_zero_volume() {
         assert!(ideal_gas_pressure(1.0, 300.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_isothermal_work_negative_temp() {
+        assert!(isothermal_work(1.0, -10.0, 0.01, 0.02).is_err());
+    }
+
+    #[test]
+    fn test_isothermal_work_zero_temp() {
+        // T=0 is valid (W=0 at absolute zero)
+        let w = isothermal_work(1.0, 0.0, 0.01, 0.02).unwrap();
+        assert!(w.abs() < 1e-30);
+    }
+
+    #[test]
+    fn test_adiabatic_invalid_gamma() {
+        // γ must be > 1
+        assert!(adiabatic_temperature(300.0, 0.02, 0.01, 1.0).is_err());
+        assert!(adiabatic_temperature(300.0, 0.02, 0.01, 0.5).is_err());
+    }
+
+    #[test]
+    fn test_adiabatic_roundtrip() {
+        // Compress then expand back — temperature should return
+        let t2 = adiabatic_temperature(300.0, 0.02, 0.01, 1.4).unwrap();
+        let t3 = adiabatic_temperature(t2, 0.01, 0.02, 1.4).unwrap();
+        assert!((t3 - 300.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_ideal_gas_temperature_zero_moles() {
+        assert!(ideal_gas_temperature(ATM, 0.02241, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_van_der_waals_negative_temp() {
+        assert!(van_der_waals_pressure(1.0, -10.0, 0.02241, 0.3658, 4.286e-5).is_err());
+    }
+
+    #[test]
+    fn test_van_der_waals_volume_too_small() {
+        // Volume < n*b → effective volume negative
+        assert!(van_der_waals_pressure(1.0, 300.0, 1e-6, 0.3658, 4.286e-5).is_err());
+    }
+
+    #[test]
+    fn test_compressibility_factor_zero_temp() {
+        assert!(compressibility_factor(ATM, 0.02241, 1.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_ideal_gas_zero_temp() {
+        // T=0 → P=0, which is physically valid
+        let p = ideal_gas_pressure(1.0, 0.0, 0.02241).unwrap();
+        assert!(p.abs() < 1e-30);
     }
 }

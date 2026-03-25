@@ -2,7 +2,7 @@
 //!
 //! The second law: total entropy of an isolated system never decreases.
 
-use crate::error::{UshmaError, Result};
+use crate::error::{Result, UshmaError};
 use crate::state::GAS_CONSTANT;
 
 /// Entropy change for ideal gas: ΔS = nCv⋅ln(T₂/T₁) + nR⋅ln(V₂/V₁).
@@ -26,7 +26,7 @@ pub fn ideal_gas_entropy_change(
     if v2 <= 0.0 {
         return Err(UshmaError::InvalidVolume { cubic_meters: v2 });
     }
-    Ok(moles * cv * (t2 / t1).ln() + moles * GAS_CONSTANT * (v2 / v1).ln())
+    Ok(moles * (cv * (t2 / t1).ln() + GAS_CONSTANT * (v2 / v1).ln()))
 }
 
 /// Entropy change for isothermal process: ΔS = nR⋅ln(V₂/V₁).
@@ -113,6 +113,12 @@ pub fn entropy_of_mixing(moles: f64, mole_fractions: &[f64]) -> Result<f64> {
             });
         }
     }
+    let frac_sum: f64 = mole_fractions.iter().sum();
+    if (frac_sum - 1.0).abs() > 1e-10 {
+        return Err(UshmaError::InvalidParameter {
+            reason: format!("mole fractions must sum to 1.0, got {frac_sum}"),
+        });
+    }
     let sum: f64 = mole_fractions.iter().map(|&x| x * x.ln()).sum();
     Ok(-moles * GAS_CONSTANT * sum)
 }
@@ -183,5 +189,73 @@ mod tests {
     fn test_carnot_invalid_temps() {
         assert!(carnot_efficiency(300.0, 300.0).is_err());
         assert!(carnot_efficiency(200.0, 300.0).is_err());
+    }
+
+    #[test]
+    fn test_carnot_cop_invalid() {
+        assert!(carnot_cop_refrigeration(300.0, 300.0).is_err());
+        assert!(carnot_cop_refrigeration(200.0, 300.0).is_err());
+        assert!(carnot_cop_refrigeration(0.0, 250.0).is_err());
+    }
+
+    #[test]
+    fn test_heat_transfer_entropy_zero_temp() {
+        assert!(heat_transfer_entropy(1000.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_heat_transfer_entropy_negative_heat() {
+        // Heat rejected: Q < 0 → ΔS < 0
+        let ds = heat_transfer_entropy(-1000.0, 300.0).unwrap();
+        assert!(ds < 0.0);
+    }
+
+    #[test]
+    fn test_entropy_of_mixing_bad_fractions() {
+        // Fractions don't sum to 1
+        assert!(entropy_of_mixing(1.0, &[0.3, 0.3]).is_err());
+    }
+
+    #[test]
+    fn test_entropy_of_mixing_zero_fraction() {
+        assert!(entropy_of_mixing(1.0, &[0.0, 1.0]).is_err());
+    }
+
+    #[test]
+    fn test_entropy_of_mixing_pure_substance() {
+        // Single component: x=1, ln(1)=0, ΔS=0
+        let ds = entropy_of_mixing(1.0, &[1.0]).unwrap();
+        assert!(ds.abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_ideal_gas_entropy_zero_temp() {
+        assert!(ideal_gas_entropy_change(1.0, 20.8, 0.0, 300.0, 0.01, 0.02).is_err());
+        assert!(ideal_gas_entropy_change(1.0, 20.8, 300.0, 0.0, 0.01, 0.02).is_err());
+    }
+
+    #[test]
+    fn test_ideal_gas_entropy_zero_volume() {
+        assert!(ideal_gas_entropy_change(1.0, 20.8, 300.0, 300.0, 0.0, 0.02).is_err());
+        assert!(ideal_gas_entropy_change(1.0, 20.8, 300.0, 300.0, 0.01, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_isothermal_entropy_compression() {
+        // Compression: V₂ < V₁ → negative entropy change
+        let ds = isothermal_entropy_change(1.0, 0.02, 0.01).unwrap();
+        assert!(ds < 0.0);
+    }
+
+    #[test]
+    fn test_is_spontaneous_boundary() {
+        // Reversible process: ΔS = 0 is still "spontaneous" (not forbidden)
+        assert!(is_spontaneous(0.0));
+    }
+
+    #[test]
+    fn test_entropy_of_mixing_three_components() {
+        let ds = entropy_of_mixing(1.0, &[0.2, 0.3, 0.5]).unwrap();
+        assert!(ds > 0.0);
     }
 }

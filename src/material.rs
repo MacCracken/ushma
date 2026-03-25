@@ -2,13 +2,15 @@
 //!
 //! Reference data for common materials at approximately 300 K.
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 
 /// Thermal properties of a material.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThermalMaterial {
     /// Material name.
-    pub name: &'static str,
+    pub name: Cow<'static, str>,
     /// Thermal conductivity k (W/(m⋅K)).
     pub conductivity: f64,
     /// Specific heat capacity c_p (J/(kg⋅K)).
@@ -40,7 +42,7 @@ impl ThermalMaterial {
 // --- Common materials at ~300 K ---
 
 pub const COPPER: ThermalMaterial = ThermalMaterial {
-    name: "Copper",
+    name: Cow::Borrowed("Copper"),
     conductivity: 401.0,
     specific_heat: 385.0,
     density: 8960.0,
@@ -49,7 +51,7 @@ pub const COPPER: ThermalMaterial = ThermalMaterial {
 };
 
 pub const ALUMINUM: ThermalMaterial = ThermalMaterial {
-    name: "Aluminum",
+    name: Cow::Borrowed("Aluminum"),
     conductivity: 237.0,
     specific_heat: 897.0,
     density: 2700.0,
@@ -58,7 +60,7 @@ pub const ALUMINUM: ThermalMaterial = ThermalMaterial {
 };
 
 pub const IRON: ThermalMaterial = ThermalMaterial {
-    name: "Iron",
+    name: Cow::Borrowed("Iron"),
     conductivity: 80.2,
     specific_heat: 449.0,
     density: 7874.0,
@@ -67,7 +69,7 @@ pub const IRON: ThermalMaterial = ThermalMaterial {
 };
 
 pub const STEEL: ThermalMaterial = ThermalMaterial {
-    name: "Steel (1% carbon)",
+    name: Cow::Borrowed("Steel (1% carbon)"),
     conductivity: 43.0,
     specific_heat: 490.0,
     density: 7850.0,
@@ -76,7 +78,7 @@ pub const STEEL: ThermalMaterial = ThermalMaterial {
 };
 
 pub const GLASS: ThermalMaterial = ThermalMaterial {
-    name: "Glass (soda-lime)",
+    name: Cow::Borrowed("Glass (soda-lime)"),
     conductivity: 1.0,
     specific_heat: 840.0,
     density: 2500.0,
@@ -85,7 +87,7 @@ pub const GLASS: ThermalMaterial = ThermalMaterial {
 };
 
 pub const WATER: ThermalMaterial = ThermalMaterial {
-    name: "Water",
+    name: Cow::Borrowed("Water"),
     conductivity: 0.606,
     specific_heat: 4186.0,
     density: 997.0,
@@ -94,7 +96,7 @@ pub const WATER: ThermalMaterial = ThermalMaterial {
 };
 
 pub const AIR: ThermalMaterial = ThermalMaterial {
-    name: "Air",
+    name: Cow::Borrowed("Air"),
     conductivity: 0.026,
     specific_heat: 1005.0,
     density: 1.225,
@@ -103,7 +105,7 @@ pub const AIR: ThermalMaterial = ThermalMaterial {
 };
 
 pub const WOOD_OAK: ThermalMaterial = ThermalMaterial {
-    name: "Wood (oak)",
+    name: Cow::Borrowed("Wood (oak)"),
     conductivity: 0.17,
     specific_heat: 2380.0,
     density: 600.0,
@@ -112,7 +114,7 @@ pub const WOOD_OAK: ThermalMaterial = ThermalMaterial {
 };
 
 pub const CONCRETE: ThermalMaterial = ThermalMaterial {
-    name: "Concrete",
+    name: Cow::Borrowed("Concrete"),
     conductivity: 1.7,
     specific_heat: 880.0,
     density: 2300.0,
@@ -121,7 +123,7 @@ pub const CONCRETE: ThermalMaterial = ThermalMaterial {
 };
 
 pub const DIAMOND: ThermalMaterial = ThermalMaterial {
-    name: "Diamond",
+    name: Cow::Borrowed("Diamond"),
     conductivity: 2200.0,
     specific_heat: 509.0,
     density: 3510.0,
@@ -131,8 +133,7 @@ pub const DIAMOND: ThermalMaterial = ThermalMaterial {
 
 /// All built-in materials for iteration.
 pub const ALL_MATERIALS: &[&ThermalMaterial] = &[
-    &COPPER, &ALUMINUM, &IRON, &STEEL, &GLASS,
-    &WATER, &AIR, &WOOD_OAK, &CONCRETE, &DIAMOND,
+    &COPPER, &ALUMINUM, &IRON, &STEEL, &GLASS, &WATER, &AIR, &WOOD_OAK, &CONCRETE, &DIAMOND,
 ];
 
 #[cfg(test)]
@@ -179,7 +180,8 @@ mod tests {
 
     #[test]
     fn test_air_low_conductivity() {
-        assert!(AIR.conductivity < 0.1);
+        let k = AIR.conductivity;
+        assert!(k < 0.1);
     }
 
     #[test]

@@ -105,8 +105,8 @@ fn entropy_increase_irreversible_heat_transfer() {
 #[test]
 fn material_thermal_diffusivity_matches_manual() {
     // Copper: α = k/(ρ⋅c_p) = 401/(8960*385)
-    let alpha_manual = material::COPPER.conductivity
-        / (material::COPPER.density * material::COPPER.specific_heat);
+    let alpha_manual =
+        material::COPPER.conductivity / (material::COPPER.density * material::COPPER.specific_heat);
     let alpha_method = material::COPPER.diffusivity();
     assert!((alpha_manual - alpha_method).abs() < 1e-15);
 
