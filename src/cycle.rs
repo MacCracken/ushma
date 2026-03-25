@@ -428,6 +428,9 @@ pub fn brayton_cycle(
     if p1 <= 0.0 {
         return Err(UshmaError::InvalidPressure { pascals: p1 });
     }
+    if t3 <= 0.0 {
+        return Err(UshmaError::InvalidTemperature { kelvin: t3 });
+    }
     if pressure_ratio <= 1.0 {
         return Err(UshmaError::InvalidPressureRatio {
             ratio: pressure_ratio,
@@ -748,7 +751,8 @@ pub fn refrigeration_cycle(p_evaporator: f64, p_condenser: f64) -> Result<Refrig
                 t_hi_b = t_mid;
             }
         } else {
-            t_hi_b = t_mid;
+            // Lookup failed — T is out of superheated range (too low), go higher
+            t_lo_b = t_mid;
         }
     }
     let t2 = 0.5 * (t_lo_b + t_hi_b);
@@ -1225,6 +1229,8 @@ mod tests {
     fn test_brayton_invalid_inputs() {
         assert!(brayton_cycle(300.0, 101_325.0, 1.0, 1400.0, 1.4, 1.0).is_err());
         assert!(brayton_cycle(300.0, 101_325.0, 0.5, 1400.0, 1.4, 1.0).is_err());
+        // Negative T3 should give temperature error, not confusing T3 vs T2 message
+        assert!(brayton_cycle(300.0, 101_325.0, 10.0, -100.0, 1.4, 1.0).is_err());
     }
 
     #[test]
