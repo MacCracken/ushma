@@ -51,6 +51,7 @@ pub fn heat_transfer_entropy(heat: f64, temperature: f64) -> Result<f64> {
 }
 
 /// Carnot efficiency: η = 1 - T_cold/T_hot.
+#[tracing::instrument(level = "debug")]
 pub fn carnot_efficiency(t_hot: f64, t_cold: f64) -> Result<f64> {
     if t_hot <= 0.0 {
         return Err(UshmaError::InvalidTemperature { kelvin: t_hot });
@@ -105,11 +106,12 @@ pub fn is_spontaneous(delta_s_total: f64) -> bool {
 }
 
 /// Entropy of mixing for ideal gases: ΔS_mix = -nR Σ xᵢ ln(xᵢ).
+#[tracing::instrument(level = "debug")]
 pub fn entropy_of_mixing(moles: f64, mole_fractions: &[f64]) -> Result<f64> {
     for &x in mole_fractions {
-        if x <= 0.0 || x > 1.0 {
+        if !(0.0..=1.0).contains(&x) {
             return Err(UshmaError::InvalidParameter {
-                reason: format!("mole fraction {x} must be in (0, 1]"),
+                reason: format!("mole fraction {x} must be in [0, 1]"),
             });
         }
     }
@@ -119,7 +121,12 @@ pub fn entropy_of_mixing(moles: f64, mole_fractions: &[f64]) -> Result<f64> {
             reason: format!("mole fractions must sum to 1.0, got {frac_sum}"),
         });
     }
-    let sum: f64 = mole_fractions.iter().map(|&x| x * x.ln()).sum();
+    // x=0 contributes nothing: lim x→0+ of x·ln(x) = 0
+    let sum: f64 = mole_fractions
+        .iter()
+        .filter(|&&x| x > 0.0)
+        .map(|&x| x * x.ln())
+        .sum();
     Ok(-moles * GAS_CONSTANT * sum)
 }
 
@@ -218,7 +225,10 @@ mod tests {
 
     #[test]
     fn test_entropy_of_mixing_zero_fraction() {
-        assert!(entropy_of_mixing(1.0, &[0.0, 1.0]).is_err());
+        // x=0 is valid (absent component contributes nothing)
+        let ds = entropy_of_mixing(1.0, &[0.0, 1.0]).unwrap();
+        // Pure substance: only x=1 contributes, ln(1)=0, so ΔS=0
+        assert!(ds.abs() < 1e-10);
     }
 
     #[test]

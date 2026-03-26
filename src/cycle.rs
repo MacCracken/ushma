@@ -145,6 +145,7 @@ pub fn adiabatic_temp_from_pressure(t1: f64, p1: f64, p2: f64, gamma: f64) -> Re
 /// - `heat_in`: heat added per mole in process 2→3 (J/mol)
 /// - `gamma`: heat capacity ratio Cp/Cv (must be > 1)
 /// - `moles`: amount of gas (mol)
+#[tracing::instrument(level = "debug")]
 pub fn otto_cycle(
     t1: f64,
     p1: f64,
@@ -277,6 +278,7 @@ pub fn otto_cycle(
 /// - `cutoff_ratio`: rc = V₃/V₂ (must be > 1 and < r)
 /// - `gamma`: heat capacity ratio Cp/Cv (must be > 1)
 /// - `moles`: amount of gas (mol)
+#[tracing::instrument(level = "debug")]
 pub fn diesel_cycle(
     t1: f64,
     p1: f64,
@@ -414,6 +416,7 @@ pub fn diesel_cycle(
 /// - `t3`: turbine inlet temperature (K), must be > T₂
 /// - `gamma`: heat capacity ratio Cp/Cv (must be > 1)
 /// - `moles`: amount of gas (mol)
+#[tracing::instrument(level = "debug")]
 pub fn brayton_cycle(
     t1: f64,
     p1: f64,
@@ -550,6 +553,7 @@ pub fn brayton_cycle(
 /// - `p_boiler`: boiler pressure (Pa)
 /// - `t_superheat`: superheated steam temperature (K), or `None` for saturated
 #[cfg(feature = "steam")]
+#[tracing::instrument(level = "debug")]
 pub fn rankine_cycle(
     p_condenser: f64,
     p_boiler: f64,
@@ -699,6 +703,7 @@ pub struct RefrigerationResult {
 /// - `p_evaporator`: evaporator pressure (Pa)
 /// - `p_condenser`: condenser pressure (Pa)
 #[cfg(feature = "steam")]
+#[tracing::instrument(level = "debug")]
 pub fn refrigeration_cycle(p_evaporator: f64, p_condenser: f64) -> Result<RefrigerationResult> {
     use crate::steam;
 

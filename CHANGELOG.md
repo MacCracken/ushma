@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-03-26
+
+### Changed
+- **state** — `van_der_waals_pressure()` now rejects T=0 K (`<= 0.0` instead of `< 0.0`) for consistency with real gas EOS functions
+- **state** — `ideal_gas_temperature()` now validates pressure and volume parameters
+- **entropy** — `entropy_of_mixing()` now accepts zero mole fractions (absent components contribute nothing: lim x→0+ of x·ln(x) = 0)
+
+### Fixed
+- **numerical** — removed `unwrap()` in `ThermalGrid1D::new()` boundary condition application; replaced with safe index access
+- **ai** — `DaimonClient::register_agent()` now returns proper error instead of silently defaulting when `agent_id` field is missing from API response
+- **phase** — `heat_for_phase_change()` now validates `specific_heat > 0` before computation
+
+### Removed
+- **deps** — removed unused `impetus` dependency (was declared but never imported)
+
+### Added
+- **tracing** — added `#[tracing::instrument]` to 23 core functions across transfer, state, entropy, phase, cycle, numerical, and chem modules for structured debug logging
+
 ## [1.0.0] - 2026-03-25
 
 ### Added

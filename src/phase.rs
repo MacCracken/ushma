@@ -67,6 +67,7 @@ impl SubstanceData {
     /// - Melting curve approximated as vertical at melting point
     ///
     /// On a phase boundary, returns the denser phase (liquid over gas, solid over liquid).
+    #[tracing::instrument(level = "debug", skip(self), fields(substance = %self.name))]
     pub fn phase_at(&self, temperature: f64, pressure: f64) -> Result<Phase> {
         if temperature <= 0.0 {
             return Err(UshmaError::InvalidTemperature {
@@ -273,6 +274,7 @@ pub fn heat_of_vaporization(substance: &SubstanceData, mass: f64) -> f64 {
 /// - `t_start`: starting temperature (K)
 /// - `t_end`: ending temperature (K)
 /// - `substance`: substance with melting/boiling points and latent heats
+#[tracing::instrument(level = "debug", skip(substance), fields(substance = %substance.name))]
 pub fn heat_for_phase_change(
     mass: f64,
     specific_heat: f64,
@@ -283,6 +285,11 @@ pub fn heat_for_phase_change(
     if mass <= 0.0 {
         return Err(UshmaError::InvalidParameter {
             reason: format!("mass {mass} kg must be positive"),
+        });
+    }
+    if specific_heat <= 0.0 {
+        return Err(UshmaError::InvalidSpecificHeat {
+            value: specific_heat,
         });
     }
     if t_start <= 0.0 {
@@ -513,6 +520,9 @@ mod tests {
         assert!(heat_for_phase_change(0.0, 4186.0, 280.0, 350.0, &WATER_PHASE).is_err());
         assert!(heat_for_phase_change(1.0, 4186.0, 0.0, 350.0, &WATER_PHASE).is_err());
         assert!(heat_for_phase_change(1.0, 4186.0, 280.0, 0.0, &WATER_PHASE).is_err());
+        // Negative or zero specific heat
+        assert!(heat_for_phase_change(1.0, 0.0, 280.0, 350.0, &WATER_PHASE).is_err());
+        assert!(heat_for_phase_change(1.0, -100.0, 280.0, 350.0, &WATER_PHASE).is_err());
     }
 
     // --- Clausius-Clapeyron tests ---

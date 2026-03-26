@@ -4,7 +4,7 @@
 //!
 //! Provides heat transfer simulation, entropy calculations, equations of state,
 //! and thermal material properties. Built on [hisab](https://crates.io/crates/hisab)
-//! for math foundations and [impetus](https://crates.io/crates/impetus) for body contacts.
+//! for math foundations.
 //!
 //! ## Feature flags
 //!

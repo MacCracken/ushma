@@ -135,13 +135,24 @@ Ushma does NOT own:
 - [x] hisab integration (Simpson, lerp, bisection, gaussian elimination)
 - [x] Performance: 57 benchmarked functions with CSV history
 
+## V1.1 — P(-1) Hardening (done)
+
+- [x] Remove unused `impetus` dependency
+- [x] Fix `unwrap()` in library code (numerical.rs, ai.rs)
+- [x] Standardize temperature validation (T=0 handling)
+- [x] Add input validation: `ideal_gas_temperature`, `heat_for_phase_change`
+- [x] Fix `entropy_of_mixing` to accept zero mole fractions
+- [x] Add `#[tracing::instrument]` to 23 core functions
+- [x] Baseline benchmarks (57 functions, 14 runs in history)
+
 ## Consumers
 
 | Consumer | What it uses |
 |----------|-------------|
 | **kiran** | Thermal simulation in game worlds (heat zones, fire, cooling) |
 | **joshua** | Simulation: heat engines, thermal experiments, climate models |
-| **impetus** | Body contact thermal transfer (friction heating) |
+| **badal** | Weather/atmospheric modeling (thermo feature) |
+| **dravya** | Material/substance modeling |
 
 ## Boundary with Other Crates
 

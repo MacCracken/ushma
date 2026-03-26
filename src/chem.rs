@@ -156,6 +156,7 @@ pub fn gibbs_from_enthalpy_entropy(delta_h: f64, delta_s: f64, temperature: f64)
 }
 
 /// Equilibrium constant from standard Gibbs energy: K = exp(-ΔG°/(RT)).
+#[tracing::instrument(level = "debug")]
 pub fn equilibrium_constant(delta_g: f64, temperature: f64) -> Result<f64> {
     if temperature <= 0.0 {
         return Err(UshmaError::InvalidTemperature {
@@ -190,6 +191,7 @@ pub fn vant_hoff_k(k_ref: f64, delta_h: f64, t_ref: f64, t_target: f64) -> Resul
 /// by products: -ΔH°rxn + Σ n_r·Cp·(T_in - 298.15) = Σ n_p·Cp·(T_flame - 298.15)
 ///
 /// Uses constant-Cp assumption (Cp at 298.15 K). Direct analytical solution.
+#[tracing::instrument(level = "debug", skip(reactants, products))]
 pub fn adiabatic_flame_temperature(
     reactants: &[(f64, &Species)],
     products: &[(f64, &Species)],

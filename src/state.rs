@@ -20,6 +20,7 @@ pub const STANDARD_TEMP: f64 = 273.15;
 /// Ideal gas law: PV = nRT.
 ///
 /// Returns pressure (Pa).
+#[tracing::instrument(level = "debug")]
 pub fn ideal_gas_pressure(moles: f64, temperature: f64, volume: f64) -> Result<f64> {
     if temperature < 0.0 {
         return Err(UshmaError::InvalidTemperature {
@@ -49,6 +50,14 @@ pub fn ideal_gas_volume(moles: f64, temperature: f64, pressure: f64) -> Result<f
 
 /// Ideal gas temperature: T = PV/(nR) (K).
 pub fn ideal_gas_temperature(pressure: f64, volume: f64, moles: f64) -> Result<f64> {
+    if pressure < 0.0 {
+        return Err(UshmaError::InvalidPressure { pascals: pressure });
+    }
+    if volume < 0.0 {
+        return Err(UshmaError::InvalidVolume {
+            cubic_meters: volume,
+        });
+    }
     if moles.abs() < 1e-30 {
         return Err(UshmaError::DivisionByZero {
             context: "moles cannot be zero".into(),
@@ -62,6 +71,7 @@ pub fn ideal_gas_temperature(pressure: f64, volume: f64, moles: f64) -> Result<f
 /// Returns pressure (Pa).
 /// - `a`: attraction parameter (Pa⋅m⁶/mol²)
 /// - `b`: volume exclusion parameter (m³/mol)
+#[tracing::instrument(level = "debug")]
 pub fn van_der_waals_pressure(
     moles: f64,
     temperature: f64,
@@ -69,7 +79,7 @@ pub fn van_der_waals_pressure(
     a: f64,
     b: f64,
 ) -> Result<f64> {
-    if temperature < 0.0 {
+    if temperature <= 0.0 {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
@@ -261,6 +271,7 @@ pub fn redlich_kwong_params(tc: f64, pc: f64) -> (f64, f64) {
 /// - `molar_volume`: Vm (m³/mol)
 /// - `tc`: critical temperature (K)
 /// - `pc`: critical pressure (Pa)
+#[tracing::instrument(level = "debug")]
 pub fn redlich_kwong_pressure(
     temperature: f64,
     molar_volume: f64,
@@ -304,6 +315,7 @@ pub fn peng_robinson_params(tc: f64, pc: f64, omega: f64) -> (f64, f64, f64) {
 ///
 /// P = RT/(Vm - b) - a·α(T) / (Vm² + 2bVm - b²)
 /// where α(T) = [1 + κ(1 - √(T/Tc))]²
+#[tracing::instrument(level = "debug")]
 pub fn peng_robinson_pressure(
     temperature: f64,
     molar_volume: f64,
@@ -571,6 +583,8 @@ mod tests {
     #[test]
     fn test_van_der_waals_negative_temp() {
         assert!(van_der_waals_pressure(1.0, -10.0, 0.02241, 0.3658, 4.286e-5).is_err());
+        // T=0 also rejected (negative pressure is physically meaningless)
+        assert!(van_der_waals_pressure(1.0, 0.0, 0.02241, 0.3658, 4.286e-5).is_err());
     }
 
     #[test]

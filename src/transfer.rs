@@ -18,6 +18,7 @@ pub const BOLTZMANN_K: f64 = 1.380_649e-23;
 /// - `area`: cross-sectional area A (m²)
 /// - `t_hot`, `t_cold`: temperatures (K)
 /// - `thickness`: material thickness L (m)
+#[tracing::instrument(level = "debug")]
 pub fn conduction(
     conductivity: f64,
     area: f64,
@@ -58,6 +59,7 @@ pub fn convection(h: f64, area: f64, t_surface: f64, t_fluid: f64) -> f64 {
 /// - `emissivity`: surface emissivity ε (0-1)
 /// - `area`: surface area (m²)
 /// - `t_surface`, `t_surrounding`: temperatures (K)
+#[tracing::instrument(level = "debug")]
 pub fn radiation(emissivity: f64, area: f64, t_surface: f64, t_surrounding: f64) -> Result<f64> {
     if !(0.0..=1.0).contains(&emissivity) {
         return Err(UshmaError::InvalidParameter {
@@ -310,6 +312,7 @@ pub fn fin_parameter(h: f64, perimeter: f64, k: f64, cross_area: f64) -> Result<
 /// Heat transfer from a rectangular fin with insulated tip (W).
 ///
 /// Q = √(hPkA_c)·(T_base - T_fluid)·tanh(mL)
+#[tracing::instrument(level = "debug")]
 pub fn fin_rectangular_heat(
     h: f64,
     perimeter: f64,
@@ -366,6 +369,7 @@ pub fn fin_effectiveness(
 ///
 /// LMTD = (ΔT₁ - ΔT₂) / ln(ΔT₁/ΔT₂)
 /// where ΔT₁ = T_h_in - T_c_in, ΔT₂ = T_h_out - T_c_out.
+#[tracing::instrument(level = "debug")]
 pub fn lmtd_parallel(t_h_in: f64, t_h_out: f64, t_c_in: f64, t_c_out: f64) -> Result<f64> {
     let dt1 = t_h_in - t_c_in;
     let dt2 = t_h_out - t_c_out;
@@ -376,6 +380,7 @@ pub fn lmtd_parallel(t_h_in: f64, t_h_out: f64, t_c_in: f64, t_c_out: f64) -> Re
 ///
 /// LMTD = (ΔT₁ - ΔT₂) / ln(ΔT₁/ΔT₂)
 /// where ΔT₁ = T_h_in - T_c_out, ΔT₂ = T_h_out - T_c_in.
+#[tracing::instrument(level = "debug")]
 pub fn lmtd_counter(t_h_in: f64, t_h_out: f64, t_c_in: f64, t_c_out: f64) -> Result<f64> {
     let dt1 = t_h_in - t_c_out;
     let dt2 = t_h_out - t_c_in;
@@ -477,6 +482,7 @@ pub fn heat_exchanger_ntu(effectiveness: f64, c_min: f64, t_h_in: f64, t_c_in: f
 ///
 /// F₁₂ for two aligned parallel rectangles of width W and height H separated by distance D.
 /// Uses the Hottel crossed-string formula.
+#[tracing::instrument(level = "debug")]
 pub fn view_factor_parallel_plates(width: f64, height: f64, distance: f64) -> Result<f64> {
     if width <= 0.0 || height <= 0.0 || distance <= 0.0 {
         return Err(UshmaError::InvalidParameter {

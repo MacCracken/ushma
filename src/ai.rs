@@ -69,7 +69,12 @@ impl DaimonClient {
                 .map_err(|e| UshmaError::InvalidParameter {
                     reason: format!("invalid registration response: {e}"),
                 })?;
-        Ok(data["agent_id"].as_str().unwrap_or("unknown").to_string())
+        let agent_id = data["agent_id"]
+            .as_str()
+            .ok_or_else(|| UshmaError::InvalidParameter {
+                reason: "registration response missing agent_id field".into(),
+            })?;
+        Ok(agent_id.to_string())
     }
 }
 

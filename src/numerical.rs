@@ -76,7 +76,7 @@ impl ThermalGrid1D {
             nodes[0] = t;
         }
         if let BoundaryCondition::Fixed(t) = bc_right {
-            *nodes.last_mut().unwrap() = t;
+            nodes[num_nodes - 1] = t;
         }
 
         Ok(Self {
@@ -98,6 +98,7 @@ impl ThermalGrid1D {
     /// Advance one time step using explicit (forward Euler) finite difference.
     ///
     /// Stability requires Fo = α·dt/dx² ≤ 0.5.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub fn step_explicit(&mut self, dt: f64) -> Result<()> {
         let fo = self.fourier_number(dt);
         if fo > 0.5 {
@@ -126,6 +127,7 @@ impl ThermalGrid1D {
     /// Advance one time step using Crank-Nicolson (implicit, unconditionally stable).
     ///
     /// Solves the tridiagonal system via the Thomas algorithm — O(n).
+    #[tracing::instrument(level = "debug", skip(self))]
     pub fn step_crank_nicolson(&mut self, dt: f64) -> Result<()> {
         let fo = self.fourier_number(dt);
         let n = self.nodes.len();
@@ -332,6 +334,7 @@ impl ThermalGrid2D {
     ///
     /// Returns the number of iterations to converge.
     /// For square grids (dx = dy): T_ij = (T_{i-1,j} + T_{i+1,j} + T_{i,j-1} + T_{i,j+1}) / 4.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub fn solve_steady_state(&mut self, tolerance: f64, max_iterations: usize) -> Result<usize> {
         let rx = 1.0 / (self.dx * self.dx);
         let ry = 1.0 / (self.dy * self.dy);
@@ -470,6 +473,7 @@ impl ThermalNetwork {
     /// Solve for steady-state temperatures at all nodes.
     ///
     /// Builds a conductance matrix and solves via [`hisab::num::gaussian_elimination`].
+    #[tracing::instrument(level = "debug", skip(self))]
     pub fn solve(&self) -> Result<Vec<f64>> {
         let n = self.num_nodes;
 
