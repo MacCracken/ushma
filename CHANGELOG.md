@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0]
+
+### Added
+- **bridge** — cross-crate primitive-value bridges for bijli (Joule heating rate, EM absorption to heat source), kimiya (reaction heat rate, equilibrium temperature), dravya (thermal strain, thermal gradient to stress), badal (altitude to temperature, humidity to wet-bulb), pravash (velocity to convection coefficient, TKE to eddy diffusivity)
+- **integration/soorat** — feature-gated `soorat-compat` module with visualization data structures: `ThermalGridVisualization` (2D heatmap from `ThermalGrid2D`), `TemperatureProfile` (1D line from `ThermalGrid1D`), `CycleDiagramData` (T-s and P-v plots from `CycleResult`), `ThermalNetworkVisualization` (node-link graph), `HeatFluxField` (gradient vectors from `ThermalGrid2D`)
+
+### Updated
+- hisab 1.0.0 -> 1.3.0, zerocopy 0.8.47 -> 0.8.48, iri-string 0.7.11 -> 0.7.12
+
 ## [1.1.0] - 2026-03-26
 
 ### Changed

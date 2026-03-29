@@ -38,7 +38,11 @@
 //! - [`stat`] — Statistical thermodynamics, Boltzmann, partition functions
 //! - [`error`] — Error types
 
+/// Cross-crate bridges — primitive-value conversions from other AGNOS science crates.
+pub mod bridge;
 pub mod error;
+/// Integration APIs for downstream consumers (soorat rendering).
+pub mod integration;
 
 #[cfg(feature = "transfer")]
 pub mod transfer;

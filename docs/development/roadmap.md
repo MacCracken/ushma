@@ -145,6 +145,28 @@ Ushma does NOT own:
 - [x] Add `#[tracing::instrument]` to 23 core functions
 - [x] Baseline benchmarks (57 functions, 14 runs in history)
 
+## Cross-Crate Bridges
+
+- [ ] **`bridge.rs` module** — primitive-value conversions for cross-crate thermodynamics
+- [ ] **bijli bridge**: Joule heating power (W) → temperature rise rate (K/s); EM absorption → volumetric heat source
+- [ ] **kimiya bridge**: reaction enthalpy (J/mol) → heat release rate; equilibrium constant → temperature-dependent yield
+- [ ] **dravya bridge**: temperature (K) → thermal expansion strain; thermal gradient (K/m) → thermal stress (Pa)
+- [ ] **badal bridge**: altitude (m), lapse rate (K/m) → atmospheric temperature; humidity ratio → wet-bulb temperature
+- [ ] **pravash bridge**: fluid velocity → convective heat transfer coefficient; turbulent kinetic energy → eddy thermal diffusivity
+
+---
+
+## Soorat Integration (rendering visualization)
+
+- [ ] **`integration/soorat.rs` module** — feature-gated `soorat-compat`, visualization data structures for soorat to consume
+- [ ] **Thermal grid heatmap**: Expose `ThermalGridVisualization` from `ThermalGrid2D` (temperature values, dimensions, spacing, min/max bounds) for 2D heatmap rendering
+- [ ] **1D temperature profile**: Expose `TemperatureProfile` from `ThermalGrid1D` (node temperatures, spacing, boundary conditions) for line/ribbon rendering
+- [ ] **Cycle diagrams**: Expose `CycleDiagramData` wrapping `cycle_ts_diagram()` / `cycle_pv_diagram()` output (Vec<DiagramPoint>, CycleKind, state points) for T-s and P-v plot rendering
+- [ ] **Thermal network graph**: Expose `ThermalNetworkVisualization` from `ThermalNetwork` (node positions/temperatures, resistance edges) for node-link rendering
+- [ ] **Heat flux vectors**: Expose `HeatFluxField` — grid of flux vectors from `ThermalGrid2D` gradients for arrow/streamline rendering
+
+---
+
 ## Consumers
 
 | Consumer | What it uses |
