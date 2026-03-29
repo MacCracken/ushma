@@ -183,6 +183,92 @@ pub fn tke_to_eddy_thermal_diffusivity(tke: f64, length_scale_m: f64) -> f64 {
     c_mu_quarter * tke.sqrt() * length_scale_m / pr_t
 }
 
+// ── Sharira bridges (physiology/biomechanics) ──────────────────────────────
+
+/// Convert muscle mechanical work rate (W) to metabolic heat generation (W).
+///
+/// Muscles are ~25% efficient; ~75% of metabolic energy becomes heat.
+/// P_heat = P_mechanical / efficiency - P_mechanical
+/// = P_mechanical × (1/η - 1)
+#[must_use]
+#[inline]
+pub fn muscle_work_to_heat(mechanical_power_w: f64, efficiency: f64) -> f64 {
+    if efficiency <= 0.0 || efficiency >= 1.0 {
+        return mechanical_power_w.abs() * 3.0; // default ~25% efficiency
+    }
+    (mechanical_power_w.abs() / efficiency - mechanical_power_w.abs()).max(0.0)
+}
+
+/// Estimate basal metabolic rate (W) from body mass (kg).
+///
+/// Kleiber's law: BMR = 3.5 × m^0.75 (watts).
+/// Applies to mammals and birds across 7 orders of magnitude.
+#[must_use]
+#[inline]
+pub fn basal_metabolic_rate(mass_kg: f64) -> f64 {
+    if mass_kg <= 0.0 {
+        return 0.0;
+    }
+    3.5 * mass_kg.powf(0.75)
+}
+
+/// Estimate body surface area (m²) from mass (kg) and height (m).
+///
+/// Du Bois formula: BSA = 0.007184 × m^0.425 × h_cm^0.725
+/// (height is converted from metres to centimetres internally).
+#[must_use]
+pub fn body_surface_area(mass_kg: f64, height_m: f64) -> f64 {
+    if mass_kg <= 0.0 || height_m <= 0.0 {
+        return 0.0;
+    }
+    let height_cm = height_m * 100.0;
+    0.007184 * mass_kg.powf(0.425) * height_cm.powf(0.725)
+}
+
+/// Convert skin surface area (m²) and temperatures to radiative heat loss (W).
+///
+/// Uses Stefan-Boltzmann: Q = ε × σ × A × (T_skin⁴ - T_env⁴)
+/// Skin emissivity ≈ 0.98 for all skin types.
+#[must_use]
+pub fn skin_radiation_loss(
+    surface_area_m2: f64,
+    skin_temperature_k: f64,
+    environment_temperature_k: f64,
+) -> f64 {
+    const STEFAN_BOLTZMANN: f64 = 5.670_374_419e-8;
+    const SKIN_EMISSIVITY: f64 = 0.98;
+    if surface_area_m2 <= 0.0 || skin_temperature_k <= 0.0 || environment_temperature_k <= 0.0 {
+        return 0.0;
+    }
+    SKIN_EMISSIVITY
+        * STEFAN_BOLTZMANN
+        * surface_area_m2
+        * (skin_temperature_k.powi(4) - environment_temperature_k.powi(4))
+}
+
+/// Convert muscle activation level (0-1) and max force (N) to estimated
+/// heat generation rate (W) from muscle contraction.
+///
+/// Heat = force × shortening_velocity × (1 - efficiency).
+/// Simplified: at moderate activation, heat ≈ 0.15 × activation × max_force (W).
+#[must_use]
+#[inline]
+pub fn muscle_activation_heat(activation: f64, max_force_n: f64) -> f64 {
+    let a = activation.clamp(0.0, 1.0);
+    // Empirical: ~0.15 W per Newton of max force at full activation
+    0.15 * a * max_force_n.abs()
+}
+
+/// Estimate evaporative cooling rate (W) from sweat rate (kg/s).
+///
+/// Q_evap = ṁ × L_v, where L_v ≈ 2,430,000 J/kg (latent heat of sweat).
+#[must_use]
+#[inline]
+pub fn evaporative_cooling(sweat_rate_kg_per_s: f64) -> f64 {
+    const LATENT_HEAT_SWEAT: f64 = 2_430_000.0; // J/kg
+    sweat_rate_kg_per_s.max(0.0) * LATENT_HEAT_SWEAT
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,5 +392,72 @@ mod tests {
     #[test]
     fn eddy_diffusivity_zero_tke() {
         assert_eq!(tke_to_eddy_thermal_diffusivity(0.0, 0.1), 0.0);
+    }
+
+    // ── Sharira ────────────────────────────────────────────────────────
+
+    #[test]
+    fn muscle_heat_basic() {
+        // 100W mechanical at 25% efficiency → 300W heat
+        let heat = muscle_work_to_heat(100.0, 0.25);
+        assert!((heat - 300.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn muscle_heat_default_efficiency() {
+        let heat = muscle_work_to_heat(100.0, 0.0);
+        assert!((heat - 300.0).abs() < 0.1); // defaults to 25%
+    }
+
+    #[test]
+    fn bmr_human() {
+        // 70kg human: BMR ≈ 3.5 × 70^0.75 ≈ 84.7W
+        let bmr = basal_metabolic_rate(70.0);
+        assert!((bmr - 84.7).abs() < 1.0);
+    }
+
+    #[test]
+    fn bmr_zero_mass() {
+        assert_eq!(basal_metabolic_rate(0.0), 0.0);
+    }
+
+    #[test]
+    fn bsa_human() {
+        // 70kg, 1.75m → BSA ≈ 1.85 m² (Du Bois)
+        let bsa = body_surface_area(70.0, 1.75);
+        assert!((bsa - 1.85).abs() < 0.1);
+    }
+
+    #[test]
+    fn bsa_zero_inputs() {
+        assert_eq!(body_surface_area(0.0, 1.75), 0.0);
+        assert_eq!(body_surface_area(70.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn skin_radiation_positive() {
+        // 1.85 m², skin 310K, env 293K → should be positive (losing heat)
+        let q = skin_radiation_loss(1.85, 310.0, 293.0);
+        assert!(q > 0.0);
+        // Should be ~100-200W range for a human
+        assert!(q > 50.0 && q < 300.0, "radiation loss = {q}W");
+    }
+
+    #[test]
+    fn skin_radiation_zero_area() {
+        assert_eq!(skin_radiation_loss(0.0, 310.0, 293.0), 0.0);
+    }
+
+    #[test]
+    fn muscle_activation_heat_basic() {
+        let h = muscle_activation_heat(0.5, 1000.0);
+        assert!((h - 75.0).abs() < 0.1); // 0.15 × 0.5 × 1000
+    }
+
+    #[test]
+    fn evaporative_cooling_basic() {
+        // 0.5 L/hr = 0.5/3600 kg/s ≈ 0.000139 kg/s → ~337W
+        let q = evaporative_cooling(0.5 / 3600.0);
+        assert!((q - 337.5).abs() < 1.0);
     }
 }

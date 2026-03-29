@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0]
+
+### Added
+- **bridge** — sharira: muscle work to heat generation, basal metabolic rate (Kleiber's law), body surface area (Du Bois formula), skin radiation loss (Stefan-Boltzmann), muscle activation heat, evaporative cooling from sweat rate
+
 ## [1.2.0]
 
 ### Added
