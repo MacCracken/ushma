@@ -26,7 +26,7 @@ pub fn joule_heating_to_temperature_rate(
     specific_heat_j_per_kg_k: f64,
 ) -> f64 {
     let denom = mass_kg * specific_heat_j_per_kg_k;
-    if denom <= 0.0 {
+    if denom.is_nan() || denom <= 0.0 {
         return 0.0;
     }
     power_w / denom
@@ -59,12 +59,15 @@ pub fn reaction_heat_rate(enthalpy_j_per_mol: f64, molar_rate_mol_per_s: f64) ->
 /// Convert equilibrium constant K and standard Gibbs energy (J/mol)
 /// to the temperature at which the reaction achieves that K.
 ///
-/// From Van't Hoff: T = -ΔG° / (R × ln(K))
+/// Solves ΔG° = −R·T·ln K for T: T = −ΔG° / (R × ln K). Because ΔG° itself
+/// depends on temperature, the result is only self-consistent when ΔG° is the
+/// value at that temperature; with ΔH° and ΔS° available, T = ΔH°/(ΔS° − R·ln K)
+/// is the better estimate.
 /// Returns temperature in Kelvin, or 0 if inputs are invalid.
 #[must_use]
 #[inline]
 pub fn equilibrium_temperature(gibbs_energy_j_per_mol: f64, equilibrium_constant: f64) -> f64 {
-    const R: f64 = 8.314; // J/(mol·K)
+    const R: f64 = 8.314_462_618_153_24; // J/(mol·K), exact (N_A·k_B)
     if equilibrium_constant <= 0.0 {
         return 0.0;
     }
@@ -112,7 +115,8 @@ pub fn thermal_gradient_to_stress(
 /// Convert altitude (m) and lapse rate (K/m) to atmospheric temperature (K).
 ///
 /// T(h) = T_surface - Γ × h, where Γ is the lapse rate.
-/// Standard tropospheric lapse rate ≈ 0.0065 K/m.
+/// Standard tropospheric lapse rate ≈ 0.0065 K/m. Valid within the troposphere
+/// (≈ 0–11 km); the isothermal layer above the tropopause is not modeled.
 #[must_use]
 #[inline]
 pub fn altitude_to_temperature(
@@ -123,12 +127,16 @@ pub fn altitude_to_temperature(
     (surface_temperature_k - lapse_rate_k_per_m * altitude_m).max(0.0)
 }
 
-/// Convert humidity ratio (kg water / kg dry air) and dry-bulb
-/// temperature (K) to approximate wet-bulb temperature (K).
+/// Convert relative humidity and dry-bulb temperature (K) to approximate
+/// wet-bulb temperature (K).
 ///
-/// Stull (2011) empirical formula for wet-bulb from RH and T.
+/// Stull (2011) empirical formula for wet-bulb from RH and T at sea-level
+/// pressure. Fitted for RH 5–99 % and −20…50 °C (error within about ±1 °C);
+/// outside that range it is an extrapolation. The result never exceeds the
+/// dry-bulb temperature.
 /// `relative_humidity_fraction`: 0.0–1.0.
 #[must_use]
+#[inline]
 pub fn humidity_to_wet_bulb(dry_bulb_k: f64, relative_humidity_fraction: f64) -> f64 {
     let t_c = dry_bulb_k - 273.15;
     let rh = (relative_humidity_fraction * 100.0).clamp(0.0, 100.0);
@@ -137,17 +145,21 @@ pub fn humidity_to_wet_bulb(dry_bulb_k: f64, relative_humidity_fraction: f64) ->
         - (rh - 1.676_331).atan()
         + 0.003_918_38 * rh.powf(1.5) * (0.023_101 * rh).atan()
         - 4.686_035;
-    tw_c + 273.15
+    let tw = tw_c + 273.15;
+    // The fit can overshoot by a few hundredths of a kelvin near saturation.
+    if tw > dry_bulb_k { dry_bulb_k } else { tw }
 }
 
 // ── Pravash bridges (fluid dynamics) ───────────────────────────────────────
 
 /// Convert fluid velocity (m/s) to convective heat transfer coefficient
-/// (W/(m²·K)) using a simplified turbulent flat plate correlation.
+/// (W/(m²·K)) using the Dittus-Boelter correlation (heating, n = 0.4).
 ///
-/// h ≈ C × V^0.8 for turbulent forced convection over a plate.
+/// Nu = 0.023·Re^0.8·Pr^0.4, h = Nu·k/D. Valid for fully developed turbulent
+/// flow in a pipe or duct: Re ≳ 10⁴, 0.6 ≤ Pr ≤ 160. It is not a flat-plate or
+/// laminar correlation. Returns 0 for invalid (non-positive or NaN) properties.
 /// `fluid_conductivity_w_per_m_k`: thermal conductivity of the fluid.
-/// `characteristic_length_m`: plate length.
+/// `characteristic_length_m`: hydraulic diameter D.
 /// `fluid_viscosity_pa_s`: dynamic viscosity.
 #[must_use]
 pub fn velocity_to_convection_coefficient(
@@ -158,7 +170,14 @@ pub fn velocity_to_convection_coefficient(
     specific_heat_j_per_kg_k: f64,
     characteristic_length_m: f64,
 ) -> f64 {
-    if fluid_viscosity_pa_s <= 0.0 || characteristic_length_m <= 0.0 {
+    let positive = |x: f64| x.is_finite() && x > 0.0;
+    if !positive(fluid_viscosity_pa_s)
+        || !positive(characteristic_length_m)
+        || !positive(fluid_conductivity_w_per_m_k)
+        || !positive(fluid_density_kg_m3)
+        || !positive(specific_heat_j_per_kg_k)
+        || !velocity_ms.is_finite()
+    {
         return 0.0;
     }
     let re =
@@ -190,10 +209,14 @@ pub fn tke_to_eddy_thermal_diffusivity(tke: f64, length_scale_m: f64) -> f64 {
 /// Muscles are ~25% efficient; ~75% of metabolic energy becomes heat.
 /// P_heat = P_mechanical / efficiency - P_mechanical
 /// = P_mechanical × (1/η - 1)
+///
+/// `efficiency` must be in (0, 1]; η = 1 gives no heat. Invalid values
+/// (≤ 0, > 1 or NaN) fall back to the typical η = 25 % (heat = 3 × work).
 #[must_use]
 #[inline]
 pub fn muscle_work_to_heat(mechanical_power_w: f64, efficiency: f64) -> f64 {
-    if efficiency <= 0.0 || efficiency >= 1.0 {
+    let valid = efficiency > 0.0 && efficiency <= 1.0;
+    if !valid {
         return mechanical_power_w.abs() * 3.0; // default ~25% efficiency
     }
     (mechanical_power_w.abs() / efficiency - mechanical_power_w.abs()).max(0.0)
@@ -201,15 +224,17 @@ pub fn muscle_work_to_heat(mechanical_power_w: f64, efficiency: f64) -> f64 {
 
 /// Estimate basal metabolic rate (W) from body mass (kg).
 ///
-/// Kleiber's law: BMR = 3.5 × m^0.75 (watts).
+/// Kleiber's law: BMR = 70 kcal/day × m^0.75 ≈ 3.39 × m^0.75 (watts).
 /// Applies to mammals and birds across 7 orders of magnitude.
 #[must_use]
 #[inline]
 pub fn basal_metabolic_rate(mass_kg: f64) -> f64 {
-    if mass_kg <= 0.0 {
+    /// Kleiber's 70 kcal/day per kg^0.75, in watts (70 × 4184 J / 86 400 s).
+    const KLEIBER_W: f64 = 70.0 * 4184.0 / 86_400.0;
+    if mass_kg.is_nan() || mass_kg <= 0.0 {
         return 0.0;
     }
-    3.5 * mass_kg.powf(0.75)
+    KLEIBER_W * mass_kg.powf(0.75)
 }
 
 /// Estimate body surface area (m²) from mass (kg) and height (m).
@@ -217,6 +242,7 @@ pub fn basal_metabolic_rate(mass_kg: f64) -> f64 {
 /// Du Bois formula: BSA = 0.007184 × m^0.425 × h_cm^0.725
 /// (height is converted from metres to centimetres internally).
 #[must_use]
+#[inline]
 pub fn body_surface_area(mass_kg: f64, height_m: f64) -> f64 {
     if mass_kg <= 0.0 || height_m <= 0.0 {
         return 0.0;
@@ -230,6 +256,7 @@ pub fn body_surface_area(mass_kg: f64, height_m: f64) -> f64 {
 /// Uses Stefan-Boltzmann: Q = ε × σ × A × (T_skin⁴ - T_env⁴)
 /// Skin emissivity ≈ 0.98 for all skin types.
 #[must_use]
+#[inline]
 pub fn skin_radiation_loss(
     surface_area_m2: f64,
     skin_temperature_k: f64,
@@ -411,9 +438,9 @@ mod tests {
 
     #[test]
     fn bmr_human() {
-        // 70kg human: BMR ≈ 3.5 × 70^0.75 ≈ 84.7W
+        // 70 kg human: Kleiber 70 kcal/day × 70^0.75 ≈ 1694 kcal/day ≈ 82.0 W
         let bmr = basal_metabolic_rate(70.0);
-        assert!((bmr - 84.7).abs() < 1.0);
+        assert!((bmr - 82.0).abs() < 0.2, "{bmr}");
     }
 
     #[test]
@@ -459,5 +486,47 @@ mod tests {
         // 0.5 L/hr = 0.5/3600 kg/s ≈ 0.000139 kg/s → ~337W
         let q = evaporative_cooling(0.5 / 3600.0);
         assert!((q - 337.5).abs() < 1.0);
+    }
+
+    // --- Regression tests from the 1.4.0 audit ---
+
+    #[test]
+    fn wet_bulb_never_exceeds_dry_bulb() {
+        // Stull's fit overshoots near saturation: (300 K, 100 %) gave 300.059 K.
+        for (t, rh) in [(300.0, 1.0), (310.0, 0.99), (273.15, 1.0)] {
+            assert!(humidity_to_wet_bulb(t, rh) <= t);
+        }
+    }
+
+    #[test]
+    fn convection_coefficient_invalid_properties() {
+        // k = 0 used to give Pr = ∞ and h = NaN.
+        assert_eq!(
+            velocity_to_convection_coefficient(1.0, 998.0, 1e-3, 0.0, 4180.0, 0.05),
+            0.0
+        );
+        assert_eq!(
+            velocity_to_convection_coefficient(f64::NAN, 998.0, 1e-3, 0.6, 4180.0, 0.05),
+            0.0
+        );
+        let h = velocity_to_convection_coefficient(1.0, 998.0, 1e-3, 0.6, 4180.0, 0.05);
+        assert!(h.is_finite() && h > 0.0);
+    }
+
+    #[test]
+    fn muscle_heat_edge_efficiencies() {
+        assert_eq!(muscle_work_to_heat(100.0, 1.0), 0.0);
+        assert!((muscle_work_to_heat(100.0, f64::NAN) - 300.0).abs() < 1e-9);
+        assert!((muscle_work_to_heat(100.0, 1.5) - 300.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn nan_inputs_fall_back_to_zero() {
+        assert_eq!(
+            joule_heating_to_temperature_rate(100.0, f64::NAN, 385.0),
+            0.0
+        );
+        assert_eq!(basal_metabolic_rate(f64::NAN), 0.0);
+        assert_eq!(equilibrium_temperature(-1e4, f64::NAN), 0.0);
     }
 }

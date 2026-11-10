@@ -4,8 +4,10 @@
 
 use crate::error::{Result, UshmaError};
 use crate::state::GAS_CONSTANT;
+use crate::validate::{finite_gt, invalid_param};
 
 /// Entropy change for ideal gas: ΔS = nCv⋅ln(T₂/T₁) + nR⋅ln(V₂/V₁).
+#[inline]
 pub fn ideal_gas_entropy_change(
     moles: f64,
     cv: f64,
@@ -14,35 +16,53 @@ pub fn ideal_gas_entropy_change(
     v1: f64,
     v2: f64,
 ) -> Result<f64> {
-    if t1 <= 0.0 {
+    if !finite_gt(moles, 0.0) {
+        return Err(invalid_param(format_args!(
+            "moles {moles} must be positive and finite"
+        )));
+    }
+    if !finite_gt(cv, 0.0) {
+        return Err(UshmaError::InvalidSpecificHeat { value: cv });
+    }
+    if !finite_gt(t1, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t1 });
     }
-    if t2 <= 0.0 {
+    if !finite_gt(t2, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t2 });
     }
-    if v1 <= 0.0 {
+    if !finite_gt(v1, 0.0) {
         return Err(UshmaError::InvalidVolume { cubic_meters: v1 });
     }
-    if v2 <= 0.0 {
+    if !finite_gt(v2, 0.0) {
         return Err(UshmaError::InvalidVolume { cubic_meters: v2 });
     }
     Ok(moles * (cv * (t2 / t1).ln() + GAS_CONSTANT * (v2 / v1).ln()))
 }
 
 /// Entropy change for isothermal process: ΔS = nR⋅ln(V₂/V₁).
+#[inline]
 pub fn isothermal_entropy_change(moles: f64, v1: f64, v2: f64) -> Result<f64> {
-    if v1 <= 0.0 {
+    if !finite_gt(moles, 0.0) {
+        return Err(invalid_param(format_args!(
+            "moles {moles} must be positive and finite"
+        )));
+    }
+    if !finite_gt(v1, 0.0) {
         return Err(UshmaError::InvalidVolume { cubic_meters: v1 });
     }
-    if v2 <= 0.0 {
+    if !finite_gt(v2, 0.0) {
         return Err(UshmaError::InvalidVolume { cubic_meters: v2 });
     }
     Ok(moles * GAS_CONSTANT * (v2 / v1).ln())
 }
 
 /// Entropy change for heat transfer: ΔS = Q/T.
+#[inline]
 pub fn heat_transfer_entropy(heat: f64, temperature: f64) -> Result<f64> {
-    if temperature <= 0.0 {
+    if !heat.is_finite() {
+        return Err(invalid_param(format_args!("heat {heat} J must be finite")));
+    }
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
@@ -53,33 +73,32 @@ pub fn heat_transfer_entropy(heat: f64, temperature: f64) -> Result<f64> {
 /// Carnot efficiency: η = 1 - T_cold/T_hot.
 #[tracing::instrument(level = "debug")]
 pub fn carnot_efficiency(t_hot: f64, t_cold: f64) -> Result<f64> {
-    if t_hot <= 0.0 {
+    if !finite_gt(t_hot, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t_hot });
     }
-    if t_cold <= 0.0 {
+    if !finite_gt(t_cold, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t_cold });
     }
     if t_cold >= t_hot {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("T_cold ({t_cold} K) must be less than T_hot ({t_hot} K)"),
-        });
+        return Err(invalid_param(format_args!(
+            "T_cold ({t_cold} K) must be less than T_hot ({t_hot} K)"
+        )));
     }
     Ok(1.0 - t_cold / t_hot)
 }
 
 /// Carnot COP for refrigeration: COP = T_cold/(T_hot - T_cold).
+#[inline]
 pub fn carnot_cop_refrigeration(t_hot: f64, t_cold: f64) -> Result<f64> {
-    if t_hot <= 0.0 {
+    if !finite_gt(t_hot, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t_hot });
     }
-    if t_cold <= 0.0 {
+    if !finite_gt(t_cold, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t_cold });
     }
     let dt = t_hot - t_cold;
-    if dt <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: "T_hot must exceed T_cold".into(),
-        });
+    if !finite_gt(dt, 0.0) {
+        return Err(invalid_param(format_args!("T_hot must exceed T_cold")));
     }
     Ok(t_cold / dt)
 }
@@ -108,18 +127,23 @@ pub fn is_spontaneous(delta_s_total: f64) -> bool {
 /// Entropy of mixing for ideal gases: ΔS_mix = -nR Σ xᵢ ln(xᵢ).
 #[tracing::instrument(level = "debug")]
 pub fn entropy_of_mixing(moles: f64, mole_fractions: &[f64]) -> Result<f64> {
+    if !finite_gt(moles, 0.0) {
+        return Err(invalid_param(format_args!(
+            "moles {moles} must be positive and finite"
+        )));
+    }
     for &x in mole_fractions {
         if !(0.0..=1.0).contains(&x) {
-            return Err(UshmaError::InvalidParameter {
-                reason: format!("mole fraction {x} must be in [0, 1]"),
-            });
+            return Err(invalid_param(format_args!(
+                "mole fraction {x} must be in [0, 1]"
+            )));
         }
     }
     let frac_sum: f64 = mole_fractions.iter().sum();
     if (frac_sum - 1.0).abs() > 1e-10 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("mole fractions must sum to 1.0, got {frac_sum}"),
-        });
+        return Err(invalid_param(format_args!(
+            "mole fractions must sum to 1.0, got {frac_sum}"
+        )));
     }
     // x=0 contributes nothing: lim x→0+ of x·ln(x) = 0
     let sum: f64 = mole_fractions
@@ -267,5 +291,26 @@ mod tests {
     fn test_entropy_of_mixing_three_components() {
         let ds = entropy_of_mixing(1.0, &[0.2, 0.3, 0.5]).unwrap();
         assert!(ds > 0.0);
+    }
+
+    // --- Regression tests from the 1.4.0 audit ---
+
+    #[test]
+    fn test_entropy_functions_validate_moles() {
+        assert!(entropy_of_mixing(-1.0, &[0.5, 0.5]).is_err());
+        assert!(entropy_of_mixing(f64::NAN, &[0.5, 0.5]).is_err());
+        assert!(isothermal_entropy_change(-1.0, 1.0, 2.0).is_err());
+        assert!(ideal_gas_entropy_change(-1.0, 20.8, 300.0, 400.0, 1.0, 2.0).is_err());
+        assert!(ideal_gas_entropy_change(1.0, -20.8, 300.0, 400.0, 1.0, 2.0).is_err());
+    }
+
+    #[test]
+    fn test_entropy_functions_reject_nan() {
+        assert!(carnot_efficiency(f64::NAN, 300.0).is_err());
+        assert!(carnot_efficiency(500.0, f64::NAN).is_err());
+        assert!(carnot_cop_refrigeration(f64::NAN, 250.0).is_err());
+        assert!(heat_transfer_entropy(f64::NAN, 300.0).is_err());
+        assert!(heat_transfer_entropy(100.0, f64::NAN).is_err());
+        assert!(entropy_of_mixing(1.0, &[f64::NAN, 1.0]).is_err());
     }
 }

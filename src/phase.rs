@@ -7,7 +7,8 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, UshmaError};
-use crate::state::GAS_CONSTANT;
+use crate::state::{ATM, GAS_CONSTANT};
+use crate::validate::{finite_ge, finite_gt, invalid_param};
 
 /// Thermodynamic phase of matter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -49,32 +50,115 @@ pub struct SubstanceData {
 }
 
 impl SubstanceData {
-    /// Estimate saturation pressure at a given temperature using Clausius-Clapeyron.
+    /// `true` when the triple-point pressure exceeds 1 atm (e.g. CO₂): at 1 atm
+    /// the solid sublimes at [`boiling_point`](Self::boiling_point) and no
+    /// liquid exists.
+    #[inline]
+    #[must_use]
+    pub fn sublimes_at_atmospheric(&self) -> bool {
+        self.triple_point_p > ATM
+    }
+
+    /// Vapor (liquid–gas) pressure at `temperature` (Pa), valid from the triple
+    /// point to the critical point.
     ///
-    /// Uses the normal boiling point (1 atm) as the reference point.
-    /// Returns P_sat in Pa. Valid between triple point and critical point.
-    fn saturation_pressure(&self, temperature: f64) -> Result<f64> {
-        let l_molar = self.latent_heat_vaporization * self.molar_mass;
-        clausius_clapeyron_pressure(crate::state::ATM, self.boiling_point, temperature, l_molar)
+    /// Piecewise integrated Clausius-Clapeyron (ln P linear in 1/T) through the
+    /// triple point, the normal boiling point (when it lies between them) and
+    /// the critical point, so the curve meets all three exactly. Typical
+    /// accuracy is a few percent (water: within 5 % of IAPWS-IF97; CO₂: within
+    /// 1 %). For water, prefer `steam::saturation_pressure` (exact IF97)
+    /// when the `steam` feature is enabled.
+    #[inline]
+    pub fn vapor_pressure(&self, temperature: f64) -> Result<f64> {
+        if !finite_ge(temperature, self.triple_point_t) || temperature > self.critical_t {
+            return Err(UshmaError::UndefinedPhaseTransition {
+                temperature,
+                pressure: f64::NAN,
+            });
+        }
+        let tp = (self.triple_point_t, self.triple_point_p);
+        let crit = (self.critical_t, self.critical_p);
+        let nbp = (self.boiling_point, ATM);
+        let p = if self.boiling_point > self.triple_point_t && self.boiling_point < self.critical_t
+        {
+            if temperature <= self.boiling_point {
+                log_interp_inv_t(temperature, tp, nbp)
+            } else {
+                log_interp_inv_t(temperature, nbp, crit)
+            }
+        } else {
+            log_interp_inv_t(temperature, tp, crit)
+        };
+        Ok(p)
+    }
+
+    /// Sublimation (solid–gas) pressure below the triple point (Pa).
+    ///
+    /// For substances that sublime at 1 atm the curve runs through the triple
+    /// point and (`boiling_point`, 1 atm). Otherwise it is integrated
+    /// Clausius-Clapeyron from the triple point with L_sub ≈ L_fus + L_vap.
+    pub fn sublimation_pressure(&self, temperature: f64) -> Result<f64> {
+        if !finite_gt(temperature, 0.0) || temperature > self.triple_point_t {
+            return Err(UshmaError::UndefinedPhaseTransition {
+                temperature,
+                pressure: f64::NAN,
+            });
+        }
+        let tp = (self.triple_point_t, self.triple_point_p);
+        if self.sublimes_at_atmospheric() && self.boiling_point < self.triple_point_t {
+            return Ok(log_interp_inv_t(temperature, tp, (self.boiling_point, ATM)));
+        }
+        let l_sub_molar =
+            (self.latent_heat_fusion + self.latent_heat_vaporization) * self.molar_mass;
+        clausius_clapeyron_pressure(
+            self.triple_point_p,
+            self.triple_point_t,
+            temperature,
+            l_sub_molar,
+        )
+    }
+
+    /// Specific latent heat of sublimation (J/kg).
+    ///
+    /// For substances that sublime at 1 atm this is the Clausius-Clapeyron slope
+    /// of the sublimation curve through the triple point and the 1 atm
+    /// sublimation point (CO₂: ≈ 594 kJ/kg vs ≈ 571 kJ/kg measured). Otherwise
+    /// L_fus + L_vap.
+    #[must_use]
+    pub fn latent_heat_sublimation(&self) -> f64 {
+        let (t1, p1) = (self.boiling_point, ATM);
+        let (t2, p2) = (self.triple_point_t, self.triple_point_p);
+        let d_inv_t = 1.0 / t1 - 1.0 / t2;
+        if self.sublimes_at_atmospheric()
+            && t1 < t2
+            && finite_gt(d_inv_t, 0.0)
+            && self.molar_mass > 0.0
+        {
+            GAS_CONSTANT * (p2 / p1).ln() / d_inv_t / self.molar_mass
+        } else {
+            self.latent_heat_fusion + self.latent_heat_vaporization
+        }
     }
 
     /// Determine the thermodynamic phase at a given temperature and pressure.
     ///
     /// Uses simplified phase boundaries:
     /// - Supercritical: T > T_c and P > P_c
-    /// - Below triple point temperature: Solid
-    /// - Between triple and critical: Clausius-Clapeyron vaporization curve
-    /// - Melting curve approximated as vertical at melting point
+    /// - Below the triple-point temperature: sublimation curve (solid above it, gas below)
+    /// - Between triple and critical point: [`vapor_pressure`](Self::vapor_pressure)
+    ///   curve (liquid above it — including compressed liquid at P > P_c — gas below)
+    /// - Melting curve approximated as vertical at the melting point
+    /// - T > T_c and P ≤ P_c: gas
     ///
-    /// On a phase boundary, returns the denser phase (liquid over gas, solid over liquid).
+    /// On a liquid–gas or solid–gas boundary, returns the condensed phase.
     #[tracing::instrument(level = "debug", skip(self), fields(substance = %self.name))]
     pub fn phase_at(&self, temperature: f64, pressure: f64) -> Result<Phase> {
-        if temperature <= 0.0 {
+        if !finite_gt(temperature, 0.0) {
             return Err(UshmaError::InvalidTemperature {
                 kelvin: temperature,
             });
         }
-        if pressure <= 0.0 {
+        if !finite_gt(pressure, 0.0) {
             return Err(UshmaError::InvalidPressure { pascals: pressure });
         }
 
@@ -83,22 +167,26 @@ impl SubstanceData {
             return Ok(Phase::SupercriticalFluid);
         }
 
-        // Below triple point temperature → solid
+        // Below the triple point: solid or vapor, split by the sublimation curve
         if temperature < self.triple_point_t {
-            return Ok(Phase::Solid);
+            let p_sub = self.sublimation_pressure(temperature)?;
+            return Ok(if pressure >= p_sub {
+                Phase::Solid
+            } else {
+                Phase::Gas
+            });
         }
 
         // Between triple point and critical point: check vaporization curve
         if temperature <= self.critical_t {
-            let p_sat = self.saturation_pressure(temperature)?;
-
-            // Check solid-liquid boundary (vertical approximation at melting point)
-            if temperature <= self.melting_point && pressure >= p_sat {
-                return Ok(Phase::Solid);
-            }
-
+            let p_sat = self.vapor_pressure(temperature)?;
             if pressure >= p_sat {
-                return Ok(Phase::Liquid);
+                // Solid-liquid boundary: vertical approximation at the melting point
+                return Ok(if temperature <= self.melting_point {
+                    Phase::Solid
+                } else {
+                    Phase::Liquid
+                });
             }
             return Ok(Phase::Gas);
         }
@@ -106,6 +194,17 @@ impl SubstanceData {
         // T > T_c but P <= P_c: gas-like behavior
         Ok(Phase::Gas)
     }
+}
+
+/// Integrated Clausius-Clapeyron between two points: ln P linear in 1/T.
+#[inline]
+fn log_interp_inv_t(t: f64, (t1, p1): (f64, f64), (t2, p2): (f64, f64)) -> f64 {
+    let span = 1.0 / t2 - 1.0 / t1;
+    if span.abs() < f64::EPSILON {
+        return p1;
+    }
+    let frac = (1.0 / t - 1.0 / t1) / span;
+    p1 * (frac * (p2 / p1).ln()).exp()
 }
 
 // --- Substance data (NIST Chemistry WebBook) ---
@@ -267,7 +366,9 @@ pub fn heat_of_vaporization(substance: &SubstanceData, mass: f64) -> f64 {
 /// including sensible heating and latent heat at phase boundaries.
 ///
 /// This is the "ice to steam" calculation: sum of sensible heat segments
-/// plus latent heats at each phase boundary crossed.
+/// plus latent heats at each phase boundary crossed. Substances that sublime
+/// at 1 atm (see [`SubstanceData::sublimes_at_atmospheric`]) get a single
+/// sublimation event at `boiling_point` instead of fusion + vaporization.
 ///
 /// - `mass`: mass in kg
 /// - `specific_heat`: average c_p across all phases (J/(kg·K)) — simplified assumption
@@ -282,20 +383,20 @@ pub fn heat_for_phase_change(
     t_end: f64,
     substance: &SubstanceData,
 ) -> Result<f64> {
-    if mass <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("mass {mass} kg must be positive"),
-        });
+    if !finite_gt(mass, 0.0) {
+        return Err(invalid_param(format_args!(
+            "mass {mass} kg must be positive"
+        )));
     }
-    if specific_heat <= 0.0 {
+    if !finite_gt(specific_heat, 0.0) {
         return Err(UshmaError::InvalidSpecificHeat {
             value: specific_heat,
         });
     }
-    if t_start <= 0.0 {
+    if !finite_gt(t_start, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t_start });
     }
-    if t_end <= 0.0 {
+    if !finite_gt(t_end, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t_end });
     }
 
@@ -310,14 +411,22 @@ pub fn heat_for_phase_change(
     // Sensible heat for entire range
     q += mass * specific_heat * (t_hi - t_lo);
 
-    // Latent heat of fusion if crossing melting point
-    if t_lo < substance.melting_point && t_hi >= substance.melting_point {
-        q += mass * substance.latent_heat_fusion;
-    }
+    if substance.sublimes_at_atmospheric() {
+        // No liquid at 1 atm (e.g. CO₂): one solid → gas transition at the
+        // sublimation point.
+        if t_lo < substance.boiling_point && t_hi >= substance.boiling_point {
+            q += mass * substance.latent_heat_sublimation();
+        }
+    } else {
+        // Latent heat of fusion if crossing melting point
+        if t_lo < substance.melting_point && t_hi >= substance.melting_point {
+            q += mass * substance.latent_heat_fusion;
+        }
 
-    // Latent heat of vaporization if crossing boiling point
-    if t_lo < substance.boiling_point && t_hi >= substance.boiling_point {
-        q += mass * substance.latent_heat_vaporization;
+        // Latent heat of vaporization if crossing boiling point
+        if t_lo < substance.boiling_point && t_hi >= substance.boiling_point {
+            q += mass * substance.latent_heat_vaporization;
+        }
     }
 
     Ok(sign * q)
@@ -330,21 +439,22 @@ pub fn heat_for_phase_change(
 /// - `latent_heat`: specific latent heat L (J/kg)
 /// - `temperature`: phase transition temperature T (K)
 /// - `delta_v`: specific volume change Δv = v_gas - v_liquid (m³/kg)
+#[inline]
 pub fn clausius_clapeyron_slope(latent_heat: f64, temperature: f64, delta_v: f64) -> Result<f64> {
-    if temperature <= 0.0 {
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
     }
-    if delta_v.abs() < 1e-30 {
+    if !finite_ge(delta_v.abs(), 1e-30) {
         return Err(UshmaError::DivisionByZero {
             context: "Δv cannot be zero for Clausius-Clapeyron".into(),
         });
     }
-    if latent_heat <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("latent heat {latent_heat} J/kg must be positive"),
-        });
+    if !finite_gt(latent_heat, 0.0) {
+        return Err(invalid_param(format_args!(
+            "latent heat {latent_heat} J/kg must be positive"
+        )));
     }
     Ok(latent_heat / (temperature * delta_v))
 }
@@ -359,28 +469,35 @@ pub fn clausius_clapeyron_slope(latent_heat: f64, temperature: f64, delta_v: f64
 /// - `t_ref`: reference temperature T₁ (K)
 /// - `t_target`: target temperature T₂ (K)
 /// - `latent_heat_molar`: molar latent heat L (J/mol)
+#[inline]
 pub fn clausius_clapeyron_pressure(
     p_ref: f64,
     t_ref: f64,
     t_target: f64,
     latent_heat_molar: f64,
 ) -> Result<f64> {
-    if p_ref <= 0.0 {
+    if !finite_gt(p_ref, 0.0) {
         return Err(UshmaError::InvalidPressure { pascals: p_ref });
     }
-    if t_ref <= 0.0 {
+    if !finite_gt(t_ref, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t_ref });
     }
-    if t_target <= 0.0 {
+    if !finite_gt(t_target, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t_target });
     }
-    if latent_heat_molar <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("molar latent heat {latent_heat_molar} J/mol must be positive"),
-        });
+    if !finite_gt(latent_heat_molar, 0.0) {
+        return Err(invalid_param(format_args!(
+            "molar latent heat {latent_heat_molar} J/mol must be positive"
+        )));
     }
     let exponent = -(latent_heat_molar / GAS_CONSTANT) * (1.0 / t_target - 1.0 / t_ref);
-    Ok(p_ref * exponent.exp())
+    let p = p_ref * exponent.exp();
+    if !p.is_finite() {
+        return Err(invalid_param(format_args!(
+            "Clausius-Clapeyron pressure overflows (exponent {exponent})"
+        )));
+    }
+    Ok(p)
 }
 
 #[cfg(test)]
@@ -673,5 +790,104 @@ mod tests {
             );
             assert!(substance.molar_mass > 0.0, "{} molar_mass", substance.name);
         }
+    }
+
+    // --- Regression tests from the 1.4.0 audit ---
+
+    #[test]
+    fn test_vapor_pressure_meets_anchor_points() {
+        let w = &WATER_PHASE;
+        assert!((w.vapor_pressure(373.15).unwrap() / crate::state::ATM - 1.0).abs() < 1e-12);
+        assert!((w.vapor_pressure(w.critical_t).unwrap() / w.critical_p - 1.0).abs() < 1e-12);
+        assert!(
+            (w.vapor_pressure(w.triple_point_t).unwrap() / w.triple_point_p - 1.0).abs() < 1e-12
+        );
+        assert!(w.vapor_pressure(200.0).is_err());
+        assert!(w.vapor_pressure(700.0).is_err());
+        assert!(w.vapor_pressure(f64::NAN).is_err());
+    }
+
+    #[test]
+    fn test_water_vapor_pressure_never_exceeds_critical() {
+        // The single-reference curve used to give 26 MPa at T_c (> P_c = 22.064 MPa).
+        let w = &WATER_PHASE;
+        let p = w.vapor_pressure(640.0).unwrap();
+        assert!((p / 20.266e6 - 1.0).abs() < 0.02, "{p}"); // IF97: 20.27 MPa
+    }
+
+    #[test]
+    fn test_co2_vapor_pressure() {
+        // NIST: 1.785 MPa at 250 K, 6.713 MPa at 300 K.
+        let c = &CARBON_DIOXIDE;
+        assert!((c.vapor_pressure(250.0).unwrap() / 1.785e6 - 1.0).abs() < 0.02);
+        assert!((c.vapor_pressure(300.0).unwrap() / 6.713e6 - 1.0).abs() < 0.02);
+    }
+
+    #[test]
+    fn test_compressed_liquid_above_critical_pressure() {
+        // T < T_c, P > P_c → compressed liquid (was Gas).
+        assert_eq!(WATER_PHASE.phase_at(640.0, 23e6).unwrap(), Phase::Liquid);
+    }
+
+    #[test]
+    fn test_co2_phase_regions() {
+        let c = &CARBON_DIOXIDE;
+        assert_eq!(c.phase_at(300.0, 3e6).unwrap(), Phase::Gas); // was Liquid
+        assert_eq!(c.phase_at(250.0, 1e6).unwrap(), Phase::Gas); // was Liquid
+        assert_eq!(c.phase_at(250.0, 2.5e6).unwrap(), Phase::Liquid);
+        // Dry ice sublimes at 194.65 K at 1 atm: 200 K is vapor (was Solid).
+        assert_eq!(c.phase_at(200.0, 101_325.0).unwrap(), Phase::Gas);
+        assert_eq!(c.phase_at(180.0, 101_325.0).unwrap(), Phase::Solid);
+        assert_eq!(c.phase_at(320.0, 8e6).unwrap(), Phase::SupercriticalFluid);
+    }
+
+    #[test]
+    fn test_co2_sublimation_curve() {
+        let c = &CARBON_DIOXIDE;
+        assert!((c.sublimation_pressure(194.65).unwrap() / crate::state::ATM - 1.0).abs() < 1e-12);
+        // Measured: ≈ 160.6 kPa at 200 K.
+        assert!((c.sublimation_pressure(200.0).unwrap() / 160.6e3 - 1.0).abs() < 0.05);
+        assert!(c.sublimation_pressure(250.0).is_err());
+    }
+
+    #[test]
+    fn test_water_below_triple_point_low_pressure_is_vapor() {
+        // Ice sublimation pressure at 250 K is ≈ 76 Pa.
+        assert_eq!(WATER_PHASE.phase_at(250.0, 10.0).unwrap(), Phase::Gas);
+        assert_eq!(
+            WATER_PHASE.phase_at(250.0, 101_325.0).unwrap(),
+            Phase::Solid
+        );
+        let p_sub = WATER_PHASE.sublimation_pressure(250.0).unwrap();
+        assert!(p_sub > 60.0 && p_sub < 100.0, "{p_sub}");
+    }
+
+    #[test]
+    fn test_co2_heat_for_phase_change_uses_sublimation() {
+        let c = &CARBON_DIOXIDE;
+        assert!(c.sublimes_at_atmospheric());
+        assert!(!WATER_PHASE.sublimes_at_atmospheric());
+        // 200 → 220 K at 1 atm is all vapor: sensible heat only (fusion was added).
+        let q = heat_for_phase_change(1.0, 800.0, 200.0, 220.0, c).unwrap();
+        assert!((q - 800.0 * 20.0).abs() < 1e-9);
+        // 190 → 300 K crosses the sublimation point once.
+        let q = heat_for_phase_change(1.0, 800.0, 190.0, 300.0, c).unwrap();
+        let l_sub = c.latent_heat_sublimation();
+        assert!((l_sub - 571_000.0).abs() < 40_000.0, "{l_sub}");
+        assert!((q - (800.0 * 110.0 + l_sub)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_clausius_clapeyron_pressure_overflow_is_error() {
+        assert!(clausius_clapeyron_pressure(1e5, 1e-10, 300.0, 4e4).is_err());
+    }
+
+    #[test]
+    fn test_phase_functions_reject_nan() {
+        assert!(WATER_PHASE.phase_at(f64::NAN, 1e5).is_err());
+        assert!(WATER_PHASE.phase_at(300.0, f64::NAN).is_err());
+        assert!(clausius_clapeyron_pressure(f64::NAN, 373.15, 380.0, 4e4).is_err());
+        assert!(clausius_clapeyron_slope(f64::NAN, 373.15, 1.67).is_err());
+        assert!(heat_for_phase_change(1.0, 4186.0, f64::NAN, 350.0, &WATER_PHASE).is_err());
     }
 }

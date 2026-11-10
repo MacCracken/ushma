@@ -4,9 +4,9 @@
 
 Heat transfer, entropy, equations of state, phase transitions, thermodynamic cycles, numerical solvers, chemical and statistical thermodynamics.
 
-Built on [hisab](https://crates.io/crates/hisab) for math foundations and [impetus](https://crates.io/crates/impetus) for body contacts.
+Built on [hisab](https://crates.io/crates/hisab) for math foundations.
 
-**MSRV:** 1.89 · **Edition:** 2024 · **License:** GPL-3.0-only
+**MSRV:** 1.99 · **Edition:** 2024 · **License:** GPL-3.0-only
 
 ## Installation
 
@@ -29,6 +29,7 @@ ushma = "1"
 | `chem` | yes | Hess's law, Gibbs energy of reaction, equilibrium constants, Van't Hoff, adiabatic flame temperature |
 | `stat` | yes | Boltzmann distribution, partition functions, Maxwell-Boltzmann speeds, Einstein/Debye solid Cv |
 | `steam` | no | Saturated + superheated steam tables (IAPWS-IF97), quality calculations |
+| `soorat-compat` | no | Visualization data structures for soorat (heatmaps, profiles, cycle diagrams, flux fields) |
 | `ai` | no | Daimon/hoosh agent integration (network dependencies) |
 | `logging` | no | Structured logging via `USHMA_LOG` env var |
 | `full` | — | Enables all features |
@@ -37,8 +38,7 @@ ushma = "1"
 
 ```
 ushma (this crate)
-  ├── hisab (math: vectors, geometry, calculus)
-  └── impetus (physics: rigid body dynamics, collision)
+  └── hisab (math: interpolation, root finding, integration, linear solvers)
 
 Consumers:
   kiran       ──→ ushma (thermal simulation in game worlds)
@@ -114,6 +114,7 @@ cargo bench --all-features
 
 ## Documentation
 
+- [Architecture overview](docs/architecture/overview.md)
 - [Roadmap](docs/development/roadmap.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security Policy](SECURITY.md)

@@ -6,6 +6,7 @@
 use crate::error::{Result, UshmaError};
 use crate::state::GAS_CONSTANT;
 use crate::transfer::BOLTZMANN_K;
+use crate::validate::{finite_ge, finite_gt, invalid_param};
 
 /// Planck constant h (J·s).
 pub const PLANCK: f64 = 6.626_070_15e-34;
@@ -18,8 +19,9 @@ pub const AVOGADRO: f64 = 6.022_140_76e23;
 /// Boltzmann factor: exp(-E/(kT)).
 ///
 /// Proportional to the probability of a state with energy E at temperature T.
+#[inline]
 pub fn boltzmann_probability(energy: f64, temperature: f64) -> Result<f64> {
-    if temperature <= 0.0 {
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
@@ -28,8 +30,9 @@ pub fn boltzmann_probability(energy: f64, temperature: f64) -> Result<f64> {
 }
 
 /// Population ratio of two energy levels: N₂/N₁ = exp(-(E₂-E₁)/(kT)).
+#[inline]
 pub fn boltzmann_ratio(e1: f64, e2: f64, temperature: f64) -> Result<f64> {
-    if temperature <= 0.0 {
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
@@ -38,11 +41,12 @@ pub fn boltzmann_ratio(e1: f64, e2: f64, temperature: f64) -> Result<f64> {
 }
 
 /// Entropy from microstates: S = k·ln(W) (J/K).
+#[inline]
 pub fn entropy_from_microstates(num_microstates: f64) -> Result<f64> {
-    if num_microstates <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("microstates {num_microstates} must be positive"),
-        });
+    if !finite_gt(num_microstates, 0.0) {
+        return Err(invalid_param(format_args!(
+            "microstates {num_microstates} must be positive"
+        )));
     }
     Ok(BOLTZMANN_K * num_microstates.ln())
 }
@@ -70,18 +74,19 @@ pub fn equipartition_cv(degrees_of_freedom: f64) -> f64 {
 /// - `mass`: molecular mass (kg)
 /// - `volume`: container volume (m³)
 /// - `temperature`: T (K)
+#[inline]
 pub fn partition_translational(mass: f64, volume: f64, temperature: f64) -> Result<f64> {
-    if mass <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("mass {mass} kg must be positive"),
-        });
+    if !finite_gt(mass, 0.0) {
+        return Err(invalid_param(format_args!(
+            "mass {mass} kg must be positive"
+        )));
     }
-    if volume <= 0.0 {
+    if !finite_gt(volume, 0.0) {
         return Err(UshmaError::InvalidVolume {
             cubic_meters: volume,
         });
     }
-    if temperature <= 0.0 {
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
@@ -98,25 +103,24 @@ pub fn partition_translational(mass: f64, volume: f64, temperature: f64) -> Resu
 /// - `moment_of_inertia`: I (kg·m²)
 /// - `temperature`: T (K)
 /// - `symmetry_number`: σ (1 for heteronuclear, 2 for homonuclear)
+#[inline]
 pub fn partition_rotational(
     moment_of_inertia: f64,
     temperature: f64,
     symmetry_number: u32,
 ) -> Result<f64> {
-    if moment_of_inertia <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("moment of inertia {moment_of_inertia} must be positive"),
-        });
+    if !finite_gt(moment_of_inertia, 0.0) {
+        return Err(invalid_param(format_args!(
+            "moment of inertia {moment_of_inertia} must be positive"
+        )));
     }
-    if temperature <= 0.0 {
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
     }
     if symmetry_number == 0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: "symmetry number must be >= 1".into(),
-        });
+        return Err(invalid_param(format_args!("symmetry number must be >= 1")));
     }
     let theta_rot = PLANCK * PLANCK
         / (8.0 * std::f64::consts::PI * std::f64::consts::PI * moment_of_inertia * BOLTZMANN_K);
@@ -125,22 +129,28 @@ pub fn partition_rotational(
 
 /// Vibrational partition function: q_vib = 1/(1 - exp(-hν/(kT))).
 ///
+/// Energies are measured from the vibrational ground state (zero-point energy
+/// excluded). Computed with `exp_m1`, so it stays accurate when hν ≪ kT
+/// (q_vib → kT/(hν)).
+///
 /// - `frequency`: vibrational frequency ν (Hz)
 /// - `temperature`: T (K)
+#[inline]
 pub fn partition_vibrational(frequency: f64, temperature: f64) -> Result<f64> {
-    if frequency <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("frequency {frequency} Hz must be positive"),
-        });
+    if !finite_gt(frequency, 0.0) {
+        return Err(invalid_param(format_args!(
+            "frequency {frequency} Hz must be positive"
+        )));
     }
-    if temperature <= 0.0 {
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
     }
     let x = PLANCK * frequency / (BOLTZMANN_K * temperature);
-    let denom = 1.0 - (-x).exp();
-    if denom.abs() < 1e-30 {
+    // 1 − e^(−x) without cancellation for small x.
+    let denom = -(-x).exp_m1();
+    if !finite_gt(denom, 0.0) {
         return Err(UshmaError::DivisionByZero {
             context: "vibrational partition function denominator is zero".into(),
         });
@@ -155,18 +165,19 @@ pub fn partition_vibrational(frequency: f64, temperature: f64) -> Result<f64> {
 /// - `speed`: v (m/s)
 /// - `mass`: molecular mass (kg)
 /// - `temperature`: T (K)
+#[inline]
 pub fn maxwell_boltzmann_speed_pdf(speed: f64, mass: f64, temperature: f64) -> Result<f64> {
-    if speed < 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("speed {speed} m/s must be non-negative"),
-        });
+    if !finite_ge(speed, 0.0) {
+        return Err(invalid_param(format_args!(
+            "speed {speed} m/s must be non-negative"
+        )));
     }
-    if mass <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("mass {mass} kg must be positive"),
-        });
+    if !finite_gt(mass, 0.0) {
+        return Err(invalid_param(format_args!(
+            "mass {mass} kg must be positive"
+        )));
     }
-    if temperature <= 0.0 {
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
@@ -178,30 +189,33 @@ pub fn maxwell_boltzmann_speed_pdf(speed: f64, mass: f64, temperature: f64) -> R
 }
 
 /// Most probable speed: v_p = √(2kT/m) (m/s).
+#[inline]
 pub fn most_probable_speed(mass: f64, temperature: f64) -> Result<f64> {
     validate_mass_temp(mass, temperature)?;
     Ok((2.0 * BOLTZMANN_K * temperature / mass).sqrt())
 }
 
 /// Mean speed: v_avg = √(8kT/(πm)) (m/s).
+#[inline]
 pub fn mean_speed(mass: f64, temperature: f64) -> Result<f64> {
     validate_mass_temp(mass, temperature)?;
     Ok((8.0 * BOLTZMANN_K * temperature / (std::f64::consts::PI * mass)).sqrt())
 }
 
 /// Root-mean-square speed: v_rms = √(3kT/m) (m/s).
+#[inline]
 pub fn rms_speed(mass: f64, temperature: f64) -> Result<f64> {
     validate_mass_temp(mass, temperature)?;
     Ok((3.0 * BOLTZMANN_K * temperature / mass).sqrt())
 }
 
 fn validate_mass_temp(mass: f64, temperature: f64) -> Result<()> {
-    if mass <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("mass {mass} kg must be positive"),
-        });
+    if !finite_gt(mass, 0.0) {
+        return Err(invalid_param(format_args!(
+            "mass {mass} kg must be positive"
+        )));
     }
-    if temperature <= 0.0 {
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
@@ -215,13 +229,14 @@ fn validate_mass_temp(mass: f64, temperature: f64) -> Result<()> {
 ///
 /// - `einstein_temp`: Θ_E (K) — Einstein characteristic temperature
 /// - `temperature`: T (K)
+#[inline]
 pub fn einstein_cv(einstein_temp: f64, temperature: f64) -> Result<f64> {
-    if einstein_temp <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("Einstein temperature {einstein_temp} K must be positive"),
-        });
+    if !finite_gt(einstein_temp, 0.0) {
+        return Err(invalid_param(format_args!(
+            "Einstein temperature {einstein_temp} K must be positive"
+        )));
     }
-    if temperature <= 0.0 {
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
@@ -239,18 +254,25 @@ pub fn einstein_cv(einstein_temp: f64, temperature: f64) -> Result<f64> {
     Ok(3.0 * GAS_CONSTANT * x * x * ex / denom)
 }
 
+/// Θ_D/T above which the Debye integral is replaced by its value at ∞
+/// (the tail beyond x = 50 is below 1e-15 of the total).
+const DEBYE_X_MAX: f64 = 50.0;
+
 /// Debye model for solid heat capacity (J/(mol·K)).
 ///
 /// Cv = 9R·(T/Θ_D)³·∫₀^(Θ_D/T) x⁴eˣ/(eˣ-1)² dx
 ///
-/// Uses [`hisab::calc::integral_simpson`] (200 intervals).
+/// The integrand is evaluated as x⁴e⁻ˣ/expm1(−x)², which cannot overflow, and
+/// integrated with [`hisab::calc::integral_simpson`] (200 intervals, relative
+/// error ≈ 1e-10). For Θ_D/T > 50 the exact low-temperature T³ law
+/// Cv = (12π⁴/5)·R·(T/Θ_D)³ is used.
 pub fn debye_cv(debye_temp: f64, temperature: f64) -> Result<f64> {
-    if debye_temp <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("Debye temperature {debye_temp} K must be positive"),
-        });
+    if !finite_gt(debye_temp, 0.0) {
+        return Err(invalid_param(format_args!(
+            "Debye temperature {debye_temp} K must be positive"
+        )));
     }
-    if temperature <= 0.0 {
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
@@ -262,23 +284,28 @@ pub fn debye_cv(debye_temp: f64, temperature: f64) -> Result<f64> {
         return Ok(3.0 * GAS_CONSTANT);
     }
 
-    // Numerical integration via hisab Simpson's rule
+    let ratio = temperature / debye_temp;
+    let ratio3 = ratio * ratio * ratio;
+
+    // Low-T limit: ∫₀^∞ x⁴eˣ/(eˣ−1)² dx = 4π⁴/15
+    if td_t > DEBYE_X_MAX {
+        let pi2 = std::f64::consts::PI * std::f64::consts::PI;
+        return Ok(9.0 * GAS_CONSTANT * ratio3 * 4.0 * pi2 * pi2 / 15.0);
+    }
+
     let integrand = |x: f64| -> f64 {
-        if x < 1e-30 {
-            return 0.0; // limit as x→0
+        if x < 1e-8 {
+            return x * x; // x⁴eˣ/(eˣ−1)² → x² as x → 0
         }
-        let ex = x.exp();
-        let denom = (ex - 1.0) * (ex - 1.0);
-        if denom < 1e-300 {
-            return 0.0;
-        }
-        x * x * x * x * ex / denom
+        // e^(−x) = 1 + expm1(−x): one transcendental per point.
+        let em1 = (-x).exp_m1();
+        x * x * x * x * (1.0 + em1) / (em1 * em1)
     };
 
-    let integral = hisab::calc::integral_simpson(integrand, 0.0, td_t, 200).unwrap_or(0.0);
+    let integral = hisab::calc::integral_simpson(integrand, 0.0, td_t, 200)
+        .map_err(|e| invalid_param(format_args!("Debye integral failed: {e}")))?;
 
-    let ratio = temperature / debye_temp;
-    Ok(9.0 * GAS_CONSTANT * ratio * ratio * ratio * integral)
+    Ok(9.0 * GAS_CONSTANT * ratio3 * integral)
 }
 
 #[cfg(test)]
@@ -505,5 +532,63 @@ mod tests {
     fn test_debye_invalid() {
         assert!(debye_cv(0.0, 300.0).is_err());
         assert!(debye_cv(300.0, 0.0).is_err());
+    }
+
+    // --- Regression tests from the 1.4.0 audit ---
+
+    #[test]
+    fn test_debye_cv_low_temperature_t3_law() {
+        // exp(Θ/T) used to overflow (inf/inf = NaN) for Θ/T > 709.
+        let pi2 = std::f64::consts::PI * std::f64::consts::PI;
+        for (theta, t) in [(2230.0, 3.0), (300.0, 0.42), (428.0, 1.0)] {
+            let cv = debye_cv(theta, t).unwrap();
+            let r: f64 = t / theta;
+            let t3 = 12.0 * pi2 * pi2 / 5.0 * GAS_CONSTANT * r.powi(3);
+            assert!(cv.is_finite());
+            assert!(
+                (cv / t3 - 1.0).abs() < 1e-12,
+                "Θ={theta}, T={t}: {cv} vs {t3}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_debye_cv_reference_values() {
+        // scipy.integrate.quad reference values of 9R(T/Θ)³∫₀^(Θ/T) …
+        for (xd, cv_ref) in [
+            (1.0, 23.739_423_794_400_19),
+            (5.0, 9.195_001_381_844_16),
+            (10.0, 1.891_232_686_118_677),
+            (30.0, 0.071_991_488_298_527),
+        ] {
+            let cv = debye_cv(xd * 100.0, 100.0).unwrap();
+            assert!((cv / cv_ref - 1.0).abs() < 1e-9, "Θ/T={xd}: {cv}");
+        }
+    }
+
+    #[test]
+    fn test_debye_cv_continuous_at_cutoff() {
+        let below = debye_cv(49.999_999, 1.0).unwrap();
+        let above = debye_cv(50.000_001, 1.0).unwrap();
+        assert!((below / above - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_partition_vibrational_small_x() {
+        // hν ≪ kT: q_vib → kT/(hν). The 1 − e^(−x) form lost all precision here.
+        let t = 1e6;
+        let nu = 1.0;
+        let x = PLANCK * nu / (BOLTZMANN_K * t);
+        let q = partition_vibrational(nu, t).unwrap();
+        assert!((q * x - 1.0).abs() < 1e-9, "{q}");
+    }
+
+    #[test]
+    fn test_stat_rejects_nan() {
+        assert!(boltzmann_probability(1e-21, f64::NAN).is_err());
+        assert!(debye_cv(f64::NAN, 300.0).is_err());
+        assert!(einstein_cv(300.0, f64::NAN).is_err());
+        assert!(partition_vibrational(f64::NAN, 300.0).is_err());
+        assert!(maxwell_boltzmann_speed_pdf(f64::NAN, 4.65e-26, 300.0).is_err());
     }
 }

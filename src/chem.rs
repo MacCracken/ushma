@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, UshmaError};
 use crate::state::GAS_CONSTANT;
+use crate::validate::{finite_ge, finite_gt, invalid_param};
 
 /// Standard reference temperature (K).
 pub const STANDARD_T: f64 = 298.15;
@@ -134,6 +135,7 @@ pub const ALL_SPECIES: &[&Species] = &[
 ///
 /// Each entry is (stoichiometric coefficient, species reference).
 #[must_use]
+#[inline]
 pub fn reaction_enthalpy(products: &[(f64, &Species)], reactants: &[(f64, &Species)]) -> f64 {
     let h_prod: f64 = products.iter().map(|(n, s)| n * s.delta_hf).sum();
     let h_react: f64 = reactants.iter().map(|(n, s)| n * s.delta_hf).sum();
@@ -142,6 +144,7 @@ pub fn reaction_enthalpy(products: &[(f64, &Species)], reactants: &[(f64, &Speci
 
 /// Standard Gibbs energy of reaction: ΔG°rxn = Σ n·ΔG°f(products) - Σ n·ΔG°f(reactants) (J/mol).
 #[must_use]
+#[inline]
 pub fn reaction_gibbs(products: &[(f64, &Species)], reactants: &[(f64, &Species)]) -> f64 {
     let g_prod: f64 = products.iter().map(|(n, s)| n * s.delta_gf).sum();
     let g_react: f64 = reactants.iter().map(|(n, s)| n * s.delta_gf).sum();
@@ -155,34 +158,65 @@ pub fn gibbs_from_enthalpy_entropy(delta_h: f64, delta_s: f64, temperature: f64)
     delta_h - temperature * delta_s
 }
 
-/// Equilibrium constant from standard Gibbs energy: K = exp(-ΔG°/(RT)).
-#[tracing::instrument(level = "debug")]
-pub fn equilibrium_constant(delta_g: f64, temperature: f64) -> Result<f64> {
-    if temperature <= 0.0 {
+/// Natural log of the equilibrium constant: ln K = −ΔG°/(RT).
+///
+/// Use this instead of [`equilibrium_constant`] when K is outside the `f64`
+/// range — e.g. combustion reactions, where ln K is several hundred.
+#[inline]
+pub fn ln_equilibrium_constant(delta_g: f64, temperature: f64) -> Result<f64> {
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
     }
-    Ok((-delta_g / (GAS_CONSTANT * temperature)).exp())
+    if !delta_g.is_finite() {
+        return Err(invalid_param(format_args!(
+            "ΔG° {delta_g} J/mol must be finite"
+        )));
+    }
+    Ok(-delta_g / (GAS_CONSTANT * temperature))
+}
+
+/// Equilibrium constant from standard Gibbs energy: K = exp(-ΔG°/(RT)).
+///
+/// Returns an error when K overflows to ∞ or underflows to 0 (|ln K| ≳ 709);
+/// use [`ln_equilibrium_constant`] for such reactions.
+#[tracing::instrument(level = "debug")]
+pub fn equilibrium_constant(delta_g: f64, temperature: f64) -> Result<f64> {
+    let ln_k = ln_equilibrium_constant(delta_g, temperature)?;
+    let k = ln_k.exp();
+    if !finite_gt(k, 0.0) {
+        return Err(invalid_param(format_args!(
+            "equilibrium constant exp({ln_k:.1}) is outside the f64 range; use ln_equilibrium_constant"
+        )));
+    }
+    Ok(k)
 }
 
 /// Van't Hoff equation: K at a new temperature from a reference K.
 ///
 /// ln(K₂/K₁) = -(ΔH°/R)·(1/T₂ - 1/T₁)
+#[inline]
 pub fn vant_hoff_k(k_ref: f64, delta_h: f64, t_ref: f64, t_target: f64) -> Result<f64> {
-    if k_ref <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("reference K={k_ref} must be positive"),
-        });
+    if !finite_gt(k_ref, 0.0) {
+        return Err(invalid_param(format_args!(
+            "reference K={k_ref} must be positive"
+        )));
     }
-    if t_ref <= 0.0 {
+    if !finite_gt(t_ref, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t_ref });
     }
-    if t_target <= 0.0 {
+    if !finite_gt(t_target, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t_target });
     }
     let exponent = -(delta_h / GAS_CONSTANT) * (1.0 / t_target - 1.0 / t_ref);
-    Ok(k_ref * exponent.exp())
+    let k = k_ref * exponent.exp();
+    if !finite_gt(k, 0.0) {
+        return Err(invalid_param(format_args!(
+            "Van't Hoff K is outside the f64 range (exponent {exponent:.1})"
+        )));
+    }
+    Ok(k)
 }
 
 /// Adiabatic flame temperature (K).
@@ -197,14 +231,24 @@ pub fn adiabatic_flame_temperature(
     products: &[(f64, &Species)],
     t_initial: f64,
 ) -> Result<f64> {
-    if t_initial <= 0.0 {
+    if !finite_gt(t_initial, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t_initial });
+    }
+    if let Some((n, s)) = reactants
+        .iter()
+        .chain(products)
+        .find(|(n, _)| !finite_ge(*n, 0.0))
+    {
+        return Err(invalid_param(format_args!(
+            "stoichiometric coefficient {n} for {} must be finite and ≥ 0",
+            s.name
+        )));
     }
 
     let delta_h = reaction_enthalpy(products, reactants);
     let cp_products: f64 = products.iter().map(|(n, s)| n * s.cp).sum();
 
-    if cp_products <= 0.0 {
+    if !finite_gt(cp_products, 0.0) {
         return Err(UshmaError::DivisionByZero {
             context: "product heat capacity sum must be positive".into(),
         });
@@ -220,10 +264,10 @@ pub fn adiabatic_flame_temperature(
     // T_flame = 298.15 + (-delta_h + q_reactants) / cp_products
     let t_flame = STANDARD_T + (-delta_h + q_reactants) / cp_products;
 
-    if t_flame <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("computed flame temperature {t_flame:.1} K is non-positive"),
-        });
+    if !finite_gt(t_flame, 0.0) {
+        return Err(invalid_param(format_args!(
+            "computed flame temperature {t_flame:.1} K is non-positive"
+        )));
     }
 
     Ok(t_flame)
@@ -400,5 +444,42 @@ mod tests {
     #[test]
     fn test_flame_temperature_invalid() {
         assert!(adiabatic_flame_temperature(&[(1.0, &CH4)], &[(1.0, &CO2)], 0.0,).is_err());
+    }
+
+    // --- Regression tests from the 1.4.0 audit ---
+
+    #[test]
+    fn test_equilibrium_constant_overflow_is_error() {
+        // Propane combustion: ΔG° ≈ −2074 kJ/mol → ln K ≈ 837 → K = ∞ in f64.
+        let dg = -2_073_900.0;
+        assert!(equilibrium_constant(dg, 298.15).is_err());
+        let ln_k = ln_equilibrium_constant(dg, 298.15).unwrap();
+        assert!((ln_k - 836.6).abs() < 0.5, "{ln_k}");
+        // Large positive ΔG° underflows to 0 → also an error.
+        assert!(equilibrium_constant(-dg, 298.15).is_err());
+        // Ordinary values still work and agree with the log form.
+        let k = equilibrium_constant(-10_000.0, 298.15).unwrap();
+        assert!((k.ln() - ln_equilibrium_constant(-10_000.0, 298.15).unwrap()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_chem_rejects_nan() {
+        assert!(equilibrium_constant(f64::NAN, 298.15).is_err());
+        assert!(equilibrium_constant(-1e4, f64::NAN).is_err());
+        assert!(vant_hoff_k(1.0, -5e4, f64::NAN, 400.0).is_err());
+        assert!(vant_hoff_k(1.0, f64::NAN, 298.15, 400.0).is_err());
+    }
+
+    #[test]
+    fn test_flame_temperature_rejects_bad_coefficients() {
+        let reactants = [(1.0, &CH4), (2.0, &O2)];
+        assert!(
+            adiabatic_flame_temperature(&reactants, &[(-1.0, &CO2), (2.0, &H2O_GAS)], 298.15)
+                .is_err()
+        );
+        assert!(
+            adiabatic_flame_temperature(&reactants, &[(f64::NAN, &CO2), (2.0, &H2O_GAS)], 298.15)
+                .is_err()
+        );
     }
 }

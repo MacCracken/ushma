@@ -76,7 +76,7 @@ fn main() {
     println!("\n--- Pipe Flow Convection (air at 300 K) ---");
     let nu_air = 1.6e-5; // kinematic viscosity (m²/s)
     let alpha_air = 2.2e-5; // thermal diffusivity (m²/s)
-    let k_air = material::AIR.conductivity; // 0.026 W/(m·K)
+    let k_air = material::AIR.conductivity; // 0.0263 W/(m·K)
     let velocity = 10.0; // m/s
     let diameter = 0.025; // 25 mm pipe
 

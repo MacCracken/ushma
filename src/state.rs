@@ -7,9 +7,10 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, UshmaError};
+use crate::validate::{finite_ge, finite_gt, invalid_param};
 
-/// Universal gas constant R (J/(mol⋅K)).
-pub const GAS_CONSTANT: f64 = 8.314_462_618;
+/// Universal gas constant R = N_A·k_B (J/(mol⋅K)), exact since the 2019 SI redefinition.
+pub const GAS_CONSTANT: f64 = 8.314_462_618_153_24;
 
 /// Standard atmospheric pressure (Pa).
 pub const ATM: f64 = 101_325.0;
@@ -22,12 +23,17 @@ pub const STANDARD_TEMP: f64 = 273.15;
 /// Returns pressure (Pa).
 #[tracing::instrument(level = "debug")]
 pub fn ideal_gas_pressure(moles: f64, temperature: f64, volume: f64) -> Result<f64> {
-    if temperature < 0.0 {
+    if !finite_ge(moles, 0.0) {
+        return Err(invalid_param(format_args!(
+            "moles {moles} must be finite and non-negative"
+        )));
+    }
+    if !finite_ge(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
     }
-    if volume <= 0.0 {
+    if !finite_gt(volume, 0.0) {
         return Err(UshmaError::InvalidVolume {
             cubic_meters: volume,
         });
@@ -36,29 +42,41 @@ pub fn ideal_gas_pressure(moles: f64, temperature: f64, volume: f64) -> Result<f
 }
 
 /// Ideal gas volume: V = nRT/P (m³).
+#[inline]
 pub fn ideal_gas_volume(moles: f64, temperature: f64, pressure: f64) -> Result<f64> {
-    if temperature < 0.0 {
+    if !finite_ge(moles, 0.0) {
+        return Err(crate::validate::invalid_param(format_args!(
+            "moles {moles} must be finite and non-negative"
+        )));
+    }
+    if !finite_ge(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
     }
-    if pressure <= 0.0 {
+    if !finite_gt(pressure, 0.0) {
         return Err(UshmaError::InvalidPressure { pascals: pressure });
     }
     Ok(moles * GAS_CONSTANT * temperature / pressure)
 }
 
 /// Ideal gas temperature: T = PV/(nR) (K).
+#[inline]
 pub fn ideal_gas_temperature(pressure: f64, volume: f64, moles: f64) -> Result<f64> {
-    if pressure < 0.0 {
+    if !finite_ge(moles, 0.0) {
+        return Err(invalid_param(format_args!(
+            "moles {moles} must be finite and non-negative"
+        )));
+    }
+    if !finite_ge(pressure, 0.0) {
         return Err(UshmaError::InvalidPressure { pascals: pressure });
     }
-    if volume < 0.0 {
+    if !finite_ge(volume, 0.0) {
         return Err(UshmaError::InvalidVolume {
             cubic_meters: volume,
         });
     }
-    if moles.abs() < 1e-30 {
+    if !finite_ge(moles.abs(), 1e-30) {
         return Err(UshmaError::DivisionByZero {
             context: "moles cannot be zero".into(),
         });
@@ -79,16 +97,31 @@ pub fn van_der_waals_pressure(
     a: f64,
     b: f64,
 ) -> Result<f64> {
-    if temperature <= 0.0 {
+    if !finite_ge(moles, 0.0) {
+        return Err(invalid_param(format_args!(
+            "moles {moles} must be finite and non-negative"
+        )));
+    }
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
     }
-    let v_eff = volume - moles * b;
-    if v_eff <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("effective volume {v_eff} m³ is non-positive (V - nb)"),
+    if !finite_gt(volume, 0.0) {
+        return Err(UshmaError::InvalidVolume {
+            cubic_meters: volume,
         });
+    }
+    if !a.is_finite() || !finite_ge(b, 0.0) {
+        return Err(invalid_param(format_args!(
+            "van der Waals parameters a={a}, b={b} must be finite with b ≥ 0"
+        )));
+    }
+    let v_eff = volume - moles * b;
+    if !finite_gt(v_eff, 0.0) {
+        return Err(invalid_param(format_args!(
+            "effective volume {v_eff} m³ is non-positive (V - nb)"
+        )));
     }
     let density = moles / volume;
     Ok(moles * GAS_CONSTANT * temperature / v_eff - a * density * density)
@@ -97,16 +130,22 @@ pub fn van_der_waals_pressure(
 /// Work done by an ideal gas in isothermal expansion.
 ///
 /// W = nRT⋅ln(V₂/V₁) (joules)
+#[inline]
 pub fn isothermal_work(moles: f64, temperature: f64, v1: f64, v2: f64) -> Result<f64> {
-    if temperature < 0.0 {
+    if !finite_ge(moles, 0.0) {
+        return Err(invalid_param(format_args!(
+            "moles {moles} must be finite and non-negative"
+        )));
+    }
+    if !finite_ge(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
     }
-    if v1 <= 0.0 {
+    if !finite_gt(v1, 0.0) {
         return Err(UshmaError::InvalidVolume { cubic_meters: v1 });
     }
-    if v2 <= 0.0 {
+    if !finite_gt(v2, 0.0) {
         return Err(UshmaError::InvalidVolume { cubic_meters: v2 });
     }
     Ok(moles * GAS_CONSTANT * temperature * (v2 / v1).ln())
@@ -125,16 +164,20 @@ pub fn isobaric_work(pressure: f64, v1: f64, v2: f64) -> f64 {
 ///
 /// Returns final temperature for adiabatic expansion/compression.
 /// T₂ = T₁(V₁/V₂)^(γ-1)
+#[inline]
 pub fn adiabatic_temperature(t1: f64, v1: f64, v2: f64, gamma: f64) -> Result<f64> {
-    if gamma <= 1.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("heat capacity ratio γ={gamma} must be > 1"),
-        });
+    if !finite_gt(t1, 0.0) {
+        return Err(UshmaError::InvalidTemperature { kelvin: t1 });
     }
-    if v1 <= 0.0 {
+    if !finite_gt(gamma, 1.0) {
+        return Err(invalid_param(format_args!(
+            "heat capacity ratio γ={gamma} must be > 1"
+        )));
+    }
+    if !finite_gt(v1, 0.0) {
         return Err(UshmaError::InvalidVolume { cubic_meters: v1 });
     }
-    if v2 <= 0.0 {
+    if !finite_gt(v2, 0.0) {
         return Err(UshmaError::InvalidVolume { cubic_meters: v2 });
     }
     Ok(t1 * (v1 / v2).powf(gamma - 1.0))
@@ -143,14 +186,31 @@ pub fn adiabatic_temperature(t1: f64, v1: f64, v2: f64, gamma: f64) -> Result<f6
 /// Compressibility factor Z = PV/(nRT).
 ///
 /// Z = 1 for ideal gas. Deviations indicate intermolecular forces.
+#[inline]
 pub fn compressibility_factor(
     pressure: f64,
     volume: f64,
     moles: f64,
     temperature: f64,
 ) -> Result<f64> {
+    if !finite_gt(pressure, 0.0) {
+        return Err(UshmaError::InvalidPressure { pascals: pressure });
+    }
+    if !finite_gt(volume, 0.0) {
+        return Err(UshmaError::InvalidVolume {
+            cubic_meters: volume,
+        });
+    }
+    if !finite_gt(temperature, 0.0) {
+        return Err(UshmaError::InvalidTemperature {
+            kelvin: temperature,
+        });
+    }
+    if !moles.is_finite() {
+        return Err(invalid_param(format_args!("moles {moles} must be finite")));
+    }
     let denom = moles * GAS_CONSTANT * temperature;
-    if denom.abs() < 1e-30 {
+    if !finite_ge(denom.abs(), 1e-30) {
         return Err(UshmaError::DivisionByZero {
             context: "nRT cannot be zero for compressibility factor".into(),
         });
@@ -258,6 +318,7 @@ pub fn reduced_pressure(p: f64, p_critical: f64) -> f64 {
 /// Returns (a, b) where:
 /// - a = 0.42748 · R² · Tc^2.5 / Pc
 /// - b = 0.08664 · R · Tc / Pc
+#[inline]
 #[must_use]
 pub fn redlich_kwong_params(tc: f64, pc: f64) -> (f64, f64) {
     let a = 0.42748 * GAS_CONSTANT * GAS_CONSTANT * tc.powf(2.5) / pc;
@@ -278,17 +339,23 @@ pub fn redlich_kwong_pressure(
     tc: f64,
     pc: f64,
 ) -> Result<f64> {
-    if temperature <= 0.0 {
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
     }
+    validate_critical(tc, pc)?;
+    if !finite_gt(molar_volume, 0.0) {
+        return Err(UshmaError::InvalidVolume {
+            cubic_meters: molar_volume,
+        });
+    }
     let (a, b) = redlich_kwong_params(tc, pc);
     let vm_b = molar_volume - b;
-    if vm_b <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("molar volume {molar_volume} too small for RK (Vm must > b={b:.6})"),
-        });
+    if !finite_gt(vm_b, 0.0) {
+        return Err(invalid_param(format_args!(
+            "molar volume {molar_volume} too small for RK (Vm must > b={b:.6})"
+        )));
     }
     let repulsive = GAS_CONSTANT * temperature / vm_b;
     let attractive = a / (temperature.sqrt() * molar_volume * (molar_volume + b));
@@ -303,6 +370,7 @@ pub fn redlich_kwong_pressure(
 /// - a = 0.45724 · R² · Tc² / Pc
 /// - b = 0.07780 · R · Tc / Pc
 /// - κ = 0.37464 + 1.54226ω - 0.26992ω²
+#[inline]
 #[must_use]
 pub fn peng_robinson_params(tc: f64, pc: f64, omega: f64) -> (f64, f64, f64) {
     let a = 0.45724 * GAS_CONSTANT * GAS_CONSTANT * tc * tc / pc;
@@ -323,23 +391,34 @@ pub fn peng_robinson_pressure(
     pc: f64,
     omega: f64,
 ) -> Result<f64> {
-    if temperature <= 0.0 {
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
     }
+    validate_critical(tc, pc)?;
+    if !finite_gt(molar_volume, 0.0) {
+        return Err(UshmaError::InvalidVolume {
+            cubic_meters: molar_volume,
+        });
+    }
+    if !omega.is_finite() {
+        return Err(invalid_param(format_args!(
+            "acentric factor {omega} must be finite"
+        )));
+    }
     let (a, b, kappa) = peng_robinson_params(tc, pc, omega);
     let vm_b = molar_volume - b;
-    if vm_b <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("molar volume {molar_volume} too small for PR (Vm must > b={b:.6})"),
-        });
+    if !finite_gt(vm_b, 0.0) {
+        return Err(invalid_param(format_args!(
+            "molar volume {molar_volume} too small for PR (Vm must > b={b:.6})"
+        )));
     }
     let alpha_sqrt = 1.0 + kappa * (1.0 - (temperature / tc).sqrt());
     let alpha = alpha_sqrt * alpha_sqrt;
     let repulsive = GAS_CONSTANT * temperature / vm_b;
     let denom_attr = molar_volume * molar_volume + 2.0 * b * molar_volume - b * b;
-    if denom_attr.abs() < 1e-30 {
+    if !finite_ge(denom_attr.abs(), 1e-30) {
         return Err(UshmaError::DivisionByZero {
             context: "PR attractive term denominator is zero".into(),
         });
@@ -354,6 +433,7 @@ pub fn peng_robinson_pressure(
 /// B·Pc/(R·Tc) = B⁰ + ω·B¹
 /// - B⁰ = 0.083 - 0.422/Tr^1.6
 /// - B¹ = 0.139 - 0.172/Tr^4.2
+#[inline]
 #[must_use]
 pub fn pitzer_second_virial(temperature: f64, tc: f64, pc: f64, omega: f64) -> f64 {
     let tr = temperature / tc;
@@ -363,13 +443,14 @@ pub fn pitzer_second_virial(temperature: f64, tc: f64, pc: f64, omega: f64) -> f
 }
 
 /// Virial EOS pressure (2nd order): P = RT/Vm · (1 + B/Vm).
+#[inline]
 pub fn virial_pressure_2nd(temperature: f64, molar_volume: f64, b_coeff: f64) -> Result<f64> {
-    if temperature <= 0.0 {
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
     }
-    if molar_volume <= 0.0 {
+    if !finite_gt(molar_volume, 0.0) {
         return Err(UshmaError::InvalidVolume {
             cubic_meters: molar_volume,
         });
@@ -379,18 +460,19 @@ pub fn virial_pressure_2nd(temperature: f64, molar_volume: f64, b_coeff: f64) ->
 }
 
 /// Virial EOS pressure (3rd order): P = RT/Vm · (1 + B/Vm + C/Vm²).
+#[inline]
 pub fn virial_pressure_3rd(
     temperature: f64,
     molar_volume: f64,
     b_coeff: f64,
     c_coeff: f64,
 ) -> Result<f64> {
-    if temperature <= 0.0 {
+    if !finite_gt(temperature, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: temperature,
         });
     }
-    if molar_volume <= 0.0 {
+    if !finite_gt(molar_volume, 0.0) {
         return Err(UshmaError::InvalidVolume {
             cubic_meters: molar_volume,
         });
@@ -402,27 +484,52 @@ pub fn virial_pressure_3rd(
 
 // --- Generalized compressibility ---
 
-/// Pitzer compressibility correlation: Z⁰ + ω·Z¹.
+/// Generalized compressibility from the Pitzer–Abbott virial correlation:
+/// Z = 1 + (B⁰ + ω·B¹)·P_r/T_r, with B⁰ = 0.083 − 0.422/T_r^1.6 and
+/// B¹ = 0.139 − 0.172/T_r^4.2.
 ///
-/// Simplified correlation valid for Tr > 0.8.
-/// Z⁰ and Z¹ from the Lee-Kesler tables (simplified fit).
+/// This truncated-virial form (not the Lee-Kesler tables) is only valid where
+/// Z is close to linear in P_r — roughly V_r ≳ 2, i.e. low-to-moderate reduced
+/// pressure. Results with Z ≤ 0 are outside that range and return an error.
+///
+/// - `pr`: reduced pressure P/P_c (≥ 0)
+/// - `tr`: reduced temperature T/T_c (> 0)
+/// - `omega`: acentric factor ω
+#[inline]
 pub fn compressibility_pitzer(pr: f64, tr: f64, omega: f64) -> Result<f64> {
-    if tr <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("reduced temperature {tr} must be positive"),
-        });
+    if !finite_gt(tr, 0.0) {
+        return Err(invalid_param(format_args!(
+            "reduced temperature {tr} must be positive"
+        )));
     }
-    // Simplified Lee-Kesler: Z⁰ = 1 + B⁰·Pr/Tr, Z¹ = B¹·Pr/Tr
+    if !finite_ge(pr, 0.0) {
+        return Err(invalid_param(format_args!(
+            "reduced pressure {pr} must be finite and non-negative"
+        )));
+    }
+    if !omega.is_finite() {
+        return Err(invalid_param(format_args!(
+            "acentric factor {omega} must be finite"
+        )));
+    }
     let b0 = 0.083 - 0.422 / tr.powf(1.6);
     let b1 = 0.139 - 0.172 / tr.powf(4.2);
     let z0 = 1.0 + b0 * pr / tr;
     let z1 = b1 * pr / tr;
-    Ok(z0 + omega * z1)
+    let z = z0 + omega * z1;
+    if !finite_gt(z, 0.0) {
+        return Err(invalid_param(format_args!(
+            "Pitzer virial correlation gives non-physical Z={z:.3} at Pr={pr}, Tr={tr}; \
+                 outside its validity range (reduce Pr)"
+        )));
+    }
+    Ok(z)
 }
 
 // --- Mixture rules ---
 
 /// Kay's rule for pseudo-critical temperature: Tc_mix = Σ yi·Tc_i (K).
+#[inline]
 pub fn kays_rule_tc(mole_fractions: &[f64], tc_values: &[f64]) -> Result<f64> {
     validate_mixture(mole_fractions, tc_values)?;
     Ok(mole_fractions
@@ -433,6 +540,7 @@ pub fn kays_rule_tc(mole_fractions: &[f64], tc_values: &[f64]) -> Result<f64> {
 }
 
 /// Kay's rule for pseudo-critical pressure: Pc_mix = Σ yi·Pc_i (Pa).
+#[inline]
 pub fn kays_rule_pc(mole_fractions: &[f64], pc_values: &[f64]) -> Result<f64> {
     validate_mixture(mole_fractions, pc_values)?;
     Ok(mole_fractions
@@ -443,6 +551,7 @@ pub fn kays_rule_pc(mole_fractions: &[f64], pc_values: &[f64]) -> Result<f64> {
 }
 
 /// Kay's rule for pseudo-acentric factor: ω_mix = Σ yi·ωi.
+#[inline]
 pub fn kays_rule_omega(mole_fractions: &[f64], omega_values: &[f64]) -> Result<f64> {
     validate_mixture(mole_fractions, omega_values)?;
     Ok(mole_fractions
@@ -452,21 +561,40 @@ pub fn kays_rule_omega(mole_fractions: &[f64], omega_values: &[f64]) -> Result<f
         .sum())
 }
 
+/// Critical constants used by the cubic equations of state must be positive and finite.
+fn validate_critical(tc: f64, pc: f64) -> Result<()> {
+    if !finite_gt(tc, 0.0) {
+        return Err(UshmaError::InvalidTemperature { kelvin: tc });
+    }
+    if !finite_gt(pc, 0.0) {
+        return Err(UshmaError::InvalidPressure { pascals: pc });
+    }
+    Ok(())
+}
+
 fn validate_mixture(mole_fractions: &[f64], values: &[f64]) -> Result<()> {
     if mole_fractions.len() != values.len() {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!(
-                "mole_fractions length {} != values length {}",
-                mole_fractions.len(),
-                values.len()
-            ),
-        });
+        return Err(invalid_param(format_args!(
+            "mole_fractions length {} != values length {}",
+            mole_fractions.len(),
+            values.len()
+        )));
+    }
+    if let Some(&y) = mole_fractions.iter().find(|y| !(0.0..=1.0).contains(*y)) {
+        return Err(invalid_param(format_args!(
+            "mole fraction {y} must be in [0, 1]"
+        )));
+    }
+    if let Some(&v) = values.iter().find(|v| !v.is_finite()) {
+        return Err(invalid_param(format_args!(
+            "mixture property value {v} must be finite"
+        )));
     }
     let sum: f64 = mole_fractions.iter().sum();
     if (sum - 1.0).abs() > 1e-10 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("mole fractions must sum to 1.0, got {sum}"),
-        });
+        return Err(invalid_param(format_args!(
+            "mole fractions must sum to 1.0, got {sum}"
+        )));
     }
     Ok(())
 }
@@ -758,5 +886,64 @@ mod tests {
         assert!(kays_rule_tc(&[0.3, 0.3], &[126.19, 154.58]).is_err());
         // Length mismatch
         assert!(kays_rule_tc(&[0.5, 0.5], &[126.19]).is_err());
+    }
+
+    // --- Regression tests from the 1.4.0 audit ---
+
+    #[test]
+    fn test_gas_constant_is_exact() {
+        // R = N_A · k_B exactly (2019 SI).
+        let r = 6.022_140_76e23 * 1.380_649e-23;
+        assert!((GAS_CONSTANT - r).abs() < 1e-14);
+    }
+
+    #[test]
+    fn test_ideal_gas_rejects_negative_moles() {
+        assert!(ideal_gas_temperature(ATM, 0.0224, -1.0).is_err());
+        assert!(ideal_gas_pressure(-1.0, 300.0, 0.0224).is_err());
+        assert!(ideal_gas_volume(-1.0, 300.0, ATM).is_err());
+        assert!(van_der_waals_pressure(-1.0, 300.0, 0.0224, 0.1364, 3.219e-5).is_err());
+        assert!(isothermal_work(-1.0, 300.0, 1.0, 2.0).is_err());
+    }
+
+    #[test]
+    fn test_adiabatic_temperature_validates_t1() {
+        assert!(adiabatic_temperature(-300.0, 0.02, 0.01, 1.4).is_err());
+        assert!(adiabatic_temperature(f64::NAN, 0.02, 0.01, 1.4).is_err());
+        assert!(adiabatic_temperature(300.0, 0.02, 0.01, f64::NAN).is_err());
+    }
+
+    #[test]
+    fn test_cubic_eos_validate_critical_constants() {
+        assert!(peng_robinson_pressure(300.0, 0.02, -304.13, 7.375e6, 0.224).is_err());
+        assert!(peng_robinson_pressure(300.0, 0.02, 304.13, f64::NAN, 0.224).is_err());
+        assert!(peng_robinson_pressure(300.0, 0.02, 304.13, 7.375e6, f64::NAN).is_err());
+        assert!(redlich_kwong_pressure(300.0, 0.02, 304.13, -7.375e6).is_err());
+        assert!(redlich_kwong_pressure(300.0, f64::NAN, 304.13, 7.375e6).is_err());
+    }
+
+    #[test]
+    fn test_compressibility_pitzer_rejects_nonphysical_z() {
+        // The virial form gave Z = −0.695 here.
+        assert!(compressibility_pitzer(5.0, 1.0, 0.0).is_err());
+        assert!(compressibility_pitzer(-1.0, 1.5, 0.0).is_err());
+        assert!(compressibility_pitzer(f64::NAN, 1.5, 0.0).is_err());
+        let z = compressibility_pitzer(0.5, 1.5, 0.1).unwrap();
+        assert!(z > 0.9 && z < 1.0);
+    }
+
+    #[test]
+    fn test_mixture_rules_reject_bad_fractions() {
+        assert!(kays_rule_tc(&[f64::NAN], &[300.0]).is_err());
+        assert!(kays_rule_tc(&[1.5, -0.5], &[300.0, 200.0]).is_err());
+        assert!(kays_rule_pc(&[0.5, 0.5], &[4e6, f64::NAN]).is_err());
+    }
+
+    #[test]
+    fn test_compressibility_factor_validates_inputs() {
+        assert!(compressibility_factor(f64::NAN, 0.0224, 1.0, 273.15).is_err());
+        assert!(compressibility_factor(ATM, 0.0224, 1.0, -273.15).is_err());
+        let z = compressibility_factor(ATM, 0.022_414, 1.0, STANDARD_TEMP).unwrap();
+        assert!((z - 1.0).abs() < 1e-3);
     }
 }

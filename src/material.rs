@@ -95,11 +95,12 @@ pub const WATER: ThermalMaterial = ThermalMaterial {
     boiling_point: 373.15,
 };
 
+/// Dry air at 300 K and 1 atm (Incropera Table A.4).
 pub const AIR: ThermalMaterial = ThermalMaterial {
     name: Cow::Borrowed("Air"),
-    conductivity: 0.026,
-    specific_heat: 1005.0,
-    density: 1.225,
+    conductivity: 0.0263,
+    specific_heat: 1007.0,
+    density: 1.1614,
     melting_point: 0.0,
     boiling_point: 0.0,
 };

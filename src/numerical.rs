@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, UshmaError};
+use crate::validate::{finite_ge, finite_gt, invalid_param};
 
 /// Boundary condition for a thermal grid edge.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -43,6 +44,41 @@ pub struct ThermalGrid1D {
     pub bc_right: BoundaryCondition,
 }
 
+impl BoundaryCondition {
+    /// Check that the condition's parameters are physical and finite.
+    fn validate(&self) -> Result<()> {
+        match *self {
+            BoundaryCondition::Fixed(t) if !t.is_finite() => Err(invalid_param(format_args!(
+                "fixed boundary temperature {t} K must be finite"
+            ))),
+            BoundaryCondition::Convective { h, t_fluid, k }
+                if !finite_ge(h, 0.0) || !finite_gt(k, 0.0) || !t_fluid.is_finite() =>
+            {
+                Err(invalid_param(format_args!(
+                    "convective boundary needs finite h ≥ 0, k > 0 and T_fluid: h={h}, k={k}, T_fluid={t_fluid}"
+                )))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Cell Biot number h·Δ/k for a convective boundary, 0 otherwise.
+    #[inline]
+    fn biot(&self, spacing: f64) -> f64 {
+        match *self {
+            BoundaryCondition::Convective { h, k, .. } => h * spacing / k,
+            _ => 0.0,
+        }
+    }
+}
+
+/// Upper limit on explicit sub-steps taken by [`ThermalGrid1D::step_adaptive`].
+pub const MAX_ADAPTIVE_SUBSTEPS: usize = 1_000_000;
+
+/// Relative slack on the explicit stability limit, so a step computed as
+/// exactly `max_stable_dt()` is not rejected because of round-off.
+const STABILITY_ROUNDOFF: f64 = 1e-12;
+
 impl ThermalGrid1D {
     /// Create a new 1D grid with uniform initial temperature.
     pub fn new(
@@ -54,20 +90,27 @@ impl ThermalGrid1D {
         bc_right: BoundaryCondition,
     ) -> Result<Self> {
         if num_nodes < 3 {
-            return Err(UshmaError::InvalidParameter {
-                reason: format!("need at least 3 nodes, got {num_nodes}"),
-            });
+            return Err(invalid_param(format_args!(
+                "need at least 3 nodes, got {num_nodes}"
+            )));
         }
-        if length <= 0.0 {
-            return Err(UshmaError::InvalidParameter {
-                reason: format!("length {length} m must be positive"),
-            });
+        if !finite_gt(length, 0.0) {
+            return Err(invalid_param(format_args!(
+                "length {length} m must be positive"
+            )));
         }
-        if alpha <= 0.0 {
-            return Err(UshmaError::InvalidParameter {
-                reason: format!("thermal diffusivity {alpha} must be positive"),
-            });
+        if !finite_gt(alpha, 0.0) {
+            return Err(invalid_param(format_args!(
+                "thermal diffusivity {alpha} must be positive"
+            )));
         }
+        if !t_initial.is_finite() {
+            return Err(invalid_param(format_args!(
+                "initial temperature {t_initial} K must be finite"
+            )));
+        }
+        bc_left.validate()?;
+        bc_right.validate()?;
         let dx = length / (num_nodes - 1) as f64;
         let mut nodes = vec![t_initial; num_nodes];
 
@@ -95,117 +138,174 @@ impl ThermalGrid1D {
         self.alpha * dt / (self.dx * self.dx)
     }
 
+    /// Largest Fourier number for which the explicit scheme is stable:
+    /// 0.5 / (1 + Bi_max), where Bi = h·dx/k of a convective boundary node.
+    #[inline]
+    fn max_stable_fourier(&self) -> f64 {
+        let bi = self.bc_left.biot(self.dx).max(self.bc_right.biot(self.dx));
+        0.5 / (1.0 + bi)
+    }
+
+    /// Largest stable explicit time step (s): Fo·(1 + Bi_max) ≤ 0.5.
+    ///
+    /// Interior nodes need Fo ≤ 0.5; a convective boundary node needs the
+    /// stricter Fo·(1 + Bi) ≤ 0.5 (Incropera, Table 5.3).
+    #[inline]
+    #[must_use]
+    pub fn max_stable_dt(&self) -> f64 {
+        self.max_stable_fourier() * self.dx * self.dx / self.alpha
+    }
+
+    /// Validate grid shape and parameters (fields are public and the type is
+    /// deserializable, so the constructor's checks may have been bypassed).
+    fn check(&self) -> Result<()> {
+        if self.nodes.len() < 3 {
+            return Err(invalid_param(format_args!(
+                "need at least 3 nodes, got {}",
+                self.nodes.len()
+            )));
+        }
+        if !finite_gt(self.dx, 0.0) || !finite_gt(self.alpha, 0.0) {
+            return Err(invalid_param(format_args!(
+                "dx={} and alpha={} must be positive and finite",
+                self.dx, self.alpha
+            )));
+        }
+        self.bc_left.validate()?;
+        self.bc_right.validate()
+    }
+
+    fn check_dt(dt: f64) -> Result<()> {
+        if !finite_gt(dt, 0.0) {
+            return Err(invalid_param(format_args!(
+                "time step {dt} s must be positive and finite"
+            )));
+        }
+        Ok(())
+    }
+
     /// Advance one time step using explicit (forward Euler) finite difference.
     ///
-    /// Stability requires Fo = α·dt/dx² ≤ 0.5.
+    /// Stability requires Fo = α·dt/dx² ≤ 0.5, or Fo·(1 + Bi) ≤ 0.5 with a
+    /// convective boundary — see [`max_stable_dt`](Self::max_stable_dt).
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn step_explicit(&mut self, dt: f64) -> Result<()> {
+        self.check()?;
+        Self::check_dt(dt)?;
         let fo = self.fourier_number(dt);
-        if fo > 0.5 {
-            return Err(UshmaError::InvalidParameter {
-                reason: format!("Fourier number {fo:.4} exceeds stability limit 0.5; reduce dt"),
-            });
+        let fo_max = self.max_stable_fourier();
+        if fo > fo_max * (1.0 + STABILITY_ROUNDOFF) {
+            return Err(invalid_param(format_args!(
+                "Fourier number {fo:.4} exceeds stability limit {fo_max:.4}; reduce dt to ≤ {:.6e} s",
+                self.max_stable_dt()
+            )));
         }
-        let n = self.nodes.len();
-        let mut new = self.nodes.clone();
-
-        // Interior nodes: stencil needs i-1, i, i+1 from old values
-        #[allow(clippy::needless_range_loop)]
-        for i in 1..n - 1 {
-            new[i] =
-                self.nodes[i] + fo * (self.nodes[i - 1] - 2.0 * self.nodes[i] + self.nodes[i + 1]);
-        }
-
-        // Boundary conditions
-        self.apply_bc_left(&mut new, fo);
-        self.apply_bc_right(&mut new, fo);
-
-        self.nodes = new;
+        self.explicit_update(fo);
         Ok(())
+    }
+
+    /// One forward-Euler update in place (no allocation). Caller checks stability.
+    fn explicit_update(&mut self, fo: f64) {
+        let n = self.nodes.len();
+        let nodes = &mut self.nodes;
+        // Old boundary-adjacent values needed by the boundary updates.
+        let (old_0, old_1) = (nodes[0], nodes[1]);
+        let (old_nm2, old_nm1) = (nodes[n - 2], nodes[n - 1]);
+
+        // Interior nodes; `prev` carries the old value of node i-1.
+        let mut prev = old_0;
+        for i in 1..n - 1 {
+            let cur = nodes[i];
+            nodes[i] = cur + fo * (prev - 2.0 * cur + nodes[i + 1]);
+            prev = cur;
+        }
+
+        nodes[0] = Self::explicit_boundary(self.bc_left, old_0, old_1, fo, self.dx);
+        nodes[n - 1] = Self::explicit_boundary(self.bc_right, old_nm1, old_nm2, fo, self.dx);
+    }
+
+    /// Explicit update of a boundary node from its old value and its neighbor's
+    /// old value (ghost-node / half-cell energy balance).
+    #[inline]
+    fn explicit_boundary(bc: BoundaryCondition, t_b: f64, t_in: f64, fo: f64, dx: f64) -> f64 {
+        match bc {
+            BoundaryCondition::Fixed(t) => t,
+            // Ghost node symmetry: T_ghost = T_in
+            BoundaryCondition::Insulated => t_b + fo * (2.0 * t_in - 2.0 * t_b),
+            BoundaryCondition::Convective { t_fluid, .. } => {
+                let bi = bc.biot(dx);
+                t_b + fo * (2.0 * t_in - 2.0 * (1.0 + bi) * t_b + 2.0 * bi * t_fluid)
+            }
+        }
+    }
+
+    /// Crank-Nicolson row i: (a_i, b_i, c_i, d_i) of a·T_{i-1} + b·T_i + c·T_{i+1} = d.
+    #[inline]
+    fn cn_row(&self, i: usize, fo: f64) -> (f64, f64, f64, f64) {
+        let t = &self.nodes;
+        let n = t.len();
+        let boundary = |bc: BoundaryCondition, t_b: f64, t_in: f64| -> (f64, f64, f64) {
+            // Returns (diag, off-diagonal toward the interior, rhs).
+            match bc {
+                BoundaryCondition::Fixed(tf) => (1.0, 0.0, tf),
+                // Ghost node: T_ghost = T_in
+                BoundaryCondition::Insulated => (1.0 + fo, -fo, (1.0 - fo) * t_b + fo * t_in),
+                BoundaryCondition::Convective { t_fluid, .. } => {
+                    let bi = bc.biot(self.dx);
+                    (
+                        1.0 + fo * (1.0 + bi),
+                        -fo,
+                        (1.0 - fo * (1.0 + bi)) * t_b + fo * t_in + 2.0 * fo * bi * t_fluid,
+                    )
+                }
+            }
+        };
+        if i == 0 {
+            let (b, c, d) = boundary(self.bc_left, t[0], t[1]);
+            (0.0, b, c, d)
+        } else if i == n - 1 {
+            let (b, a, d) = boundary(self.bc_right, t[n - 1], t[n - 2]);
+            (a, b, 0.0, d)
+        } else {
+            let half = 0.5 * fo;
+            (
+                -half,
+                1.0 + fo,
+                -half,
+                half * t[i - 1] + (1.0 - fo) * t[i] + half * t[i + 1],
+            )
+        }
     }
 
     /// Advance one time step using Crank-Nicolson (implicit, unconditionally stable).
     ///
-    /// Solves the tridiagonal system via the Thomas algorithm — O(n).
+    /// Solves the tridiagonal system via the Thomas algorithm — O(n), two
+    /// scratch vectors.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn step_crank_nicolson(&mut self, dt: f64) -> Result<()> {
+        self.check()?;
+        Self::check_dt(dt)?;
         let fo = self.fourier_number(dt);
         let n = self.nodes.len();
 
-        // Tridiagonal coefficients: a_i·T_{i-1} + b_i·T_i + c_i·T_{i+1} = d_i
-        let mut a = vec![0.0; n];
-        let mut b = vec![0.0; n];
-        let mut c = vec![0.0; n];
-        let mut d = vec![0.0; n];
-
-        // Interior nodes
-        for i in 1..n - 1 {
-            a[i] = -fo / 2.0;
-            b[i] = 1.0 + fo;
-            c[i] = -fo / 2.0;
-            d[i] = (fo / 2.0) * self.nodes[i - 1]
-                + (1.0 - fo) * self.nodes[i]
-                + (fo / 2.0) * self.nodes[i + 1];
-        }
-
-        // Boundary conditions
-        match self.bc_left {
-            BoundaryCondition::Fixed(t) => {
-                b[0] = 1.0;
-                d[0] = t;
-            }
-            BoundaryCondition::Insulated => {
-                // Ghost node: T_{-1} = T_1
-                b[0] = 1.0 + fo;
-                c[0] = -fo;
-                d[0] = (1.0 - fo) * self.nodes[0] + fo * self.nodes[1];
-            }
-            BoundaryCondition::Convective { h, t_fluid, k } => {
-                let bi = h * self.dx / k;
-                b[0] = 1.0 + fo * (1.0 + bi);
-                c[0] = -fo;
-                d[0] = (1.0 - fo * (1.0 + bi)) * self.nodes[0]
-                    + fo * self.nodes[1]
-                    + 2.0 * fo * bi * t_fluid;
-            }
-        }
-
-        match self.bc_right {
-            BoundaryCondition::Fixed(t) => {
-                b[n - 1] = 1.0;
-                d[n - 1] = t;
-            }
-            BoundaryCondition::Insulated => {
-                a[n - 1] = -fo;
-                b[n - 1] = 1.0 + fo;
-                d[n - 1] = fo * self.nodes[n - 2] + (1.0 - fo) * self.nodes[n - 1];
-            }
-            BoundaryCondition::Convective { h, t_fluid, k } => {
-                let bi = h * self.dx / k;
-                a[n - 1] = -fo;
-                b[n - 1] = 1.0 + fo * (1.0 + bi);
-                d[n - 1] = fo * self.nodes[n - 2]
-                    + (1.0 - fo * (1.0 + bi)) * self.nodes[n - 1]
-                    + 2.0 * fo * bi * t_fluid;
-            }
-        }
-
-        // Thomas algorithm (forward sweep + back substitution)
+        // Forward sweep. Rows are built from the old temperatures, which are not
+        // overwritten until back substitution.
         let mut c_star = vec![0.0; n];
         let mut d_star = vec![0.0; n];
-
-        c_star[0] = c[0] / b[0];
-        d_star[0] = d[0] / b[0];
-
-        for i in 1..n {
-            let m = b[i] - a[i] * c_star[i - 1];
-            if m.abs() < 1e-30 {
+        let mut c_prev = 0.0;
+        let mut d_prev = 0.0;
+        for i in 0..n {
+            let (a, b, c, d) = self.cn_row(i, fo);
+            let m = b - a * c_prev;
+            if !finite_ge(m.abs(), 1e-30) {
                 return Err(UshmaError::DivisionByZero {
                     context: "Thomas algorithm pivot is zero".into(),
                 });
             }
-            c_star[i] = c[i] / m;
-            d_star[i] = (d[i] - a[i] * d_star[i - 1]) / m;
+            c_prev = c / m;
+            d_prev = (d - a * d_prev) / m;
+            c_star[i] = c_prev;
+            d_star[i] = d_prev;
         }
 
         self.nodes[n - 1] = d_star[n - 1];
@@ -218,58 +318,32 @@ impl ThermalGrid1D {
 
     /// Advance with adaptive time stepping.
     ///
-    /// Subdivides dt if Fo > 0.5 for explicit stability. Returns actual total time advanced.
+    /// Subdivides `dt_target` into equal explicit sub-steps no longer than
+    /// [`max_stable_dt`](Self::max_stable_dt). Returns the total time advanced.
+    /// Errors if more than [`MAX_ADAPTIVE_SUBSTEPS`] sub-steps would be needed —
+    /// use [`step_crank_nicolson`](Self::step_crank_nicolson) for such stiff cases.
     pub fn step_adaptive(&mut self, dt_target: f64) -> Result<f64> {
-        let fo_max = 0.5;
-        let dt_stable = fo_max * self.dx * self.dx / self.alpha;
+        self.check()?;
+        Self::check_dt(dt_target)?;
+        let dt_stable = self.max_stable_dt();
 
-        if dt_target <= dt_stable {
-            self.step_explicit(dt_target)?;
-            return Ok(dt_target);
+        // The (1 − ε) factor keeps exact multiples of dt_stable from gaining an
+        // extra sub-step through round-off.
+        let ratio = dt_target / dt_stable;
+        let steps = (ratio * (1.0 - STABILITY_ROUNDOFF)).ceil().max(1.0);
+        if !finite_ge(steps, 1.0) || steps > MAX_ADAPTIVE_SUBSTEPS as f64 {
+            return Err(invalid_param(format_args!(
+                "adaptive step needs {steps:.3e} explicit sub-steps (limit {MAX_ADAPTIVE_SUBSTEPS}); use step_crank_nicolson"
+            )));
         }
-
-        // Subdivide into stable sub-steps
-        let num_steps = (dt_target / dt_stable).ceil() as usize;
-        let dt_sub = dt_target / num_steps as f64;
+        let num_steps = steps as usize;
+        let fo_sub = self.fourier_number(dt_target / steps);
 
         for _ in 0..num_steps {
-            self.step_explicit(dt_sub)?;
+            self.explicit_update(fo_sub);
         }
 
         Ok(dt_target)
-    }
-
-    fn apply_bc_left(&self, new: &mut [f64], fo: f64) {
-        match self.bc_left {
-            BoundaryCondition::Fixed(t) => new[0] = t,
-            BoundaryCondition::Insulated => {
-                // Ghost node symmetry: T_{-1} = T_1
-                new[0] = self.nodes[0] + fo * (2.0 * self.nodes[1] - 2.0 * self.nodes[0]);
-            }
-            BoundaryCondition::Convective { h, t_fluid, k } => {
-                let bi = h * self.dx / k;
-                new[0] = self.nodes[0]
-                    + fo * (2.0 * self.nodes[1] - 2.0 * (1.0 + bi) * self.nodes[0]
-                        + 2.0 * bi * t_fluid);
-            }
-        }
-    }
-
-    fn apply_bc_right(&self, new: &mut [f64], fo: f64) {
-        let n = self.nodes.len();
-        match self.bc_right {
-            BoundaryCondition::Fixed(t) => new[n - 1] = t,
-            BoundaryCondition::Insulated => {
-                new[n - 1] =
-                    self.nodes[n - 1] + fo * (2.0 * self.nodes[n - 2] - 2.0 * self.nodes[n - 1]);
-            }
-            BoundaryCondition::Convective { h, t_fluid, k } => {
-                let bi = h * self.dx / k;
-                new[n - 1] = self.nodes[n - 1]
-                    + fo * (2.0 * self.nodes[n - 2] - 2.0 * (1.0 + bi) * self.nodes[n - 1]
-                        + 2.0 * bi * t_fluid);
-            }
-        }
     }
 }
 
@@ -297,14 +371,19 @@ impl ThermalGrid2D {
     /// Create a 2D grid with uniform initial temperature.
     pub fn new(nx: usize, ny: usize, lx: f64, ly: f64, t_initial: f64) -> Result<Self> {
         if nx < 3 || ny < 3 {
-            return Err(UshmaError::InvalidParameter {
-                reason: format!("need at least 3×3 grid, got {nx}×{ny}"),
-            });
+            return Err(invalid_param(format_args!(
+                "need at least 3×3 grid, got {nx}×{ny}"
+            )));
         }
-        if lx <= 0.0 || ly <= 0.0 {
-            return Err(UshmaError::InvalidParameter {
-                reason: format!("dimensions must be positive: lx={lx}, ly={ly}"),
-            });
+        if !finite_gt(lx, 0.0) || !finite_gt(ly, 0.0) {
+            return Err(invalid_param(format_args!(
+                "dimensions must be positive: lx={lx}, ly={ly}"
+            )));
+        }
+        if !t_initial.is_finite() {
+            return Err(invalid_param(format_args!(
+                "initial temperature {t_initial} K must be finite"
+            )));
         }
         Ok(Self {
             nodes: vec![vec![t_initial; nx]; ny],
@@ -320,6 +399,9 @@ impl ThermalGrid2D {
     }
 
     /// Set a boundary condition on one side.
+    ///
+    /// Fixed temperatures are written to the boundary immediately; all
+    /// conditions are validated by [`solve_steady_state`](Self::solve_steady_state).
     pub fn set_boundary(&mut self, side: Side, bc: BoundaryCondition) {
         match side {
             Side::Left => self.bc_left = bc,
@@ -327,15 +409,56 @@ impl ThermalGrid2D {
             Side::Bottom => self.bc_bottom = bc,
             Side::Top => self.bc_top = bc,
         }
-        self.apply_boundaries();
+        if self.check_shape().is_ok() {
+            self.apply_boundaries();
+        }
+    }
+
+    /// Validate grid shape (fields are public and the type is deserializable).
+    fn check_shape(&self) -> Result<()> {
+        if self.nx < 3 || self.ny < 3 {
+            return Err(invalid_param(format_args!(
+                "need at least 3×3 grid, got {}×{}",
+                self.nx, self.ny
+            )));
+        }
+        if self.nodes.len() != self.ny || self.nodes.iter().any(|row| row.len() != self.nx) {
+            return Err(invalid_param(format_args!(
+                "node array shape does not match nx={} × ny={}",
+                self.nx, self.ny
+            )));
+        }
+        if !finite_gt(self.dx, 0.0) || !finite_gt(self.dy, 0.0) {
+            return Err(invalid_param(format_args!(
+                "dx={} and dy={} must be positive and finite",
+                self.dx, self.dy
+            )));
+        }
+        Ok(())
     }
 
     /// Solve steady-state via Gauss-Seidel iteration.
     ///
-    /// Returns the number of iterations to converge.
-    /// For square grids (dx = dy): T_ij = (T_{i-1,j} + T_{i+1,j} + T_{i,j-1} + T_{i,j+1}) / 4.
+    /// Returns the number of iterations to converge (largest per-sweep change
+    /// below `tolerance`). For square grids (dx = dy):
+    /// T_ij = (T_{i-1,j} + T_{i+1,j} + T_{i,j-1} + T_{i,j+1}) / 4.
+    ///
+    /// Boundaries: `Fixed` (Dirichlet), `Insulated` (T_b = T_interior) and
+    /// `Convective` (T_b = (T_interior + Bi·T_fluid)/(1 + Bi), Bi = h·Δ/k), all
+    /// first-order accurate at the wall. Errors if the field becomes non-finite.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn solve_steady_state(&mut self, tolerance: f64, max_iterations: usize) -> Result<usize> {
+        self.check_shape()?;
+        for bc in [self.bc_left, self.bc_right, self.bc_bottom, self.bc_top] {
+            bc.validate()?;
+        }
+        if !finite_gt(tolerance, 0.0) {
+            return Err(invalid_param(format_args!(
+                "tolerance {tolerance} must be positive and finite"
+            )));
+        }
+        self.apply_boundaries();
+
         let rx = 1.0 / (self.dx * self.dx);
         let ry = 1.0 / (self.dy * self.dy);
         let denom = 2.0 * (rx + ry);
@@ -350,45 +473,80 @@ impl ThermalGrid2D {
                         + ry * (self.nodes[j - 1][i] + self.nodes[j + 1][i]))
                         / denom;
                     self.nodes[j][i] = new_val;
-                    max_change = max_change.max((new_val - old).abs());
+                    // NaN-propagating max (f64::max would drop a NaN change).
+                    let d = (new_val - old).abs();
+                    if d > max_change || d.is_nan() {
+                        max_change = d;
+                    }
                 }
             }
 
-            // Update non-fixed boundary nodes (insulated = zero gradient)
-            self.apply_insulated_boundaries();
+            // Update non-fixed boundary nodes (insulated / convective)
+            let d = self.apply_flux_boundaries();
+            if d > max_change || d.is_nan() {
+                max_change = d;
+            }
 
+            if !max_change.is_finite() {
+                return Err(invalid_param(format_args!(
+                    "Gauss-Seidel produced non-finite temperatures at iteration {}",
+                    iter + 1
+                )));
+            }
             if max_change < tolerance {
                 return Ok(iter + 1);
             }
         }
 
-        Err(UshmaError::InvalidParameter {
-            reason: format!("Gauss-Seidel did not converge in {max_iterations} iterations"),
-        })
+        Err(invalid_param(format_args!(
+            "Gauss-Seidel did not converge in {max_iterations} iterations"
+        )))
     }
 
-    fn apply_insulated_boundaries(&mut self) {
-        // Zero gradient: boundary node = nearest interior node
-        if matches!(self.bc_left, BoundaryCondition::Insulated) {
-            for j in 1..self.ny - 1 {
-                self.nodes[j][0] = self.nodes[j][1];
+    /// New value of a non-fixed boundary node from its interior neighbor.
+    #[inline]
+    fn flux_boundary_value(bc: BoundaryCondition, t_in: f64, spacing: f64) -> Option<f64> {
+        match bc {
+            BoundaryCondition::Fixed(_) => None,
+            BoundaryCondition::Insulated => Some(t_in),
+            BoundaryCondition::Convective { t_fluid, .. } => {
+                let bi = bc.biot(spacing);
+                Some((t_in + bi * t_fluid) / (1.0 + bi))
             }
         }
-        if matches!(self.bc_right, BoundaryCondition::Insulated) {
-            for j in 1..self.ny - 1 {
-                self.nodes[j][self.nx - 1] = self.nodes[j][self.nx - 2];
+    }
+
+    /// Apply insulated / convective boundaries; returns the largest change.
+    fn apply_flux_boundaries(&mut self) -> f64 {
+        let (nx, ny) = (self.nx, self.ny);
+        let mut max_change = 0.0_f64;
+        let mut set = |cell: &mut f64, v: f64| {
+            let d = (v - *cell).abs();
+            if d > max_change || d.is_nan() {
+                max_change = d;
+            }
+            *cell = v;
+        };
+        for j in 1..ny - 1 {
+            if let Some(v) = Self::flux_boundary_value(self.bc_left, self.nodes[j][1], self.dx) {
+                set(&mut self.nodes[j][0], v);
+            }
+            if let Some(v) =
+                Self::flux_boundary_value(self.bc_right, self.nodes[j][nx - 2], self.dx)
+            {
+                set(&mut self.nodes[j][nx - 1], v);
             }
         }
-        if matches!(self.bc_bottom, BoundaryCondition::Insulated) {
-            for i in 1..self.nx - 1 {
-                self.nodes[0][i] = self.nodes[1][i];
+        for i in 1..nx - 1 {
+            if let Some(v) = Self::flux_boundary_value(self.bc_bottom, self.nodes[1][i], self.dy) {
+                set(&mut self.nodes[0][i], v);
+            }
+            if let Some(v) = Self::flux_boundary_value(self.bc_top, self.nodes[ny - 2][i], self.dy)
+            {
+                set(&mut self.nodes[ny - 1][i], v);
             }
         }
-        if matches!(self.bc_top, BoundaryCondition::Insulated) {
-            for i in 1..self.nx - 1 {
-                self.nodes[self.ny - 1][i] = self.nodes[self.ny - 2][i];
-            }
-        }
+        max_change
     }
 
     fn apply_boundaries(&mut self) {
@@ -432,6 +590,7 @@ pub struct ThermalNetwork {
 
 impl ThermalNetwork {
     /// Create an empty network with n nodes.
+    #[must_use]
     pub fn new(num_nodes: usize) -> Self {
         Self {
             num_nodes,
@@ -443,17 +602,15 @@ impl ThermalNetwork {
     /// Add a thermal resistance between two nodes.
     pub fn add_resistance(&mut self, node_a: usize, node_b: usize, resistance: f64) -> Result<()> {
         if node_a >= self.num_nodes || node_b >= self.num_nodes {
-            return Err(UshmaError::InvalidParameter {
-                reason: format!(
-                    "node index out of range: a={node_a}, b={node_b}, max={}",
-                    self.num_nodes - 1
-                ),
-            });
+            return Err(invalid_param(format_args!(
+                "node index out of range: a={node_a}, b={node_b}, num_nodes={}",
+                self.num_nodes
+            )));
         }
-        if resistance <= 0.0 {
-            return Err(UshmaError::InvalidParameter {
-                reason: format!("resistance {resistance} K/W must be positive"),
-            });
+        if !finite_gt(resistance, 0.0) {
+            return Err(invalid_param(format_args!(
+                "resistance {resistance} K/W must be positive"
+            )));
         }
         self.resistances.push((node_a, node_b, resistance));
         Ok(())
@@ -462,19 +619,89 @@ impl ThermalNetwork {
     /// Set a node to a fixed temperature.
     pub fn set_fixed_temperature(&mut self, node: usize, temperature: f64) -> Result<()> {
         if node >= self.num_nodes {
-            return Err(UshmaError::InvalidParameter {
-                reason: format!("node {node} out of range, max={}", self.num_nodes - 1),
-            });
+            return Err(invalid_param(format_args!(
+                "node {node} out of range, num_nodes={}",
+                self.num_nodes
+            )));
+        }
+        if !temperature.is_finite() {
+            return Err(invalid_param(format_args!(
+                "fixed temperature {temperature} K must be finite"
+            )));
         }
         self.fixed.push((node, temperature));
+        Ok(())
+    }
+
+    /// Validate indices and values (fields are public and deserializable).
+    fn check(&self) -> Result<()> {
+        let n = self.num_nodes;
+        for &(a, b, r) in &self.resistances {
+            if a >= n || b >= n || !finite_gt(r, 0.0) {
+                return Err(invalid_param(format_args!(
+                    "invalid resistance ({a}, {b}, {r}) for num_nodes={n}"
+                )));
+            }
+        }
+        for &(node, t) in &self.fixed {
+            if node >= n || !t.is_finite() {
+                return Err(invalid_param(format_args!(
+                    "invalid fixed temperature ({node}, {t}) for num_nodes={n}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Every free node must be connected (through resistances) to a fixed
+    /// node; otherwise its temperature is undetermined and the conductance
+    /// matrix is singular.
+    fn check_connectivity(&self, is_fixed: &[bool]) -> Result<()> {
+        // Union-find over resistance edges.
+        fn find(parent: &mut [usize], mut x: usize) -> usize {
+            while parent[x] != x {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+            x
+        }
+        let n = self.num_nodes;
+        let mut parent: Vec<usize> = (0..n).collect();
+        for &(a, b, _) in &self.resistances {
+            let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+            if ra != rb {
+                parent[ra] = rb;
+            }
+        }
+        let mut anchored = vec![false; n];
+        for (node, &fixed) in is_fixed.iter().enumerate() {
+            if fixed {
+                let root = find(&mut parent, node);
+                anchored[root] = true;
+            }
+        }
+        for (node, &fixed) in is_fixed.iter().enumerate() {
+            if !fixed {
+                let root = find(&mut parent, node);
+                if !anchored[root] {
+                    return Err(invalid_param(format_args!(
+                        "node {node} is not connected to any fixed-temperature node; its temperature is undetermined"
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 
     /// Solve for steady-state temperatures at all nodes.
     ///
     /// Builds a conductance matrix and solves via [`hisab::num::gaussian_elimination`].
+    /// Each row is scaled by its diagonal so the pivot test is relative to the
+    /// conductance scale. Errors if any free node is not connected to a fixed
+    /// node (the system would be singular).
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn solve(&self) -> Result<Vec<f64>> {
+        self.check()?;
         let n = self.num_nodes;
 
         let mut is_fixed = vec![false; n];
@@ -491,6 +718,7 @@ impl ThermalNetwork {
         if nf == 0 {
             return Ok(fixed_t);
         }
+        self.check_connectivity(&is_fixed)?;
 
         // Map node index → free index
         let mut free_map = vec![usize::MAX; n];
@@ -522,11 +750,16 @@ impl ThermalNetwork {
             }
         }
 
-        let solution = hisab::num::gaussian_elimination(&mut matrix).map_err(|e| {
-            UshmaError::InvalidParameter {
-                reason: format!("network solve failed: {e}"),
+        // Row scaling: diagonal → 1 (positive because every free node is connected).
+        for (fi, row) in matrix.iter_mut().enumerate() {
+            let diag = row[fi];
+            if finite_gt(diag, 0.0) {
+                row.iter_mut().for_each(|v| *v /= diag);
             }
-        })?;
+        }
+
+        let solution = hisab::num::gaussian_elimination(&mut matrix)
+            .map_err(|e| invalid_param(format_args!("network solve failed: {e}")))?;
 
         // Assemble full temperature vector
         let mut temps = fixed_t;
@@ -853,5 +1086,163 @@ mod tests {
         } else {
             panic!("wrong BC variant");
         }
+    }
+
+    // --- Regression tests from the 1.4.0 audit ---
+
+    fn convective(h: f64, k: f64, t_fluid: f64) -> BoundaryCondition {
+        BoundaryCondition::Convective { h, t_fluid, k }
+    }
+
+    #[test]
+    fn test_explicit_stability_accounts_for_biot() {
+        // n=11, L=0.1 → dx=0.01; Bi = 1000·0.01/1 = 10 → Fo_max = 0.5/11.
+        let bc = convective(1000.0, 1.0, 300.0);
+        let mut g = ThermalGrid1D::new(11, 0.1, 1e-5, 400.0, bc, bc).unwrap();
+        // Fo = 0.4 passed the old Fo ≤ 0.5 check and blew up (T0 → −400 K).
+        assert!(g.step_explicit(4.0).is_err());
+        let dt = g.max_stable_dt();
+        assert!((g.fourier_number(dt) - 0.5 / 11.0).abs() < 1e-12);
+        for _ in 0..200 {
+            g.step_explicit(dt).unwrap();
+        }
+        assert!(
+            g.nodes.iter().all(|&t| (300.0..=400.0).contains(&t)),
+            "{:?}",
+            g.nodes
+        );
+    }
+
+    #[test]
+    fn test_step_adaptive_exact_multiple_of_stable_dt() {
+        // Used to fail with Fo = 0.5000000000000001 from round-off.
+        let bc = BoundaryCondition::Fixed(300.0);
+        let mut g = ThermalGrid1D::new(51, 0.1, 1e-5, 400.0, bc, bc).unwrap();
+        assert_eq!(g.step_adaptive(1.0).unwrap(), 1.0);
+        let dt = g.max_stable_dt();
+        assert!(g.step_adaptive(dt).is_ok());
+        assert!(g.step_adaptive(3.0 * dt).is_ok());
+    }
+
+    #[test]
+    fn test_step_adaptive_substep_cap_and_bad_dt() {
+        let bc = BoundaryCondition::Insulated;
+        let mut g = ThermalGrid1D::new(3, 2e-6, 1e-4, 300.0, bc, bc).unwrap();
+        assert!(g.step_adaptive(3600.0).is_err()); // ~7e11 sub-steps
+        assert!(g.step_adaptive(f64::NAN).is_err());
+        assert!(g.step_adaptive(-1.0).is_err());
+        assert!(g.step_explicit(f64::NAN).is_err());
+        assert!(g.step_crank_nicolson(-1.0).is_err());
+        assert!(g.step_crank_nicolson(f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn test_explicit_matches_crank_nicolson_for_small_steps() {
+        let bc_l = BoundaryCondition::Fixed(400.0);
+        let bc_r = convective(50.0, 15.0, 290.0);
+        let mut ex = ThermalGrid1D::new(21, 0.2, 4e-6, 300.0, bc_l, bc_r).unwrap();
+        let mut cn = ex.clone();
+        let dt = ex.max_stable_dt() * 0.5;
+        for _ in 0..2000 {
+            ex.step_explicit(dt).unwrap();
+            cn.step_crank_nicolson(dt).unwrap();
+        }
+        for (a, b) in ex.nodes.iter().zip(&cn.nodes) {
+            assert!((a - b).abs() < 0.05, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn test_grid_1d_bad_state_is_error_not_panic() {
+        let bc = BoundaryCondition::Insulated;
+        let mut g = ThermalGrid1D::new(5, 1.0, 1e-5, 300.0, bc, bc).unwrap();
+        g.nodes.truncate(1);
+        assert!(g.step_explicit(1.0).is_err());
+        assert!(g.step_crank_nicolson(1.0).is_err());
+        assert!(g.step_adaptive(1.0).is_err());
+        g.nodes.clear();
+        assert!(g.step_explicit(1.0).is_err());
+        assert!(ThermalGrid1D::new(5, 1.0, 1e-5, f64::NAN, bc, bc).is_err());
+        assert!(ThermalGrid1D::new(5, 1.0, 1e-5, 300.0, convective(10.0, 0.0, 300.0), bc).is_err());
+    }
+
+    #[test]
+    fn test_grid_2d_convective_boundary_matches_analytic() {
+        // Left fixed 400 K, right convective to 300 K, top/bottom insulated:
+        // a 1D slab with q = (T1 − T∞)/(L/k + 1/h). The discrete solution is exact
+        // for this linear profile.
+        let (l, k, h) = (0.5, 2.0, 10.0);
+        let mut g = ThermalGrid2D::new(11, 5, l, 0.2, 350.0).unwrap();
+        g.set_boundary(Side::Left, BoundaryCondition::Fixed(400.0));
+        g.set_boundary(Side::Right, convective(h, k, 300.0));
+        g.solve_steady_state(1e-12, 200_000).unwrap();
+        let t_wall = 300.0 + 100.0 * (1.0 / h) / (l / k + 1.0 / h);
+        let got = g.nodes[2][10];
+        assert!((got - t_wall).abs() < 1e-6, "{got} vs {t_wall}");
+        // The convective side is no longer pinned at the initial temperature.
+        assert!((got - 350.0).abs() > 1.0);
+    }
+
+    #[test]
+    fn test_grid_2d_nan_and_bad_shape() {
+        assert!(ThermalGrid2D::new(5, 5, 1.0, 1.0, f64::NAN).is_err());
+        let mut g = ThermalGrid2D::new(5, 5, 1.0, 1.0, 300.0).unwrap();
+        g.bc_left = BoundaryCondition::Fixed(f64::NAN);
+        assert!(g.solve_steady_state(1e-6, 100).is_err());
+        let mut g = ThermalGrid2D::new(5, 5, 1.0, 1.0, 300.0).unwrap();
+        g.nodes[2][2] = f64::NAN;
+        assert!(g.solve_steady_state(1e-6, 100).is_err());
+        let mut g = ThermalGrid2D::new(5, 5, 1.0, 1.0, 300.0).unwrap();
+        g.nodes.pop();
+        assert!(g.solve_steady_state(1e-6, 100).is_err());
+        g.set_boundary(Side::Left, BoundaryCondition::Fixed(400.0)); // must not panic
+        assert!(
+            ThermalGrid2D::new(5, 5, 1.0, 1.0, 300.0)
+                .unwrap()
+                .solve_steady_state(f64::NAN, 10)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_network_empty_and_out_of_range() {
+        let mut net = ThermalNetwork::new(0);
+        assert!(net.add_resistance(0, 0, 1.0).is_err()); // used to underflow num_nodes − 1
+        assert!(net.set_fixed_temperature(0, 300.0).is_err());
+        let mut net = ThermalNetwork::new(2);
+        assert!(net.set_fixed_temperature(0, f64::NAN).is_err());
+        // Deserialized garbage must not panic.
+        net.resistances.push((0, 5, 1.0));
+        assert!(net.solve().is_err());
+    }
+
+    #[test]
+    fn test_network_unanchored_nodes_are_errors() {
+        // Triangle of free nodes with large conductances and no fixed node:
+        // used to "solve" to all zeros.
+        let mut net = ThermalNetwork::new(3);
+        net.add_resistance(0, 1, 1e-3).unwrap();
+        net.add_resistance(1, 2, 1e-3).unwrap();
+        net.add_resistance(0, 2, 3e-4).unwrap();
+        assert!(net.solve().is_err());
+        // A floating island next to an anchored part.
+        let mut net = ThermalNetwork::new(4);
+        net.add_resistance(0, 1, 1.0).unwrap();
+        net.add_resistance(2, 3, 1.0).unwrap();
+        net.set_fixed_temperature(0, 300.0).unwrap();
+        assert!(net.solve().is_err());
+    }
+
+    #[test]
+    fn test_network_tiny_conductances_solve() {
+        // R = 1e14 K/W → g = 1e-14, below hisab's absolute pivot threshold
+        // without row scaling.
+        let mut net = ThermalNetwork::new(3);
+        net.add_resistance(0, 1, 1e14).unwrap();
+        net.add_resistance(1, 2, 1e14).unwrap();
+        net.set_fixed_temperature(0, 400.0).unwrap();
+        net.set_fixed_temperature(2, 300.0).unwrap();
+        let t = net.solve().unwrap();
+        assert!((t[1] - 350.0).abs() < 1e-9);
     }
 }

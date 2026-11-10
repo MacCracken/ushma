@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, UshmaError};
 use crate::state::GAS_CONSTANT;
+use crate::validate::{finite_gt, invalid_param};
 
 /// A thermodynamic state point in a cycle.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -111,20 +112,19 @@ pub fn adiabatic_work(moles: f64, cv: f64, t1: f64, t2: f64) -> f64 {
 /// Adiabatic temperature from pressure ratio: T₂ = T₁·(P₂/P₁)^((γ-1)/γ).
 ///
 /// For isentropic compression/expansion in Brayton cycles.
+#[inline]
 pub fn adiabatic_temp_from_pressure(t1: f64, p1: f64, p2: f64, gamma: f64) -> Result<f64> {
-    if t1 <= 0.0 {
+    if !finite_gt(t1, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t1 });
     }
-    if p1 <= 0.0 {
+    if !finite_gt(p1, 0.0) {
         return Err(UshmaError::InvalidPressure { pascals: p1 });
     }
-    if p2 <= 0.0 {
+    if !finite_gt(p2, 0.0) {
         return Err(UshmaError::InvalidPressure { pascals: p2 });
     }
-    if gamma <= 1.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("gamma {gamma} must be > 1"),
-        });
+    if !finite_gt(gamma, 1.0) {
+        return Err(invalid_param(format_args!("gamma {gamma} must be > 1")));
     }
     Ok(t1 * (p2 / p1).powf((gamma - 1.0) / gamma))
 }
@@ -154,32 +154,30 @@ pub fn otto_cycle(
     gamma: f64,
     moles: f64,
 ) -> Result<CycleResult> {
-    if t1 <= 0.0 {
+    if !finite_gt(t1, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t1 });
     }
-    if p1 <= 0.0 {
+    if !finite_gt(p1, 0.0) {
         return Err(UshmaError::InvalidPressure { pascals: p1 });
     }
-    if compression_ratio <= 1.0 {
+    if !finite_gt(compression_ratio, 1.0) {
         return Err(UshmaError::InvalidCompressionRatio {
             ratio: compression_ratio,
         });
     }
-    if gamma <= 1.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("gamma {gamma} must be > 1"),
-        });
+    if !finite_gt(gamma, 1.0) {
+        return Err(invalid_param(format_args!("gamma {gamma} must be > 1")));
     }
-    if moles <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("moles {moles} must be positive"),
-        });
+    if !finite_gt(moles, 0.0) {
+        return Err(invalid_param(format_args!(
+            "moles {moles} must be positive"
+        )));
     }
 
-    if heat_in <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("heat_in {heat_in} J/mol must be positive"),
-        });
+    if !finite_gt(heat_in, 0.0) {
+        return Err(invalid_param(format_args!(
+            "heat_in {heat_in} J/mol must be positive"
+        )));
     }
 
     let r = compression_ratio;
@@ -287,18 +285,18 @@ pub fn diesel_cycle(
     gamma: f64,
     moles: f64,
 ) -> Result<CycleResult> {
-    if t1 <= 0.0 {
+    if !finite_gt(t1, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t1 });
     }
-    if p1 <= 0.0 {
+    if !finite_gt(p1, 0.0) {
         return Err(UshmaError::InvalidPressure { pascals: p1 });
     }
-    if compression_ratio <= 1.0 {
+    if !finite_gt(compression_ratio, 1.0) {
         return Err(UshmaError::InvalidCompressionRatio {
             ratio: compression_ratio,
         });
     }
-    if cutoff_ratio <= 1.0 {
+    if !finite_gt(cutoff_ratio, 1.0) {
         return Err(UshmaError::InvalidCutoffRatio {
             ratio: cutoff_ratio,
         });
@@ -310,15 +308,13 @@ pub fn diesel_cycle(
             ),
         });
     }
-    if gamma <= 1.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("gamma {gamma} must be > 1"),
-        });
+    if !finite_gt(gamma, 1.0) {
+        return Err(invalid_param(format_args!("gamma {gamma} must be > 1")));
     }
-    if moles <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("moles {moles} must be positive"),
-        });
+    if !finite_gt(moles, 0.0) {
+        return Err(invalid_param(format_args!(
+            "moles {moles} must be positive"
+        )));
     }
 
     let r = compression_ratio;
@@ -425,29 +421,27 @@ pub fn brayton_cycle(
     gamma: f64,
     moles: f64,
 ) -> Result<CycleResult> {
-    if t1 <= 0.0 {
+    if !finite_gt(t1, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t1 });
     }
-    if p1 <= 0.0 {
+    if !finite_gt(p1, 0.0) {
         return Err(UshmaError::InvalidPressure { pascals: p1 });
     }
-    if t3 <= 0.0 {
+    if !finite_gt(t3, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t3 });
     }
-    if pressure_ratio <= 1.0 {
+    if !finite_gt(pressure_ratio, 1.0) {
         return Err(UshmaError::InvalidPressureRatio {
             ratio: pressure_ratio,
         });
     }
-    if gamma <= 1.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("gamma {gamma} must be > 1"),
-        });
+    if !finite_gt(gamma, 1.0) {
+        return Err(invalid_param(format_args!("gamma {gamma} must be > 1")));
     }
-    if moles <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("moles {moles} must be positive"),
-        });
+    if !finite_gt(moles, 0.0) {
+        return Err(invalid_param(format_args!(
+            "moles {moles} must be positive"
+        )));
     }
 
     let rp = pressure_ratio;
@@ -463,7 +457,7 @@ pub fn brayton_cycle(
     let t2 = t1 * rp.powf((gamma - 1.0) / gamma);
     let v2 = n * GAS_CONSTANT * t2 / p2;
 
-    if t3 <= t2 {
+    if !finite_gt(t3, t2) {
         return Err(UshmaError::InvalidCycleParameter {
             reason: format!("turbine inlet T3={t3} K must exceed compressor outlet T2={t2:.1} K"),
         });
@@ -561,15 +555,15 @@ pub fn rankine_cycle(
 ) -> Result<CycleResult> {
     use crate::steam;
 
-    if p_condenser <= 0.0 {
+    if !finite_gt(p_condenser, 0.0) {
         return Err(UshmaError::InvalidPressure {
             pascals: p_condenser,
         });
     }
-    if p_boiler <= 0.0 {
+    if !finite_gt(p_boiler, 0.0) {
         return Err(UshmaError::InvalidPressure { pascals: p_boiler });
     }
-    if p_boiler <= p_condenser {
+    if !finite_gt(p_boiler, p_condenser) {
         return Err(UshmaError::InvalidCycleParameter {
             reason: format!(
                 "boiler pressure {p_boiler} Pa must exceed condenser pressure {p_condenser} Pa"
@@ -622,8 +616,10 @@ pub fn rankine_cycle(
             props.specific_volume,
         )
     } else {
-        // Superheated at condenser pressure (unusual)
-        (sat_cond.h_g, sat_cond.temperature, sat_cond.v_g)
+        // Superheated turbine exhaust: find T where s(T, p_cond) = s4.
+        // (Treating it as saturated vapor would understate h4 and overstate w_turbine.)
+        let sh4 = steam::superheated_by_entropy(p_condenser, s4)?;
+        (sh4.specific_enthalpy, sh4.temperature, sh4.specific_volume)
     };
 
     let q_in = h3 - h2;
@@ -707,17 +703,17 @@ pub struct RefrigerationResult {
 pub fn refrigeration_cycle(p_evaporator: f64, p_condenser: f64) -> Result<RefrigerationResult> {
     use crate::steam;
 
-    if p_evaporator <= 0.0 {
+    if !finite_gt(p_evaporator, 0.0) {
         return Err(UshmaError::InvalidPressure {
             pascals: p_evaporator,
         });
     }
-    if p_condenser <= 0.0 {
+    if !finite_gt(p_condenser, 0.0) {
         return Err(UshmaError::InvalidPressure {
             pascals: p_condenser,
         });
     }
-    if p_condenser <= p_evaporator {
+    if !finite_gt(p_condenser, p_evaporator) {
         return Err(UshmaError::InvalidCycleParameter {
             reason: format!(
                 "condenser pressure {p_condenser} Pa must exceed evaporator pressure {p_evaporator} Pa"
@@ -734,29 +730,10 @@ pub fn refrigeration_cycle(p_evaporator: f64, p_condenser: f64) -> Result<Refrig
     let t1 = sat_evap.temperature;
     let v1 = sat_evap.v_g;
 
-    // State 2: isentropic compression to condenser pressure
-    // Find T where s(T, P_cond) = s1 via hisab bisection
-    let s_target = s1;
-    let t_lo_search = sat_cond.temperature + 1.0;
-    let mut t_hi_search = sat_cond.temperature + 200.0;
-    if steam::superheated_lookup(t_hi_search, p_condenser).is_err() {
-        t_hi_search = sat_cond.temperature + 100.0;
-    }
-
-    let p_cond = p_condenser;
-    let t2 = hisab::num::bisection(
-        |t| {
-            steam::superheated_lookup(t, p_cond)
-                .map(|sh| sh.specific_entropy - s_target)
-                .unwrap_or(-1.0) // below range → negative → push higher
-        },
-        t_lo_search,
-        t_hi_search,
-        0.01,
-        50,
-    )
-    .unwrap_or(0.5 * (t_lo_search + t_hi_search));
-    let sh2 = steam::superheated_lookup(t2, p_condenser)?;
+    // State 2: isentropic compression to condenser pressure, s2 = s1.
+    // Errors (rather than guessing) when the exit state is outside the table.
+    let sh2 = steam::superheated_by_entropy(p_condenser, s1)?;
+    let t2 = sh2.temperature;
     let h2 = sh2.specific_enthalpy;
     let s2 = s1;
     let v2 = sh2.specific_volume;
@@ -823,8 +800,10 @@ pub fn refrigeration_cycle(p_evaporator: f64, p_condenser: f64) -> Result<Refrig
             ],
             heat_in: q_evap,
             heat_out: q_cond,
-            net_work: w_comp,
+            // Work is consumed, so net work is negative (heat_in − heat_out = net_work).
+            net_work: -w_comp,
             efficiency: cop_ref,
+            // No expander (throttle valve); 1.0 by convention.
             back_work_ratio: 1.0,
             gamma: 0.0,
         },
@@ -853,26 +832,36 @@ pub struct CycleComparisonEntry {
     pub net_work: f64,
     /// Back-work ratio.
     pub back_work_ratio: f64,
-    /// Carnot efficiency at the same temperature limits.
+    /// Carnot limit at the same temperatures: efficiency 1 − T_L/T_H for heat
+    /// engines, COP T_L/(T_H − T_L) for refrigeration.
     pub carnot_efficiency: f64,
-    /// Second-law efficiency: η / η_carnot.
+    /// Second-law efficiency: η / η_carnot (COP / COP_carnot for refrigeration).
     pub second_law_efficiency: f64,
 }
 
 /// Compare multiple cycles against their Carnot limits.
 ///
 /// Each entry is `(kind, result, t_high, t_low)` where t_high/t_low
-/// define the Carnot reference temperatures (K).
+/// define the Carnot reference temperatures (K). Entries with non-physical
+/// limits (T_L ≤ 0, T_H ≤ T_L, NaN) get a Carnot limit and second-law
+/// efficiency of 0.
+///
+/// The physics follows `result.kind`: refrigeration results (whose
+/// `efficiency` is a COP) are compared with the Carnot COP T_L/(T_H − T_L),
+/// all other cycles with the Carnot efficiency 1 − T_L/T_H.
+#[must_use]
 pub fn compare_cycles(
     entries: &[(CycleKind, &CycleResult, f64, f64)],
 ) -> Vec<CycleComparisonEntry> {
     entries
         .iter()
         .map(|(kind, result, t_high, t_low)| {
-            let eta_carnot = if *t_high > *t_low && *t_high > 0.0 {
-                1.0 - t_low / t_high
-            } else {
+            let eta_carnot = if !finite_gt(*t_low, 0.0) || !finite_gt(*t_high, *t_low) {
                 0.0
+            } else if result.kind == CycleKind::Refrigeration {
+                t_low / (t_high - t_low)
+            } else {
+                1.0 - t_low / t_high
             };
             let eta_second = if eta_carnot > 0.0 {
                 result.efficiency / eta_carnot
@@ -893,27 +882,47 @@ pub fn compare_cycles(
 
 // --- Diagram data generation ---
 
+/// Upper bound on the up-front allocation for diagram output.
+const MAX_DIAGRAM_PREALLOC: usize = 1 << 16;
+
 /// Generate T-s diagram points for a cycle.
 ///
-/// Returns interpolated points along each process path.
+/// Returns `points_per_process` (at least 2) points along each process path,
+/// entropy interpolated linearly between the state points.
 /// - Isentropic: vertical line (constant s, T varies)
-/// - Isochoric: curve from (s1,T1) to (s2,T2) via ds = nCv·ln(T/T_start)
-/// - Isobaric: curve from (s1,T1) to (s2,T2) via ds = nCp·ln(T/T_start)
+/// - Isothermal: horizontal line
+/// - Isochoric / isobaric on an ideal gas (`gamma > 0`): ds = C·dT/T with
+///   constant C, so T = T_a·(T_b/T_a)^f — the exponential curve of the real path
+/// - Steam cycles (`gamma == 0`): straight lines between state points (the
+///   saturation dome is not traced)
 ///
 /// X-axis = entropy (J/K), Y-axis = temperature (K).
+#[must_use]
 pub fn cycle_ts_diagram(result: &CycleResult, points_per_process: usize) -> Vec<DiagramPoint> {
     let n = result.state_points.len();
     let pts = points_per_process.max(2);
-    let mut out = Vec::with_capacity(n * pts);
+    let ideal_gas = result.gamma > 0.0;
+    let mut out = Vec::with_capacity(n.saturating_mul(pts).min(MAX_DIAGRAM_PREALLOC));
 
     for i in 0..n {
         let a = &result.state_points[i];
         let b = &result.state_points[(i + 1) % n];
+        let log_t = ideal_gas
+            && matches!(
+                result.processes.get(i),
+                Some(ProcessKind::Isochoric | ProcessKind::Isobaric)
+            )
+            && finite_gt(a.temperature, 0.0)
+            && finite_gt(b.temperature, 0.0);
 
         for j in 0..pts {
             let frac = j as f64 / (pts - 1) as f64;
-            let t = a.temperature + frac * (b.temperature - a.temperature);
             let s = a.entropy + frac * (b.entropy - a.entropy);
+            let t = if log_t {
+                a.temperature * (b.temperature / a.temperature).powf(frac)
+            } else {
+                a.temperature + frac * (b.temperature - a.temperature)
+            };
             out.push(DiagramPoint { x: s, y: t });
         }
     }
@@ -923,50 +932,56 @@ pub fn cycle_ts_diagram(result: &CycleResult, points_per_process: usize) -> Vec<
 
 /// Generate P-v diagram points for a cycle.
 ///
-/// Returns interpolated points along each process path.
-/// - Isentropic: curve via PV^γ = const → P = P_a·(V_a/V)^γ
+/// Returns `points_per_process` (at least 2) points along each process path.
+/// - Isentropic: polytropic curve P = P_a·(V_a/V)^k through both state points,
+///   k = ln(P_b/P_a)/ln(V_a/V_b) (equals γ for an ideal gas, and also works for
+///   steam); a vertical line when V does not change (liquid pump)
 /// - Isochoric: vertical line (constant V, P varies)
 /// - Isobaric: horizontal line (constant P, V varies)
+/// - Isothermal: hyperbola P = P_a·V_a/V
+/// - Other / unknown: straight line
 ///
 /// X-axis = volume (m³), Y-axis = pressure (Pa).
+#[must_use]
 pub fn cycle_pv_diagram(result: &CycleResult, points_per_process: usize) -> Vec<DiagramPoint> {
     let n = result.state_points.len();
     let pts = points_per_process.max(2);
-    let gamma = result.gamma;
-    let mut out = Vec::with_capacity(n * pts);
+    let mut out = Vec::with_capacity(n.saturating_mul(pts).min(MAX_DIAGRAM_PREALLOC));
 
     for i in 0..n {
         let a = &result.state_points[i];
         let b = &result.state_points[(i + 1) % n];
-        let process = result.processes[i];
+        let positive = finite_gt(a.volume, 0.0)
+            && finite_gt(b.volume, 0.0)
+            && finite_gt(a.pressure, 0.0)
+            && finite_gt(b.pressure, 0.0);
+        let ln_v = if positive {
+            (a.volume / b.volume).ln()
+        } else {
+            0.0
+        };
+        let process = result.processes.get(i).copied();
 
         for j in 0..pts {
             let frac = j as f64 / (pts - 1) as f64;
+            let v = a.volume + frac * (b.volume - a.volume);
+            let p_linear = a.pressure + frac * (b.pressure - a.pressure);
 
-            let (v, p) = match process {
-                ProcessKind::Isentropic => {
-                    // PV^γ = const → P = P_a * (V_a/V)^γ
-                    let v = a.volume + frac * (b.volume - a.volume);
-                    let p = a.pressure * (a.volume / v).powf(gamma);
-                    (v, p)
+            let p = match process {
+                Some(ProcessKind::Isentropic) if ln_v.abs() > 1e-12 => {
+                    let k = (b.pressure / a.pressure).ln() / ln_v;
+                    a.pressure * (a.volume / v).powf(k)
                 }
-                ProcessKind::Isochoric => {
-                    // V constant, P varies linearly with T
-                    let v = a.volume;
-                    let p = a.pressure + frac * (b.pressure - a.pressure);
-                    (v, p)
+                Some(ProcessKind::Isochoric) => {
+                    out.push(DiagramPoint {
+                        x: a.volume,
+                        y: p_linear,
+                    });
+                    continue;
                 }
-                ProcessKind::Isobaric => {
-                    let v = a.volume + frac * (b.volume - a.volume);
-                    let p = a.pressure;
-                    (v, p)
-                }
-                _ => {
-                    // Linear fallback for other process types
-                    let v = a.volume + frac * (b.volume - a.volume);
-                    let p = a.pressure + frac * (b.pressure - a.pressure);
-                    (v, p)
-                }
+                Some(ProcessKind::Isobaric) => a.pressure,
+                Some(ProcessKind::Isothermal) if positive => a.pressure * a.volume / v,
+                _ => p_linear,
             };
 
             out.push(DiagramPoint { x: v, y: p });
@@ -1403,10 +1418,12 @@ mod tests {
     fn test_refrigeration_energy_balance() {
         let r = refrigeration_cycle(7_384.0, 47_390.0).unwrap();
         let c = &r.cycle;
-        // Q_cond = Q_evap + W (within tolerance for approximate state 2)
-        let balance = (c.heat_out - c.heat_in - c.net_work).abs();
+        // Same first-law identity as every other cycle: Q_in − Q_out = W_net,
+        // with W_net < 0 because the compressor consumes work.
+        assert!(c.net_work < 0.0);
+        let balance = (c.heat_in - c.heat_out - c.net_work).abs();
         assert!(
-            balance / c.heat_out < 0.05,
+            balance / c.heat_out < 1e-9,
             "Refrigeration energy balance: {balance}"
         );
     }
@@ -1454,5 +1471,167 @@ mod tests {
             assert!(entry.second_law_efficiency > 0.0);
             assert!(entry.carnot_efficiency > entry.efficiency);
         }
+    }
+
+    // --- Regression tests from the 1.4.0 audit ---
+
+    #[cfg(feature = "steam")]
+    #[test]
+    fn test_rankine_superheated_turbine_exhaust() {
+        // s3 at (500 kPa, 573.15 K) exceeds s_g at 100 kPa, so the exhaust is
+        // superheated. It used to be treated as saturated vapor (η = 14.7 %).
+        // IF97: T4 = 391.95 K, h4 = 2714.2 kJ/kg, η = 13.22 %.
+        let r = rankine_cycle(100_000.0, 500_000.0, Some(573.15)).unwrap();
+        let s4 = &r.state_points[3];
+        assert!(
+            (s4.temperature - 391.95).abs() < 1.0,
+            "T4 = {}",
+            s4.temperature
+        );
+        assert!(
+            (s4.enthalpy - 2_714_200.0).abs() < 3_000.0,
+            "h4 = {}",
+            s4.enthalpy
+        );
+        assert!(
+            (r.efficiency - 0.1322).abs() < 0.002,
+            "η = {}",
+            r.efficiency
+        );
+    }
+
+    #[cfg(feature = "steam")]
+    #[test]
+    fn test_rankine_at_exact_tier_pressure() {
+        // 2 MPa / 523.15 K is a table row; it used to be rejected.
+        let r = rankine_cycle(10_000.0, 2_000_000.0, Some(523.15)).unwrap();
+        assert!(
+            r.efficiency > 0.25 && r.efficiency < 0.40,
+            "{}",
+            r.efficiency
+        );
+    }
+
+    #[cfg(feature = "steam")]
+    #[test]
+    fn test_refrigeration_respects_carnot_limit() {
+        // The compressor-exit search used to fall back to the bracket midpoint,
+        // giving COP 6.49 > Carnot 4.0. IF97: T2 = 677.0 K, COP = 2.877.
+        let r = refrigeration_cycle(3_169.0, 100_000.0).unwrap();
+        let t2 = r.cycle.state_points[1].temperature;
+        assert!((t2 - 677.0).abs() < 2.0, "T2 = {t2}");
+        assert!(
+            (r.cop_refrigeration - 2.877).abs() < 0.03,
+            "{}",
+            r.cop_refrigeration
+        );
+        let t_cold = r.cycle.state_points[0].temperature;
+        let t_hot = r.cycle.state_points[2].temperature;
+        assert!(r.cop_refrigeration < t_cold / (t_hot - t_cold));
+    }
+
+    #[test]
+    fn test_ideal_gas_cycles_first_law() {
+        let cycles = [
+            otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).unwrap(),
+            diesel_cycle(300.0, 101_325.0, 18.0, 2.0, 1.4, 1.0).unwrap(),
+            brayton_cycle(300.0, 101_325.0, 10.0, 1400.0, 1.4, 1.0).unwrap(),
+        ];
+        for c in &cycles {
+            let balance = c.heat_in - c.heat_out - c.net_work;
+            assert!(balance.abs() < 1e-6 * c.heat_in, "{:?}: {balance}", c.kind);
+        }
+    }
+
+    #[test]
+    fn test_compare_cycles_refrigeration_uses_carnot_cop() {
+        let mut refrig = otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).unwrap();
+        refrig.kind = CycleKind::Refrigeration;
+        refrig.efficiency = 5.0; // COP
+        let cmp = compare_cycles(&[(CycleKind::Refrigeration, &refrig, 300.0, 250.0)]);
+        // COP_carnot = 250 / 50 = 5 → η_II = 1.
+        assert!((cmp[0].carnot_efficiency - 5.0).abs() < 1e-12);
+        assert!((cmp[0].second_law_efficiency - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_compare_cycles_rejects_nonphysical_limits() {
+        let otto = otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).unwrap();
+        for (th, tl) in [
+            (300.0, -100.0),
+            (300.0, 0.0),
+            (250.0, 300.0),
+            (f64::NAN, 300.0),
+        ] {
+            let cmp = compare_cycles(&[(CycleKind::Otto, &otto, th, tl)]);
+            assert_eq!(cmp[0].carnot_efficiency, 0.0, "({th}, {tl})");
+            assert_eq!(cmp[0].second_law_efficiency, 0.0);
+        }
+    }
+
+    #[test]
+    fn test_ts_diagram_isochoric_is_exponential() {
+        // Otto 2→3 is isochoric: ln T is linear in s, so the midpoint is √(T2·T3).
+        let otto = otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).unwrap();
+        let pts = cycle_ts_diagram(&otto, 3);
+        let t2 = otto.state_points[1].temperature;
+        let t3 = otto.state_points[2].temperature;
+        let mid = pts[3 + 1]; // process index 1, middle point
+        assert!(
+            (mid.y - (t2 * t3).sqrt()).abs() < 1e-6,
+            "{} vs {}",
+            mid.y,
+            (t2 * t3).sqrt()
+        );
+    }
+
+    #[cfg(feature = "steam")]
+    #[test]
+    fn test_pv_diagram_steam_isentropes_hit_both_endpoints() {
+        // gamma = 0 for steam; the isentropic segments used to stay flat at P_a.
+        let r = rankine_cycle(10_000.0, 2_000_000.0, Some(623.15)).unwrap();
+        let n = 10;
+        let pts = cycle_pv_diagram(&r, n);
+        let turbine = &pts[2 * n..3 * n]; // 3 → 4
+        let s3 = &r.state_points[2];
+        let s4 = &r.state_points[3];
+        assert!((turbine[0].y / s3.pressure - 1.0).abs() < 1e-9);
+        assert!((turbine[n - 1].y / s4.pressure - 1.0).abs() < 1e-9);
+        assert!(turbine.windows(2).all(|w| w[1].y <= w[0].y));
+    }
+
+    #[test]
+    fn test_pv_diagram_ideal_gas_isentrope_matches_gamma() {
+        let otto = otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).unwrap();
+        let pts = cycle_pv_diagram(&otto, 5);
+        let a = &otto.state_points[0];
+        for p in &pts[..5] {
+            let expected = a.pressure * (a.volume / p.x).powf(1.4);
+            assert!((p.y / expected - 1.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn test_diagrams_tolerate_short_process_list() {
+        let mut otto = otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).unwrap();
+        otto.processes.truncate(1);
+        assert_eq!(cycle_pv_diagram(&otto, 4).len(), 16);
+        assert_eq!(cycle_ts_diagram(&otto, 4).len(), 16);
+    }
+
+    #[test]
+    fn test_cycles_reject_nan_and_inf() {
+        assert!(otto_cycle(f64::NAN, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).is_err());
+        assert!(otto_cycle(300.0, 101_325.0, f64::INFINITY, 50_000.0, 1.4, 1.0).is_err());
+        assert!(diesel_cycle(300.0, 101_325.0, 18.0, f64::NAN, 1.4, 1.0).is_err());
+        assert!(brayton_cycle(300.0, 101_325.0, 10.0, 1400.0, f64::NAN, 1.0).is_err());
+    }
+
+    #[cfg(feature = "steam")]
+    #[test]
+    fn test_steam_cycles_reject_nan() {
+        assert!(rankine_cycle(f64::NAN, 1e6, None).is_err());
+        assert!(rankine_cycle(1e4, 1e6, Some(f64::NAN)).is_err());
+        assert!(refrigeration_cycle(f64::NAN, 1e5).is_err());
     }
 }

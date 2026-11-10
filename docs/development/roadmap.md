@@ -1,6 +1,6 @@
 # Ushma Roadmap
 
-> **Ushma** is the thermodynamics simulation crate. Math foundations come from [hisab](https://github.com/MacCracken/hisab). Body contacts come from [impetus](https://github.com/MacCracken/impetus).
+> **Ushma** is the thermodynamics simulation crate. Math foundations come from [hisab](https://github.com/MacCracken/hisab).
 
 ## Scope
 
@@ -145,25 +145,48 @@ Ushma does NOT own:
 - [x] Add `#[tracing::instrument]` to 23 core functions
 - [x] Baseline benchmarks (57 functions, 14 runs in history)
 
-## Cross-Crate Bridges
+## V1.4 — Toolchain Update & Correctness Audit (done)
 
-- [ ] **`bridge.rs` module** — primitive-value conversions for cross-crate thermodynamics
-- [ ] **bijli bridge**: Joule heating power (W) → temperature rise rate (K/s); EM absorption → volumetric heat source
-- [ ] **kimiya bridge**: reaction enthalpy (J/mol) → heat release rate; equilibrium constant → temperature-dependent yield
-- [ ] **dravya bridge**: temperature (K) → thermal expansion strain; thermal gradient (K/m) → thermal stress (Pa)
-- [ ] **badal bridge**: altitude (m), lapse rate (K/m) → atmospheric temperature; humidity ratio → wet-bulb temperature
-- [ ] **pravash bridge**: fluid velocity → convective heat transfer coefficient; turbulent kinetic energy → eddy thermal diffusivity
+- [x] MSRV 1.89 → 1.99 (latest stable), edition 2024; reqwest 0.13, criterion 0.8, hisab 1.4; GitHub Actions to current majors
+- [x] NaN/±∞ rejected by every positivity/range guard (`validate::finite_gt` / `finite_ge`)
+- [x] Steam tables regenerated from IAPWS-IF97; exact Region 4 saturation line; ln-P superheated interpolation; `superheated_by_entropy`
+- [x] Rankine superheated exhaust, refrigeration compressor exit, refrigeration second-law efficiency, refrigeration net-work sign
+- [x] T-s / P-v diagrams follow the real process paths (incl. steam isentropes)
+- [x] Phase boundaries through triple/boiling/critical points; sublimation curve; CO₂ at 1 atm
+- [x] Perpendicular-plate view factor formula; stable coaxial-disk and small-plate view factors
+- [x] Explicit FD stability with convective boundaries (Fo·(1+Bi) ≤ 0.5); adaptive-step round-off; 2D convective BC; network connectivity check
+- [x] Debye Cv at low T; equilibrium-constant overflow (`ln_equilibrium_constant`); Pitzer Z validity; exact R
+
+## Backlog (from the 1.4 audit, demand-gated)
+
+- [ ] 2D boundary nodes: second-order ghost-node treatment (insulated/convective are first-order at the wall; 1D is second-order)
+- [ ] Gauss-Seidel: residual-based stopping criterion and SOR acceleration
+- [ ] `ThermalGrid2D` flat `Vec<f64>` storage and reusable Crank-Nicolson scratch buffers (both change public struct layout → breaking)
+- [ ] Dittus-Boelter cooling exponent (n = 0.3); laminar / flat-plate branch for `bridge::velocity_to_convection_coefficient`
+- [ ] Tropopause handling in `bridge::altitude_to_temperature`
+- [ ] Dedicated network error variant for `ai` (currently `InvalidParameter`)
+- [ ] Steam: denser superheated grid (5 → 10 MPa gap limits h to ~0.2 %), compressed-liquid region, saturation dome in T-s diagrams
+- [ ] Phase: sloped melting curve (water's negative dT/dP); review ETHANOL triple-point pressure and MERCURY critical pressure data
+
+## Cross-Crate Bridges (done — 1.2.0, sharira in 1.3.0)
+
+- [x] **`bridge.rs` module** — primitive-value conversions for cross-crate thermodynamics
+- [x] **bijli bridge**: Joule heating power (W) → temperature rise rate (K/s); EM absorption → volumetric heat source
+- [x] **kimiya bridge**: reaction enthalpy (J/mol) → heat release rate; equilibrium constant → temperature-dependent yield
+- [x] **dravya bridge**: temperature (K) → thermal expansion strain; thermal gradient (K/m) → thermal stress (Pa)
+- [x] **badal bridge**: altitude (m), lapse rate (K/m) → atmospheric temperature; humidity ratio → wet-bulb temperature
+- [x] **pravash bridge**: fluid velocity → convective heat transfer coefficient; turbulent kinetic energy → eddy thermal diffusivity
 
 ---
 
-## Soorat Integration (rendering visualization)
+## Soorat Integration (rendering visualization) (done — 1.2.0)
 
-- [ ] **`integration/soorat.rs` module** — feature-gated `soorat-compat`, visualization data structures for soorat to consume
-- [ ] **Thermal grid heatmap**: Expose `ThermalGridVisualization` from `ThermalGrid2D` (temperature values, dimensions, spacing, min/max bounds) for 2D heatmap rendering
-- [ ] **1D temperature profile**: Expose `TemperatureProfile` from `ThermalGrid1D` (node temperatures, spacing, boundary conditions) for line/ribbon rendering
-- [ ] **Cycle diagrams**: Expose `CycleDiagramData` wrapping `cycle_ts_diagram()` / `cycle_pv_diagram()` output (Vec<DiagramPoint>, CycleKind, state points) for T-s and P-v plot rendering
-- [ ] **Thermal network graph**: Expose `ThermalNetworkVisualization` from `ThermalNetwork` (node positions/temperatures, resistance edges) for node-link rendering
-- [ ] **Heat flux vectors**: Expose `HeatFluxField` — grid of flux vectors from `ThermalGrid2D` gradients for arrow/streamline rendering
+- [x] **`integration/soorat.rs` module** — feature-gated `soorat-compat`, visualization data structures for soorat to consume
+- [x] **Thermal grid heatmap**: Expose `ThermalGridVisualization` from `ThermalGrid2D` (temperature values, dimensions, spacing, min/max bounds) for 2D heatmap rendering
+- [x] **1D temperature profile**: Expose `TemperatureProfile` from `ThermalGrid1D` (node temperatures, spacing, boundary conditions) for line/ribbon rendering
+- [x] **Cycle diagrams**: Expose `CycleDiagramData` wrapping `cycle_ts_diagram()` / `cycle_pv_diagram()` output (Vec<DiagramPoint>, CycleKind, state points) for T-s and P-v plot rendering
+- [x] **Thermal network graph**: Expose `ThermalNetworkVisualization` from `ThermalNetwork` (node positions/temperatures, resistance edges) for node-link rendering
+- [x] **Heat flux vectors**: Expose `HeatFluxField` — grid of flux vectors from `ThermalGrid2D` gradients for arrow/streamline rendering
 
 ---
 

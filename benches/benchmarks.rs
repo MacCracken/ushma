@@ -1,6 +1,8 @@
 //! Criterion benchmarks for ushma thermodynamics.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 
 use ushma::chem;
 use ushma::cycle;
@@ -468,6 +470,64 @@ fn bench_phase_lookup(c: &mut Criterion) {
     });
 }
 
+// --- Benchmarks added in 1.4.0 (audit fixes) ---
+
+fn bench_view_factor_perpendicular(c: &mut Criterion) {
+    c.bench_function("transfer/view_factor_perpendicular", |b| {
+        b.iter(|| {
+            transfer::view_factor_perpendicular_plates(
+                black_box(1.0),
+                black_box(1.0),
+                black_box(2.0),
+            )
+        });
+    });
+}
+
+fn bench_saturation_pressure(c: &mut Criterion) {
+    c.bench_function("steam/saturation_pressure", |b| {
+        b.iter(|| steam::saturation_pressure(black_box(450.0)));
+    });
+}
+
+fn bench_superheated_between_tiers(c: &mut Criterion) {
+    c.bench_function("steam/superheated_between_tiers", |b| {
+        b.iter(|| steam::superheated_lookup(black_box(573.15), black_box(750_000.0)));
+    });
+}
+
+fn bench_superheated_by_entropy(c: &mut Criterion) {
+    c.bench_function("steam/superheated_by_entropy", |b| {
+        b.iter(|| steam::superheated_by_entropy(black_box(100_000.0), black_box(8000.0)));
+    });
+}
+
+fn bench_debye_cv_low_t(c: &mut Criterion) {
+    c.bench_function("stat/debye_cv_low_t", |b| {
+        b.iter(|| stat::debye_cv(black_box(2230.0), black_box(3.0)));
+    });
+}
+
+fn bench_adaptive_1d(c: &mut Criterion) {
+    let mut g = numerical::ThermalGrid1D::new(
+        51,
+        0.1,
+        1e-5,
+        300.0,
+        numerical::BoundaryCondition::Fixed(400.0),
+        numerical::BoundaryCondition::Convective {
+            h: 50.0,
+            t_fluid: 290.0,
+            k: 15.0,
+        },
+    )
+    .unwrap();
+    let dt = 4.0 * g.max_stable_dt();
+    c.bench_function("numerical/adaptive_1d_4substeps", |b| {
+        b.iter(|| g.step_adaptive(black_box(dt)));
+    });
+}
+
 criterion_group!(
     benches,
     // transfer
@@ -537,6 +597,13 @@ criterion_group!(
     bench_crank_nicolson_1d_step,
     bench_gauss_seidel_2d,
     bench_thermal_network,
+    // added in 1.4.0
+    bench_view_factor_perpendicular,
+    bench_saturation_pressure,
+    bench_superheated_between_tiers,
+    bench_superheated_by_entropy,
+    bench_debye_cv_low_t,
+    bench_adaptive_1d,
 );
 
 fn bench_mb_rms_speed(c: &mut Criterion) {

@@ -6,6 +6,33 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Min and max over the finite values; `(NaN, NaN)` when there are none
+/// (empty field or a diverged solver), so renderers never see ±f64::MAX.
+#[cfg(feature = "numerical")]
+fn finite_bounds(values: impl Iterator<Item = f64>) -> (f64, f64) {
+    let (lo, hi) = values
+        .filter(|t| t.is_finite())
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), t| {
+            (lo.min(t), hi.max(t))
+        });
+    if lo <= hi {
+        (lo, hi)
+    } else {
+        (f64::NAN, f64::NAN)
+    }
+}
+
+/// Temperature at `(ix, iy)`, or NaN if the grid's rows don't cover it.
+#[cfg(feature = "numerical")]
+#[inline]
+fn grid_value(grid: &crate::numerical::ThermalGrid2D, ix: usize, iy: usize) -> f64 {
+    grid.nodes
+        .get(iy)
+        .and_then(|row| row.get(ix))
+        .copied()
+        .unwrap_or(f64::NAN)
+}
+
 // ── Thermal grid heatmap ───────────────────────────────────────────────────
 
 /// A 2D temperature field for heatmap rendering.
@@ -28,22 +55,19 @@ pub struct ThermalGridVisualization {
 #[cfg(feature = "numerical")]
 impl ThermalGridVisualization {
     /// Create from a `ThermalGrid2D`.
+    ///
+    /// Always yields exactly `nx × ny` values; cells missing from a malformed
+    /// grid are NaN. `min_temp`/`max_temp` cover finite values only and are
+    /// NaN when there are none.
     #[must_use]
     pub fn from_grid_2d(grid: &crate::numerical::ThermalGrid2D) -> Self {
-        let mut values = Vec::with_capacity(grid.nx * grid.ny);
-        let mut min_t = f64::MAX;
-        let mut max_t = f64::MIN;
-        for row in &grid.nodes {
-            for &t in row {
-                if t < min_t {
-                    min_t = t;
-                }
-                if t > max_t {
-                    max_t = t;
-                }
-                values.push(t);
+        let mut values = Vec::with_capacity(grid.nx.saturating_mul(grid.ny));
+        for iy in 0..grid.ny {
+            for ix in 0..grid.nx {
+                values.push(grid_value(grid, ix, iy));
             }
         }
+        let (min_t, max_t) = finite_bounds(values.iter().copied());
         Self {
             values,
             dimensions: [grid.nx, grid.ny],
@@ -77,14 +101,15 @@ pub struct TemperatureProfile {
 #[cfg(feature = "numerical")]
 impl TemperatureProfile {
     /// Create from a `ThermalGrid1D`, laid out along a direction.
+    ///
+    /// `min_temp`/`max_temp` cover finite values only and are NaN when there are none.
     #[must_use]
     pub fn from_grid_1d(
         grid: &crate::numerical::ThermalGrid1D,
         origin: [f64; 3],
         direction: [f64; 3],
     ) -> Self {
-        let min_t = grid.nodes.iter().cloned().fold(f64::MAX, f64::min);
-        let max_t = grid.nodes.iter().cloned().fold(f64::MIN, f64::max);
+        let (min_t, max_t) = finite_bounds(grid.nodes.iter().copied());
         Self {
             temperatures: grid.nodes.clone(),
             dx: grid.dx,
@@ -166,9 +191,11 @@ impl CycleDiagramData {
 /// Thermal network for node-link visualization.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThermalNetworkVisualization {
-    /// Temperature at each node (K). Index = node ID.
+    /// Temperature at each node (K). Index = node ID. NaN for nodes without a
+    /// supplied temperature.
     pub node_temperatures: Vec<f64>,
-    /// Resistance edges: `(node_a, node_b, resistance_k_per_w)`.
+    /// Resistance edges as `[node_a, node_b]` pairs; the matching conductance is
+    /// at the same index in `conductances`.
     pub edges: Vec<[usize; 2]>,
     /// Conductance (1/R) for each edge, for line width scaling.
     pub conductances: Vec<f64>,
@@ -183,7 +210,7 @@ impl ThermalNetworkVisualization {
             temperatures[..network.num_nodes].to_vec()
         } else {
             let mut t = temperatures.to_vec();
-            t.resize(network.num_nodes, 0.0);
+            t.resize(network.num_nodes, f64::NAN);
             t
         };
 
@@ -227,33 +254,37 @@ pub struct HeatFluxField {
 impl HeatFluxField {
     /// Compute heat flux from a `ThermalGrid2D` using Fourier's law.
     ///
+    /// Central differences inside, one-sided at the edges. Cells missing from a
+    /// malformed grid read as NaN instead of panicking.
+    ///
     /// `conductivity`: thermal conductivity (W/(m·K)).
     #[must_use]
     pub fn from_grid_2d(grid: &crate::numerical::ThermalGrid2D, conductivity: f64) -> Self {
         let nx = grid.nx;
         let ny = grid.ny;
-        let mut fluxes = Vec::with_capacity(nx * ny);
+        let mut fluxes = Vec::with_capacity(nx.saturating_mul(ny));
         let mut max_mag = 0.0_f64;
 
+        let t = |ix: usize, iy: usize| grid_value(grid, ix, iy);
         for iy in 0..ny {
             for ix in 0..nx {
                 // Central difference for temperature gradient
-                let dt_dx = if ix > 0 && ix < nx - 1 {
-                    (grid.nodes[iy][ix + 1] - grid.nodes[iy][ix - 1]) / (2.0 * grid.dx)
+                let dt_dx = if ix > 0 && ix + 1 < nx {
+                    (t(ix + 1, iy) - t(ix - 1, iy)) / (2.0 * grid.dx)
                 } else if ix == 0 && nx > 1 {
-                    (grid.nodes[iy][ix + 1] - grid.nodes[iy][ix]) / grid.dx
-                } else if ix == nx - 1 && nx > 1 {
-                    (grid.nodes[iy][ix] - grid.nodes[iy][ix - 1]) / grid.dx
+                    (t(ix + 1, iy) - t(ix, iy)) / grid.dx
+                } else if ix + 1 == nx && nx > 1 {
+                    (t(ix, iy) - t(ix - 1, iy)) / grid.dx
                 } else {
                     0.0
                 };
 
-                let dt_dy = if iy > 0 && iy < ny - 1 {
-                    (grid.nodes[iy + 1][ix] - grid.nodes[iy - 1][ix]) / (2.0 * grid.dy)
+                let dt_dy = if iy > 0 && iy + 1 < ny {
+                    (t(ix, iy + 1) - t(ix, iy - 1)) / (2.0 * grid.dy)
                 } else if iy == 0 && ny > 1 {
-                    (grid.nodes[iy + 1][ix] - grid.nodes[iy][ix]) / grid.dy
-                } else if iy == ny - 1 && ny > 1 {
-                    (grid.nodes[iy][ix] - grid.nodes[iy - 1][ix]) / grid.dy
+                    (t(ix, iy + 1) - t(ix, iy)) / grid.dy
+                } else if iy + 1 == ny && ny > 1 {
+                    (t(ix, iy) - t(ix, iy - 1)) / grid.dy
                 } else {
                     0.0
                 };
@@ -423,5 +454,44 @@ mod tests {
         assert!(!diag.pv_points.is_empty());
         assert_eq!(diag.state_points.len(), result.state_points.len());
         assert!(diag.efficiency > 0.0 && diag.efficiency < 1.0);
+    }
+
+    // --- Regression tests from the 1.4.0 audit ---
+
+    #[cfg(feature = "numerical")]
+    #[test]
+    fn malformed_grid_does_not_panic() {
+        let mut grid = crate::numerical::ThermalGrid2D::new(3, 3, 1.0, 1.0, 300.0).unwrap();
+        grid.nodes.pop();
+        grid.nodes[0].pop();
+        let flux = HeatFluxField::from_grid_2d(&grid, 1.0);
+        assert_eq!(flux.fluxes.len(), 9);
+        let viz = ThermalGridVisualization::from_grid_2d(&grid);
+        assert_eq!(viz.values.len(), viz.dimensions[0] * viz.dimensions[1]);
+        assert!(viz.values[8].is_nan());
+        assert_eq!(viz.min_temp, 300.0);
+    }
+
+    #[cfg(feature = "numerical")]
+    #[test]
+    fn empty_or_nan_field_bounds_are_nan() {
+        let bc = crate::numerical::BoundaryCondition::Insulated;
+        let mut g = crate::numerical::ThermalGrid1D::new(3, 1.0, 1e-5, 300.0, bc, bc).unwrap();
+        g.nodes = vec![f64::NAN; 3];
+        let p = TemperatureProfile::from_grid_1d(&g, [0.0; 3], [1.0, 0.0, 0.0]);
+        assert!(p.min_temp.is_nan() && p.max_temp.is_nan());
+        g.nodes.clear();
+        let p = TemperatureProfile::from_grid_1d(&g, [0.0; 3], [1.0, 0.0, 0.0]);
+        assert!(p.min_temp.is_nan() && p.max_temp.is_nan());
+    }
+
+    #[cfg(feature = "numerical")]
+    #[test]
+    fn network_missing_temperatures_are_nan() {
+        let mut net = crate::numerical::ThermalNetwork::new(3);
+        net.add_resistance(0, 1, 2.0).unwrap();
+        let viz = ThermalNetworkVisualization::from_network(&net, &[300.0]);
+        assert_eq!(viz.node_temperatures.len(), 3);
+        assert!(viz.node_temperatures[1].is_nan());
     }
 }

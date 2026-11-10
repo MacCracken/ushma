@@ -5,6 +5,128 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0]
+
+Toolchain/dependency update and a full correctness audit. Several fixes change
+numerical results — see **Changed** for anything a consumer may observe.
+
+### Changed
+- **toolchain** — MSRV 1.89 → 1.99 (latest stable; edition 2024 is still the newest edition). CI MSRV job and release builds use 1.99
+- **deps** — hisab 1.3 → 1.4, reqwest 0.12 → 0.13 (`ai` feature; default TLS is now rustls/aws-lc-rs instead of native-tls), criterion 0.5 → 0.8 (dev; `criterion::black_box` → `std::hint::black_box`), serde 1.0.229, thiserror 2.0.21, tracing 0.1.44, tracing-subscriber 0.3.23, serde_json 1.0.154, tokio 1.54.1
+- **deps** — `ai` feature no longer pulls in `tokio` with `features = ["full"]`; nothing in the crate used it (reqwest still brings its own tokio dependency)
+- **ci** — actions/checkout v4 → v7, codecov-action v4 → v7, action-gh-release v2 → v3 (Node 24 runtimes)
+- **deny** — allow `ISC` and `CDLA-Permissive-2.0` (rustls / webpki-root-certs licenses, `ai` feature only)
+- **validation (all modules)** — every positivity/range guard now also rejects NaN and ±∞. `x <= 0.0` let NaN through (all NaN comparisons are false), so e.g. `carnot_efficiency(NaN, 300.0)`, `otto_cycle(NaN, …)`, `phase_at(NaN, …)` and `saturated_by_temperature(NaN)` returned `Ok(NaN…)`; they now return errors. Implemented with crate-private `validate::finite_gt` / `finite_ge`
+- **steam** — saturated and superheated tables regenerated from IAPWS-IF97 on the same grid. Fixes s_g 4–26 J/(kg·K) low at 523–633 K, h_g ≠ h_f + h_fg by ±1 kJ/kg in 16 rows (made `quality_from_enthalpy(h_g)` fail with x = 1.0005), the critical-point v_c (0.003155 → 1/322 m³/kg), and superheated rows off by up to 7 kJ/kg / 16 J/(kg·K)
+- **steam** — saturation pressure/temperature now come from the exact IF97 Region 4 equations (linear-in-T interpolation was up to 3.3 % off between rows); v_g is interpolated through the smooth ratio P·v_g/T instead of linearly (leave-one-out test on the table: mean error 4.3 % → 0.2 %, worst 15 % → 3.5 %)
+- **steam** — `superheated_lookup` interpolates between pressure tiers in ln P (log-log for v). Linear-in-P interpolation gave v 80 % high at 30 kPa and 12 % high at 150 kPa
+- **steam** — `superheated_lookup` uses the saturated-vapor state as the lowest point of each tier, so states between T_sat and the first tabulated row are covered
+- **cycle** — refrigeration `net_work` is now negative (−W_compressor), matching the documented "positive = work produced" and the first-law identity `heat_in − heat_out = net_work` that every other cycle satisfies. **Behavior change** for consumers reading `net_work` of a refrigeration result
+- **cycle** — `compare_cycles` uses the Carnot COP T_L/(T_H − T_L) for refrigeration results (it divided a COP by the Carnot *efficiency*: COP 5 at 300/250 K gave η_II = 30 instead of 1.0), and reports 0 for non-physical limits (T_L ≤ 0 used to give η_Carnot = 1.33)
+- **cycle** — `cycle_ts_diagram` traces ideal-gas isochoric/isobaric paths as T = T_a·(T_b/T_a)^f (was a straight line: Otto 2→3 midpoint 1892 K vs 1460 K); `cycle_pv_diagram` draws isentropes through both end points with k = ln(P_b/P_a)/ln(V_a/V_b), fixing flat, discontinuous steam-cycle isentropes (γ = 0), and draws isotherms as hyperbolas
+- **phase** — `phase_at` vapor-pressure curve now runs through the triple point, normal boiling point and critical point (piecewise ln P vs 1/T). The single-reference curve overshot P_c for water (26 MPa at T_c) and was 85 % off for CO₂, so e.g. CO₂ at (300 K, 3 MPa) was "Liquid" (now Gas) and water at (640 K, 23 MPa) was "Gas" (now Liquid)
+- **phase** — below the triple point `phase_at` uses a sublimation curve instead of always returning Solid (CO₂ at 200 K / 1 atm is Gas; water at 250 K / 10 Pa is Gas)
+- **phase** — `heat_for_phase_change` treats substances that sublime at 1 atm (CO₂) as a single sublimation event instead of adding fusion + vaporization at unrelated temperatures
+- **state** — `GAS_CONSTANT` = 8.314 462 618 153 24 (exact N_A·k_B; was truncated at 1e-11 relative)
+- **state** — `compressibility_pitzer` documented as the Pitzer–Abbott virial correlation (not Lee-Kesler) and returns an error for non-physical Z ≤ 0 (e.g. Pr = 5, Tr = 1 gave Z = −0.695)
+- **stat** — `debye_cv` integrand rewritten as x⁴e⁻ˣ/expm1(−x)² and switched to the exact T³ law for Θ_D/T > 50; it returned NaN for Θ_D/T > 709 (e.g. diamond at 3 K) and lost accuracy from Θ_D/T ≈ 300
+- **chem** — `equilibrium_constant` and `vant_hoff_k` return an error instead of `Ok(∞)` / `Ok(0)` when K leaves the f64 range (propane combustion: ln K ≈ 837)
+- **transfer** — `view_factor_parallel_plates` uses the asymptote (XY/π)(1 − (X²+Y²)/3) for X, Y < 0.01, where the exact formula cancels to 0
+- **numerical** — `ThermalGrid1D::step_explicit` stability limit is Fo·(1 + Bi) ≤ 0.5 with a convective boundary (accepting Fo = 0.4 at Bi = 10 drove T to −400 K in one step)
+- **numerical** — `ThermalGrid2D` applies `Convective` boundaries (T_b = (T_in + Bi·T∞)/(1 + Bi)); they were silently held at the initial temperature
+- **numerical** — `ThermalNetwork::solve` errors when a free node has no path to a fixed node (a floating triangle "solved" to 0 K) and scales rows by their diagonal, so very small conductances (R ≈ 1e14 K/W) no longer trip hisab's absolute pivot threshold
+- **bridge** — `basal_metabolic_rate` uses Kleiber's 70 kcal/day = 3.39 W (was 3.5 W, 3 % high: 70 kg → 82.0 W, was 84.7 W)
+- **bridge** — `humidity_to_wet_bulb` never exceeds the dry-bulb temperature; docs state the Stull fit range. `velocity_to_convection_coefficient` documented as Dittus-Boelter internal flow (not flat plate) and returns 0 for invalid k/ρ/c_p (k = 0 gave NaN). `equilibrium_temperature` uses the exact R
+- **material** — `AIR` at 300 K per Incropera Table A.4: ρ 1.225 → 1.1614 kg/m³ (1.225 is the 288 K ISA value), c_p 1005 → 1007, k 0.026 → 0.0263
+- **integration/soorat** — empty or all-NaN fields report `min_temp`/`max_temp` = NaN instead of ±f64::MAX; missing network temperatures are NaN instead of 0 K
+
+### Added
+- **steam** — `saturation_pressure(T)` and `saturation_temperature(P)` (IAPWS-IF97 Region 4, verified against the IF97 tables to 1e-8)
+- **steam** — `superheated_by_entropy(P, s)`: superheated state with a given entropy (turbine/compressor exit). Exact inversion of the piecewise-linear table model (~7 lookups, no iteration tolerance)
+- **phase** — `SubstanceData::vapor_pressure`, `sublimation_pressure`, `latent_heat_sublimation`, `sublimes_at_atmospheric`
+- **chem** — `ln_equilibrium_constant` for reactions whose K overflows f64
+- **numerical** — `ThermalGrid1D::max_stable_dt()` and `MAX_ADAPTIVE_SUBSTEPS`
+- **docs** — `[package.metadata.docs.rs] all-features = true`, so docs.rs documents `steam`, `ai`, `logging` and `soorat-compat`; `soorat-compat` added to the feature tables
+- **tests** — 80 new regression tests (399 → 479), with reference values from IAPWS-IF97, Incropera and NIST
+- **benches** — `transfer/view_factor_perpendicular`, `steam/saturation_pressure`, `steam/superheated_between_tiers`, `steam/superheated_by_entropy`, `stat/debye_cv_low_t`, `numerical/adaptive_1d_4substeps`
+
+### Fixed
+- **steam** — `superheated_lookup` rejected exact table rows at tier pressures, e.g. (423.15 K, 200 kPa) and (523.15 K, 2 MPa), because it always interpolated toward the next tier up, whose range starts higher. It now uses the single tier. Errors also report the requested pressure, not the tier's
+- **steam** — `validate_quality` tolerates round-off (x = 1 + 2e-16 was rejected) and clamps to [0, 1]
+- **cycle** — `rankine_cycle` treated a superheated turbine exhaust as saturated vapor. h4 came out too low and η too high: 14.7 % instead of 13.2 % at 100 kPa / 500 kPa / 573 K. It now solves s(T, P_cond) = s4
+- **cycle** — `refrigeration_cycle` silently replaced a failed compressor-exit bisection with the bracket midpoint. With a bracket that was too narrow, this gave COP 6.49, above the Carnot 4.0. It now solves s(T, P_cond) = s1 over the whole table range and propagates errors
+- **cycle** — `cycle_pv_diagram` panicked when `processes` was shorter than `state_points` (both fields are public and deserializable)
+- **transfer** — `view_factor_perpendicular_plates` used a garbled formula. Unit squares gave 0.298 instead of 0.2000, and other inputs were clamped to 0 or 1. It now uses the full Incropera/Howell C-14 expression, and reciprocity holds exactly
+- **transfer** — `view_factor_coaxial_disks` is rewritten without cancellation. It was 25 % low at r = 1e-4·d, and 0 at 3e-5·d
+- **transfer** — negative k, ρ, c_p or R are now rejected consistently:
+  - `thermal_resistance_conduction` accepted k < 0 and A < 0 when their product was positive
+  - `thermal_resistance_parallel` accepted R < 0; [2, −1] gave −2 K/W
+  - also covered: `thermal_diffusivity`, `biot_number`, `nusselt_number`, `fin_parameter`, `fin_efficiency_rectangular` and `prandtl_number`
+- **numerical** — `step_adaptive` rejected about 5 % of valid steps through round-off (Fo = 0.5000000000000001). It now caps the sub-step count, and it validates dt: NaN dt returned Ok without stepping
+- **numerical** — `step_explicit` and `step_crank_nicolson` accepted negative or NaN dt, which ran diffusion backwards
+- **numerical** — `ThermalGrid2D::solve_steady_state` reported convergence on an all-NaN field, because `f64::max` drops NaN
+- **numerical** — `ThermalNetwork::new(0).add_resistance(0, 0, …)` underflowed `num_nodes - 1`
+- **numerical** — grids or networks with inconsistent public fields (deserialized, or edited by hand) now return errors instead of panicking on out-of-bounds indexing
+- **integration/soorat** — `HeatFluxField::from_grid_2d` and `ThermalGridVisualization::from_grid_2d` no longer panic or report dimensions that don't match `values` when the grid's rows disagree with nx/ny
+- **phase** — `clausius_clapeyron_pressure` returns an error instead of `Ok(∞)` on overflow
+- **state** — `ideal_gas_*`, `van_der_waals_pressure` and `isothermal_work` reject negative moles: `ideal_gas_temperature(ATM, 0.0224, −1)` gave −273 K
+- **state** — `adiabatic_temperature` validates T₁
+- **state** — `redlich_kwong_pressure` and `peng_robinson_pressure` validate Tc, Pc, ω and V_m; a negative Tc gave `Ok(NaN)`
+- **state** — Kay's-rule mixture validation rejects NaN and negative mole fractions
+- **entropy** — `ideal_gas_entropy_change`, `isothermal_entropy_change` and `entropy_of_mixing` validate moles; `ideal_gas_entropy_change` also validates Cv
+- **chem** — `adiabatic_flame_temperature` rejects negative or NaN stoichiometric coefficients
+- **stat** — `partition_vibrational` uses `exp_m1`, so it stays accurate for hν ≪ kT
+- **bridge** — `muscle_work_to_heat` with η = 1 gave 300 % heat; it now gives 0
+- **bridge** — NaN inputs fall back to the documented values instead of propagating
+
+### Security
+- **ai** — `DaimonConfig`'s `Debug` output redacts `api_key`; a derived `Debug` would have leaked it through `{:?}` or tracing fields
+- **ai** — `register_agent` checks the HTTP status with `error_for_status`, so a 401 or 500 response is reported as such rather than as "missing agent_id"
+- **ai** — a trailing `/` on the endpoint no longer produces `//v1/…`
+
+### Performance
+Measured as an interleaved A/B run of 1.3.0 against 1.4.0, both under the criterion 0.8 harness. Each figure is the minimum of the per-round medians over 2 rounds. Note that the criterion 0.5 → 0.8 switch by itself shifts some `#[tracing::instrument]`-ed functions by several ns, so `bench-history.csv` runs from before and after this release are not directly comparable.
+
+- **`InvalidParameter` errors** are built out of line through a `#[cold]` helper (`validate::invalid_param`), and small validated functions are `#[inline]`. Before this, adding an error branch that formats a message turned leaf functions into non-inlinable calls: `ideal_gas_volume` went from 1.6 ns to 9.4 ns in an intermediate build.
+- **`ThermalGrid1D`:** `step_explicit` updates in place with no clone, and Crank-Nicolson uses 2 scratch vectors instead of 6.
+- **steam**
+  - `wet_steam_properties`: 9.38 → 1.74 ns (−81 %)
+  - `quality_from_enthalpy`: 8.23 → 2.08 ns (−75 %)
+- **stat**
+  - `rms_speed`: 14.78 → 3.88 ns (−74 %)
+  - `einstein_cv`: 12.35 → 8.81 ns (−29 %)
+- **transfer**
+  - `reynolds`: 8.96 → 2.65 ns (−70 %)
+  - `biot_number`: 8.59 → 4.09 ns (−52 %)
+  - `diffusivity`: 7.79 → 4.65 ns (−40 %)
+  - `eff_counter`: 11.90 → 8.33 ns (−30 %)
+- **phase**
+  - `clausius_clapeyron_slope`: 8.32 → 3.27 ns (−61 %)
+  - `clausius_clapeyron_pressure`: 19.74 → 10.72 ns (−46 %)
+- **entropy** — `carnot_cop`: 8.01 → 3.40 ns (−58 %)
+- **state** — `compressibility_factor`: 8.25 → 4.44 ns (−46 %)
+- **chem** — `reaction_enthalpy`: 4.56 → 2.48 ns (−46 %)
+- **numerical**
+  - `explicit_1d`: 67.70 → 43.93 ns (−35 %)
+  - `crank_nicolson_1d`: 1059.7 → 838.2 ns (−21 %)
+  - `gauss_seidel_2d_20x20`: 1.44 → 1.34 ms (−7 %)
+- **Costlier, for correctness:**
+  - `steam/saturated_by_pressure`: 12.2 → 35.7 ns (exact IF97 backward equation)
+  - `steam/saturated_by_temp`: 14.7 → 17.9 ns
+  - `cycle/rankine`: 67 → 114 ns
+  - `cycle/refrigeration`: 422 → 708 ns (exact compressor-exit solve)
+  - `phase/phase_lookup`: 14 → 22 ns (three-anchor vapor-pressure curve)
+  - `chem/adiabatic_flame`: 13 → 27 ns (coefficient validation)
+  - `stat/debye_cv`: 1.52 → 2.04 µs (overflow-proof integrand)
+  - `state/ideal_gas_volume`: 1.6 → 3.7 ns (NaN-safe guards)
+- **New benchmarks**
+  - `transfer/view_factor_perpendicular`: 50 ns
+  - `steam/saturation_pressure`: 6.0 ns
+  - `steam/superheated_between_tiers`: 60 ns
+  - `steam/superheated_by_entropy`: 0.33 µs
+  - `stat/debye_cv_low_t`: 8.9 ns
+  - `numerical/adaptive_1d_4substeps`: 117 ns
+
 ## [1.3.0]
 
 ### Added

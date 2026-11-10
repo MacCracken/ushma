@@ -20,6 +20,7 @@
 //! | `chem` | yes | Hess's law, equilibrium constants, Van't Hoff, flame temperature |
 //! | `stat` | yes | Boltzmann, partition functions, Maxwell-Boltzmann, Debye/Einstein |
 //! | `steam` | no | Saturated + superheated steam tables (IAPWS-IF97) |
+//! | `soorat-compat` | no | Visualization data structures for soorat (heatmaps, profiles, cycle diagrams) |
 //! | `ai` | no | Daimon/hoosh agent integration |
 //! | `logging` | no | Structured logging via tracing |
 //! | `full` | — | Enables all features |
@@ -43,6 +44,7 @@ pub mod bridge;
 pub mod error;
 /// Integration APIs for downstream consumers (soorat rendering).
 pub mod integration;
+mod validate;
 
 #[cfg(feature = "transfer")]
 pub mod transfer;

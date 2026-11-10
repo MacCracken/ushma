@@ -3,6 +3,7 @@
 //! All SI units: watts, meters, kelvins, seconds.
 
 use crate::error::{Result, UshmaError};
+use crate::validate::{finite_ge, finite_gt, invalid_param};
 
 /// Stefan-Boltzmann constant σ (W/(m²⋅K⁴)).
 pub const STEFAN_BOLTZMANN: f64 = 5.670_374_419e-8;
@@ -26,12 +27,12 @@ pub fn conduction(
     t_cold: f64,
     thickness: f64,
 ) -> Result<f64> {
-    if conductivity < 0.0 {
+    if !finite_ge(conductivity, 0.0) {
         return Err(UshmaError::InvalidConductivity {
             value: conductivity,
         });
     }
-    if thickness.abs() < 1e-30 {
+    if !finite_ge(thickness.abs(), 1e-30) {
         return Err(UshmaError::DivisionByZero {
             context: "thickness cannot be zero for conduction".into(),
         });
@@ -62,14 +63,14 @@ pub fn convection(h: f64, area: f64, t_surface: f64, t_fluid: f64) -> f64 {
 #[tracing::instrument(level = "debug")]
 pub fn radiation(emissivity: f64, area: f64, t_surface: f64, t_surrounding: f64) -> Result<f64> {
     if !(0.0..=1.0).contains(&emissivity) {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("emissivity {emissivity} must be in [0, 1]"),
-        });
+        return Err(invalid_param(format_args!(
+            "emissivity {emissivity} must be in [0, 1]"
+        )));
     }
-    if t_surface < 0.0 {
+    if !finite_ge(t_surface, 0.0) {
         return Err(UshmaError::InvalidTemperature { kelvin: t_surface });
     }
-    if t_surrounding < 0.0 {
+    if !finite_ge(t_surrounding, 0.0) {
         return Err(UshmaError::InvalidTemperature {
             kelvin: t_surrounding,
         });
@@ -80,9 +81,20 @@ pub fn radiation(emissivity: f64, area: f64, t_surface: f64, t_surrounding: f64)
 }
 
 /// Thermal resistance for conduction: R = L/(k⋅A) (K/W).
+#[inline]
 pub fn thermal_resistance_conduction(conductivity: f64, area: f64, thickness: f64) -> Result<f64> {
+    if !finite_gt(conductivity, 0.0) {
+        return Err(UshmaError::InvalidConductivity {
+            value: conductivity,
+        });
+    }
+    if !finite_gt(area, 0.0) || !finite_ge(thickness, 0.0) {
+        return Err(invalid_param(format_args!(
+            "area {area} m² must be positive and thickness {thickness} m non-negative"
+        )));
+    }
     let denom = conductivity * area;
-    if denom.abs() < 1e-30 {
+    if !finite_ge(denom.abs(), 1e-30) {
         return Err(UshmaError::DivisionByZero {
             context: "k⋅A cannot be zero for thermal resistance".into(),
         });
@@ -91,9 +103,15 @@ pub fn thermal_resistance_conduction(conductivity: f64, area: f64, thickness: f6
 }
 
 /// Thermal resistance for convection: R = 1/(h⋅A) (K/W).
+#[inline]
 pub fn thermal_resistance_convection(h: f64, area: f64) -> Result<f64> {
+    if !finite_ge(h, 0.0) || !finite_ge(area, 0.0) {
+        return Err(invalid_param(format_args!(
+            "h={h} W/(m²·K) and area={area} m² must be finite and non-negative"
+        )));
+    }
     let denom = h * area;
-    if denom.abs() < 1e-30 {
+    if !finite_ge(denom.abs(), 1e-30) {
         return Err(UshmaError::DivisionByZero {
             context: "h⋅A cannot be zero for thermal resistance".into(),
         });
@@ -109,9 +127,15 @@ pub fn thermal_resistance_series(resistances: &[f64]) -> f64 {
 }
 
 /// Parallel thermal resistance: 1/R_total = 1/R₁ + 1/R₂ + ... (K/W).
+#[inline]
 pub fn thermal_resistance_parallel(resistances: &[f64]) -> Result<f64> {
+    if let Some(&r) = resistances.iter().find(|&&r| !finite_gt(r, 0.0)) {
+        return Err(invalid_param(format_args!(
+            "parallel resistance {r} K/W must be positive and finite"
+        )));
+    }
     let sum: f64 = resistances.iter().map(|r| 1.0 / r).sum();
-    if sum.abs() < 1e-30 {
+    if !finite_ge(sum.abs(), 1e-30) {
         return Err(UshmaError::DivisionByZero {
             context: "parallel resistance sum is zero".into(),
         });
@@ -129,9 +153,25 @@ pub fn heat_stored(mass: f64, specific_heat: f64, delta_t: f64) -> f64 {
 /// Thermal diffusivity: α = k/(ρ⋅c_p) (m²/s).
 ///
 /// How quickly heat diffuses through a material.
+#[inline]
 pub fn thermal_diffusivity(conductivity: f64, density: f64, specific_heat: f64) -> Result<f64> {
+    if !finite_ge(conductivity, 0.0) {
+        return Err(UshmaError::InvalidConductivity {
+            value: conductivity,
+        });
+    }
+    if !finite_ge(density, 0.0) {
+        return Err(invalid_param(format_args!(
+            "density {density} kg/m³ must be positive"
+        )));
+    }
+    if !finite_ge(specific_heat, 0.0) {
+        return Err(UshmaError::InvalidSpecificHeat {
+            value: specific_heat,
+        });
+    }
     let denom = density * specific_heat;
-    if denom.abs() < 1e-30 {
+    if !finite_ge(denom.abs(), 1e-30) {
         return Err(UshmaError::DivisionByZero {
             context: "ρ⋅c_p cannot be zero for thermal diffusivity".into(),
         });
@@ -143,8 +183,14 @@ pub fn thermal_diffusivity(conductivity: f64, density: f64, specific_heat: f64) 
 ///
 /// Ratio of conduction resistance to convection resistance.
 /// Bi < 0.1 → lumped capacitance model valid.
+#[inline]
 pub fn biot_number(h: f64, characteristic_length: f64, conductivity: f64) -> Result<f64> {
-    if conductivity.abs() < 1e-30 {
+    if !finite_ge(h, 0.0) || !finite_ge(characteristic_length, 0.0) {
+        return Err(invalid_param(format_args!(
+            "h={h} and length={characteristic_length} must be finite and non-negative"
+        )));
+    }
+    if !finite_ge(conductivity, 1e-30) {
         return Err(UshmaError::DivisionByZero {
             context: "conductivity cannot be zero for Biot number".into(),
         });
@@ -178,11 +224,12 @@ pub fn lumped_capacitance(
 /// - `velocity`: flow velocity (m/s)
 /// - `length`: characteristic length (m)
 /// - `kinematic_viscosity`: ν (m²/s)
+#[inline]
 pub fn reynolds_number(velocity: f64, length: f64, kinematic_viscosity: f64) -> Result<f64> {
-    if kinematic_viscosity <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("kinematic viscosity {kinematic_viscosity} must be positive"),
-        });
+    if !finite_gt(kinematic_viscosity, 0.0) {
+        return Err(invalid_param(format_args!(
+            "kinematic viscosity {kinematic_viscosity} must be positive"
+        )));
     }
     Ok(velocity * length / kinematic_viscosity)
 }
@@ -192,8 +239,14 @@ pub fn reynolds_number(velocity: f64, length: f64, kinematic_viscosity: f64) -> 
 /// Ratio of momentum diffusivity to thermal diffusivity.
 /// - `kinematic_viscosity`: ν (m²/s)
 /// - `thermal_diffusivity`: α (m²/s)
+#[inline]
 pub fn prandtl_number(kinematic_viscosity: f64, thermal_diffusivity: f64) -> Result<f64> {
-    if thermal_diffusivity <= 0.0 {
+    if !finite_gt(kinematic_viscosity, 0.0) {
+        return Err(invalid_param(format_args!(
+            "kinematic viscosity {kinematic_viscosity} must be positive"
+        )));
+    }
+    if !finite_gt(thermal_diffusivity, 0.0) {
         return Err(UshmaError::DivisionByZero {
             context: "thermal diffusivity must be positive for Prandtl number".into(),
         });
@@ -204,8 +257,9 @@ pub fn prandtl_number(kinematic_viscosity: f64, thermal_diffusivity: f64) -> Res
 /// Nusselt number (definition): Nu = hL/k (dimensionless).
 ///
 /// Ratio of convective to conductive heat transfer.
+#[inline]
 pub fn nusselt_number(h: f64, length: f64, conductivity: f64) -> Result<f64> {
-    if conductivity.abs() < 1e-30 {
+    if !finite_ge(conductivity, 1e-30) {
         return Err(UshmaError::DivisionByZero {
             context: "conductivity cannot be zero for Nusselt number".into(),
         });
@@ -217,16 +271,17 @@ pub fn nusselt_number(h: f64, length: f64, conductivity: f64) -> Result<f64> {
 ///
 /// For turbulent flow in smooth circular tubes (Re > 10,000, 0.6 < Pr < 160).
 /// Heating case (fluid being heated, n=0.4).
+#[inline]
 pub fn nusselt_dittus_boelter(re: f64, pr: f64) -> Result<f64> {
-    if re <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("Reynolds number {re} must be positive"),
-        });
+    if !finite_gt(re, 0.0) {
+        return Err(invalid_param(format_args!(
+            "Reynolds number {re} must be positive"
+        )));
     }
-    if pr <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("Prandtl number {pr} must be positive"),
-        });
+    if !finite_gt(pr, 0.0) {
+        return Err(invalid_param(format_args!(
+            "Prandtl number {pr} must be positive"
+        )));
     }
     Ok(0.023 * re.powf(0.8) * pr.powf(0.4))
 }
@@ -238,16 +293,17 @@ pub fn nusselt_dittus_boelter(re: f64, pr: f64) -> Result<f64> {
 /// Valid for all Ra (laminar and turbulent).
 /// - `ra`: Rayleigh number (Ra = Gr·Pr)
 /// - `pr`: Prandtl number
+#[inline]
 pub fn nusselt_natural_vertical(ra: f64, pr: f64) -> Result<f64> {
-    if ra < 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("Rayleigh number {ra} must be non-negative"),
-        });
+    if !finite_ge(ra, 0.0) {
+        return Err(invalid_param(format_args!(
+            "Rayleigh number {ra} must be non-negative"
+        )));
     }
-    if pr <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("Prandtl number {pr} must be positive"),
-        });
+    if !finite_gt(pr, 0.0) {
+        return Err(invalid_param(format_args!(
+            "Prandtl number {pr} must be positive"
+        )));
     }
     let psi = (1.0 + (0.492 / pr).powf(9.0 / 16.0)).powf(-8.0 / 27.0);
     let nu = (0.825 + 0.387 * ra.powf(1.0 / 6.0) * psi).powi(2);
@@ -259,16 +315,17 @@ pub fn nusselt_natural_vertical(ra: f64, pr: f64) -> Result<f64> {
 /// Laminar boundary layer thickness: δ = 5x/√Re_x (Blasius solution, m).
 ///
 /// Valid for laminar flow (Re_x < ~5×10⁵).
+#[inline]
 pub fn boundary_layer_thickness(x: f64, re_x: f64) -> Result<f64> {
-    if x <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("distance x={x} m must be positive"),
-        });
+    if !finite_gt(x, 0.0) {
+        return Err(invalid_param(format_args!(
+            "distance x={x} m must be positive"
+        )));
     }
-    if re_x <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("local Reynolds number {re_x} must be positive"),
-        });
+    if !finite_gt(re_x, 0.0) {
+        return Err(invalid_param(format_args!(
+            "local Reynolds number {re_x} must be positive"
+        )));
     }
     Ok(5.0 * x / re_x.sqrt())
 }
@@ -276,11 +333,12 @@ pub fn boundary_layer_thickness(x: f64, re_x: f64) -> Result<f64> {
 /// Thermal boundary layer thickness: δ_t = δ/Pr^(1/3) (m).
 ///
 /// Ratio of velocity to thermal boundary layer.
+#[inline]
 pub fn thermal_boundary_layer(x: f64, re_x: f64, pr: f64) -> Result<f64> {
-    if pr <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("Prandtl number {pr} must be positive"),
-        });
+    if !finite_gt(pr, 0.0) {
+        return Err(invalid_param(format_args!(
+            "Prandtl number {pr} must be positive"
+        )));
     }
     let delta = boundary_layer_thickness(x, re_x)?;
     Ok(delta / pr.powf(1.0 / 3.0))
@@ -294,17 +352,18 @@ pub fn thermal_boundary_layer(x: f64, re_x: f64, pr: f64) -> Result<f64> {
 /// - `perimeter`: fin cross-section perimeter (m)
 /// - `k`: fin thermal conductivity (W/(m·K))
 /// - `cross_area`: fin cross-section area (m²)
+#[inline]
 pub fn fin_parameter(h: f64, perimeter: f64, k: f64, cross_area: f64) -> Result<f64> {
     let denom = k * cross_area;
-    if denom <= 0.0 {
+    if !finite_gt(k, 0.0) || !finite_gt(cross_area, 0.0) {
         return Err(UshmaError::DivisionByZero {
             context: "k·A_c must be positive for fin parameter".into(),
         });
     }
-    if h < 0.0 || perimeter <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("h={h}, perimeter={perimeter} must be positive"),
-        });
+    if !finite_ge(h, 0.0) || !finite_gt(perimeter, 0.0) {
+        return Err(invalid_param(format_args!(
+            "h={h}, perimeter={perimeter} must be positive"
+        )));
     }
     Ok((h * perimeter / denom).sqrt())
 }
@@ -323,10 +382,10 @@ pub fn fin_rectangular_heat(
     t_fluid: f64,
 ) -> Result<f64> {
     let m = fin_parameter(h, perimeter, k, cross_area)?;
-    if length <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("fin length {length} m must be positive"),
-        });
+    if !finite_gt(length, 0.0) {
+        return Err(invalid_param(format_args!(
+            "fin length {length} m must be positive"
+        )));
     }
     let coeff = (h * perimeter * k * cross_area).sqrt();
     Ok(coeff * (t_base - t_fluid) * (m * length).tanh())
@@ -335,7 +394,13 @@ pub fn fin_rectangular_heat(
 /// Efficiency of a rectangular fin with insulated tip: η = tanh(mL)/(mL).
 ///
 /// η = 1.0 for zero length, approaches 0 for very long fins.
+#[inline]
 pub fn fin_efficiency_rectangular(m: f64, length: f64) -> Result<f64> {
+    if !finite_ge(m, 0.0) || !finite_ge(length, 0.0) {
+        return Err(invalid_param(format_args!(
+            "fin parameter m={m} and length={length} must be finite and non-negative"
+        )));
+    }
     let ml = m * length;
     if ml.abs() < 1e-30 {
         return Ok(1.0); // degenerate: zero-length fin is 100% efficient
@@ -347,6 +412,7 @@ pub fn fin_efficiency_rectangular(m: f64, length: f64) -> Result<f64> {
 ///
 /// Ratio of fin heat transfer to what the base area would transfer without the fin.
 /// ε > 1 means the fin improves heat transfer (which it should).
+#[inline]
 pub fn fin_effectiveness(
     q_fin: f64,
     h: f64,
@@ -355,7 +421,7 @@ pub fn fin_effectiveness(
     t_fluid: f64,
 ) -> Result<f64> {
     let q_no_fin = h * cross_area * (t_base - t_fluid);
-    if q_no_fin.abs() < 1e-30 {
+    if !finite_ge(q_no_fin.abs(), 1e-30) {
         return Err(UshmaError::DivisionByZero {
             context: "no temperature difference for fin effectiveness".into(),
         });
@@ -388,10 +454,10 @@ pub fn lmtd_counter(t_h_in: f64, t_h_out: f64, t_c_in: f64, t_c_out: f64) -> Res
 }
 
 fn lmtd_from_deltas(dt1: f64, dt2: f64) -> Result<f64> {
-    if dt1 <= 0.0 || dt2 <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("temperature differences must be positive: ΔT₁={dt1}, ΔT₂={dt2}"),
-        });
+    if !finite_gt(dt1, 0.0) || !finite_gt(dt2, 0.0) {
+        return Err(invalid_param(format_args!(
+            "temperature differences must be positive: ΔT₁={dt1}, ΔT₂={dt2}"
+        )));
     }
     let ratio = dt1 / dt2;
     if (ratio - 1.0).abs() < 1e-10 {
@@ -413,8 +479,9 @@ pub fn heat_exchanger_lmtd(u: f64, area: f64, lmtd: f64) -> f64 {
 }
 
 /// Number of transfer units: NTU = UA/C_min (dimensionless).
+#[inline]
 pub fn ntu(u: f64, area: f64, c_min: f64) -> Result<f64> {
-    if c_min <= 0.0 {
+    if !finite_gt(c_min, 0.0) {
         return Err(UshmaError::DivisionByZero {
             context: "C_min must be positive for NTU".into(),
         });
@@ -426,16 +493,17 @@ pub fn ntu(u: f64, area: f64, c_min: f64) -> Result<f64> {
 ///
 /// ε = (1 - exp(-NTU·(1 + Cr))) / (1 + Cr)
 /// Special case Cr = 0: ε = 1 - exp(-NTU).
+#[inline]
 pub fn effectiveness_parallel(ntu_val: f64, c_ratio: f64) -> Result<f64> {
-    if ntu_val < 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("NTU {ntu_val} must be non-negative"),
-        });
+    if !finite_ge(ntu_val, 0.0) {
+        return Err(invalid_param(format_args!(
+            "NTU {ntu_val} must be non-negative"
+        )));
     }
     if !(0.0..=1.0).contains(&c_ratio) {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("capacity ratio Cr={c_ratio} must be in [0, 1]"),
-        });
+        return Err(invalid_param(format_args!(
+            "capacity ratio Cr={c_ratio} must be in [0, 1]"
+        )));
     }
     if c_ratio < 1e-30 {
         return Ok(1.0 - (-ntu_val).exp());
@@ -448,16 +516,17 @@ pub fn effectiveness_parallel(ntu_val: f64, c_ratio: f64) -> Result<f64> {
 /// ε = (1 - exp(-NTU·(1 - Cr))) / (1 - Cr·exp(-NTU·(1 - Cr)))
 /// Special case Cr = 0: ε = 1 - exp(-NTU).
 /// Special case Cr = 1: ε = NTU / (1 + NTU).
+#[inline]
 pub fn effectiveness_counter(ntu_val: f64, c_ratio: f64) -> Result<f64> {
-    if ntu_val < 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("NTU {ntu_val} must be non-negative"),
-        });
+    if !finite_ge(ntu_val, 0.0) {
+        return Err(invalid_param(format_args!(
+            "NTU {ntu_val} must be non-negative"
+        )));
     }
     if !(0.0..=1.0).contains(&c_ratio) {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("capacity ratio Cr={c_ratio} must be in [0, 1]"),
-        });
+        return Err(invalid_param(format_args!(
+            "capacity ratio Cr={c_ratio} must be in [0, 1]"
+        )));
     }
     if c_ratio < 1e-30 {
         return Ok(1.0 - (-ntu_val).exp());
@@ -480,19 +549,26 @@ pub fn heat_exchanger_ntu(effectiveness: f64, c_min: f64, t_h_in: f64, t_c_in: f
 
 /// View factor between two identical, directly opposed, parallel rectangles.
 ///
-/// F₁₂ for two aligned parallel rectangles of width W and height H separated by distance D.
-/// Uses the Hottel crossed-string formula.
+/// F₁₂ for two aligned parallel rectangles of width W and height H separated by distance D,
+/// from the exact analytic formula (Incropera Table 13.2). For plates much smaller than
+/// their separation (W/D, H/D < 0.01) the asymptotic form
+/// F ≈ (XY/π)·(1 − (X² + Y²)/3) is used instead, because the exact formula loses all
+/// precision to cancellation there (relative error of either branch < 1e-8).
 #[tracing::instrument(level = "debug")]
 pub fn view_factor_parallel_plates(width: f64, height: f64, distance: f64) -> Result<f64> {
-    if width <= 0.0 || height <= 0.0 || distance <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("dimensions must be positive: W={width}, H={height}, D={distance}"),
-        });
+    if !finite_gt(width, 0.0) || !finite_gt(height, 0.0) || !finite_gt(distance, 0.0) {
+        return Err(invalid_param(format_args!(
+            "dimensions must be positive: W={width}, H={height}, D={distance}"
+        )));
     }
     let x = width / distance;
     let y = height / distance;
     let x2 = x * x;
     let y2 = y * y;
+
+    if x.max(y) < 1e-2 {
+        return Ok(x * y / std::f64::consts::PI * (1.0 - (x2 + y2) / 3.0));
+    }
 
     let term1 = ((1.0 + x2) * (1.0 + y2) / (1.0 + x2 + y2)).sqrt().ln();
     let term2 = x * (1.0 + y2).sqrt() * (x / (1.0 + y2).sqrt()).atan();
@@ -507,41 +583,55 @@ pub fn view_factor_parallel_plates(width: f64, height: f64, distance: f64) -> Re
 /// View factor between two perpendicular rectangles sharing a common edge.
 ///
 /// F₁₂ for rectangle 1 (W × H₁) perpendicular to rectangle 2 (W × H₂)
-/// sharing edge of length W.
+/// sharing edge of length W (Incropera Table 13.2, Howell C-14). With
+/// w = H₁/W and h = H₂/W:
+///
+/// F₁₂ = 1/(πw)·[w·atan(1/w) + h·atan(1/h) − √(h²+w²)·atan(1/√(h²+w²))
+///        + ¼·ln{ (1+w²)(1+h²)/(1+w²+h²) · [w²(1+w²+h²)/((1+w²)(w²+h²))]^(w²)
+///               · [h²(1+h²+w²)/((1+h²)(h²+w²))]^(h²) }]
+///
+/// Unit squares give F₁₂ = 0.2000; reciprocity A₁F₁₂ = A₂F₂₁ holds exactly.
+#[tracing::instrument(level = "debug")]
 pub fn view_factor_perpendicular_plates(width: f64, h1: f64, h2: f64) -> Result<f64> {
-    if width <= 0.0 || h1 <= 0.0 || h2 <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("dimensions must be positive: W={width}, H1={h1}, H2={h2}"),
-        });
+    if !finite_gt(width, 0.0) || !finite_gt(h1, 0.0) || !finite_gt(h2, 0.0) {
+        return Err(invalid_param(format_args!(
+            "dimensions must be positive: W={width}, H1={h1}, H2={h2}"
+        )));
     }
-    let h = h1 / width;
-    let w = h2 / width;
-    let h2v = h * h;
+    let w = h1 / width;
+    let h = h2 / width;
     let w2 = w * w;
+    let h2v = h * h;
+    let s = h2v + w2;
+    let rs = s.sqrt();
 
-    let a = (1.0 + h2v) * (1.0 + w2);
-    let b = 1.0 + h2v + w2;
+    let atan_terms = w * (1.0 / w).atan() + h * (1.0 / h).atan() - rs * (1.0 / rs).atan();
+    // ln of the product, expanded as a sum of logs so the powers cannot overflow.
+    let log_terms = ((1.0 + w2) * (1.0 + h2v) / (1.0 + s)).ln()
+        + w2 * (w2 * (1.0 + s) / ((1.0 + w2) * s)).ln()
+        + h2v * (h2v * (1.0 + s) / ((1.0 + h2v) * s)).ln();
 
-    let term1 = w * (1.0 + h2v).sqrt().atan() + h * (1.0 + w2).sqrt().atan();
-
-    // Simplified Hottel formula
-    let f12 = (1.0 / (std::f64::consts::PI * h)) * (term1 - b.sqrt().atan() + 0.25 * (a / b).ln());
+    let f12 = (atan_terms + 0.25 * log_terms) / (std::f64::consts::PI * w);
     Ok(f12.clamp(0.0, 1.0))
 }
 
 /// View factor between two coaxial parallel disks.
 ///
 /// F₁₂ for disk 1 (radius r₁) seeing disk 2 (radius r₂) at distance d.
+#[inline]
 pub fn view_factor_coaxial_disks(r1: f64, r2: f64, distance: f64) -> Result<f64> {
-    if r1 <= 0.0 || r2 <= 0.0 || distance <= 0.0 {
-        return Err(UshmaError::InvalidParameter {
-            reason: format!("dimensions must be positive: r1={r1}, r2={r2}, d={distance}"),
-        });
+    if !finite_gt(r1, 0.0) || !finite_gt(r2, 0.0) || !finite_gt(distance, 0.0) {
+        return Err(invalid_param(format_args!(
+            "dimensions must be positive: r1={r1}, r2={r2}, d={distance}"
+        )));
     }
     let r1_d = r1 / distance;
     let r2_d = r2 / distance;
     let s = 1.0 + (1.0 + r2_d * r2_d) / (r1_d * r1_d);
-    let f12 = 0.5 * (s - (s * s - 4.0 * (r2_d / r1_d).powi(2)).sqrt());
+    let k2 = (r2 / r1).powi(2);
+    // ½·(S − √(S² − 4k²)) rewritten as 2k²/(S + √(S² − 4k²)) to avoid
+    // cancellation for small disks far apart.
+    let f12 = 2.0 * k2 / (s + (s * s - 4.0 * k2).sqrt());
     Ok(f12)
 }
 
@@ -663,11 +753,11 @@ mod tests {
     }
 
     #[test]
-    fn test_conduction_nan_propagation() {
-        let result = conduction(f64::NAN, 1.0, 373.0, 293.0, 0.1);
-        // NaN conductivity should be caught by validation (NaN < 0.0 is false)
-        // so it passes through — result contains NaN
-        assert!(result.unwrap().is_nan());
+    fn test_conduction_rejects_nan_and_inf() {
+        // `NaN < 0.0` is false, so a naive guard would let NaN through.
+        assert!(conduction(f64::NAN, 1.0, 373.0, 293.0, 0.1).is_err());
+        assert!(conduction(f64::INFINITY, 1.0, 373.0, 293.0, 0.1).is_err());
+        assert!(conduction(401.0, 1.0, 373.0, 293.0, f64::NAN).is_err());
     }
 
     #[test]
@@ -973,5 +1063,81 @@ mod tests {
         assert!(view_factor_coaxial_disks(0.0, 0.5, 1.0).is_err());
         assert!(view_factor_coaxial_disks(0.5, 0.0, 1.0).is_err());
         assert!(view_factor_coaxial_disks(0.5, 0.5, 0.0).is_err());
+    }
+
+    // --- Regression tests from the 1.4.0 audit ---
+
+    #[test]
+    fn test_view_factor_perpendicular_reference_values() {
+        // Incropera Table 13.2 / exact formula. The old code gave 0.298, 0.638,
+        // 1.0 (clamped) and 0.0 (clamped) for these.
+        for ((w, h1, h2), f_ref) in [
+            ((1.0, 1.0, 1.0), 0.200_043_776),
+            ((1.0, 1.0, 2.0), 0.232_852_603),
+            ((1.0, 1.0, 10.0), 0.249_209_486),
+            ((2.0, 1.0, 1.0), 0.240_636_006),
+        ] {
+            let f = view_factor_perpendicular_plates(w, h1, h2).unwrap();
+            assert!((f - f_ref).abs() < 1e-8, "({w},{h1},{h2}): {f}");
+        }
+    }
+
+    #[test]
+    fn test_view_factor_perpendicular_reciprocity() {
+        for (w, h1, h2) in [(1.0, 1.0, 2.0), (0.3, 2.0, 0.7), (5.0, 0.1, 3.0)] {
+            let f12 = view_factor_perpendicular_plates(w, h1, h2).unwrap();
+            let f21 = view_factor_perpendicular_plates(w, h2, h1).unwrap();
+            assert!((w * h1 * f12 - w * h2 * f21).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_view_factor_parallel_small_plates() {
+        // Exact formula cancels to 0.0 at X = Y = 1e-4; the asymptote is ≈ XY/π.
+        for x in [1e-4, 1e-3, 5e-3] {
+            let f = view_factor_parallel_plates(x, x, 1.0).unwrap();
+            let asym = x * x / std::f64::consts::PI;
+            assert!((f / asym - 1.0).abs() < 1e-4, "x={x}: {f}");
+        }
+        // Continuity across the switch at 0.01.
+        let below = view_factor_parallel_plates(0.009_999_9, 0.009_999_9, 1.0).unwrap();
+        let above = view_factor_parallel_plates(0.010_000_1, 0.010_000_1, 1.0).unwrap();
+        assert!((below / above - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_view_factor_coaxial_small_disks() {
+        // Equal disks: F = r²/(d² + r²) asymptotically. The old form lost 25 % at r = 1e-4 d.
+        for r in [1e-2, 1e-4, 3e-5] {
+            let f = view_factor_coaxial_disks(r, r, 1.0).unwrap();
+            let expected = r * r / (1.0 + r * r);
+            assert!((f / expected - 1.0).abs() < 1e-3, "r={r}: {f}");
+        }
+        let f = view_factor_coaxial_disks(1.0, 1.0, 1.0).unwrap();
+        assert!((f - 0.381_966_011_250_105).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_transfer_validation_consistency() {
+        assert!(thermal_resistance_conduction(-1.0, -1.0, 0.1).is_err());
+        assert!(thermal_resistance_conduction(f64::NAN, 1.0, 0.1).is_err());
+        assert!(thermal_resistance_parallel(&[2.0, -1.0]).is_err());
+        assert!(thermal_resistance_parallel(&[2.0, f64::NAN]).is_err());
+        assert!(thermal_diffusivity(-401.0, 8960.0, 385.0).is_err());
+        assert!(biot_number(25.0, 0.01, -401.0).is_err());
+        assert!(nusselt_number(25.0, 0.01, -0.6).is_err());
+        assert!(fin_parameter(25.0, 0.1, -200.0, -1e-4).is_err());
+        assert!(fin_efficiency_rectangular(-10.0, 0.05).is_err());
+        assert!(prandtl_number(-1e-6, 1.4e-7).is_err());
+    }
+
+    #[test]
+    fn test_transfer_rejects_nan() {
+        assert!(radiation(0.9, 1.0, f64::NAN, 293.0).is_err());
+        assert!(reynolds_number(1.0, 0.1, f64::NAN).is_err());
+        assert!(nusselt_dittus_boelter(f64::NAN, 0.7).is_err());
+        assert!(lmtd_counter(f64::NAN, 340.0, 290.0, 320.0).is_err());
+        assert!(effectiveness_counter(f64::INFINITY, 0.5).is_err());
+        assert!(view_factor_coaxial_disks(f64::NAN, 1.0, 1.0).is_err());
     }
 }

@@ -16,6 +16,9 @@ allow = [
     "Unicode-3.0",
     "GPL-3.0-only",
     "Apache-2.0 WITH LLVM-exception",
+    # rustls / aws-lc-rs TLS stack (reqwest 0.13 default, `ai` feature only)
+    "ISC",
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]
