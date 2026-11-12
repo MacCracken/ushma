@@ -126,6 +126,14 @@ The plain `validate.py .` run recomputes the file and checks it. On the recorded
 it also checks that each note's glibc value is this machine's libm result, and the exact text.
 26 rows at part 2c-2a: exp_m1 23, ln 1, powf 2.
 
+## mathx_tables.py
+
+Generates `src/mathx_data.cyr`, the tables and constants of `src/mathx.cyr`'s correctly rounded exp, expm1, ln,
+pow and atan2. It is vendored from kimiya's generator with the same algorithms (MPFR at 400 bits, exact
+`Fraction`s) and the same assertions on what each error analysis relies on, emitting only the 46 items ushma's
+closure reads. `--check` verifies the file is current. `--check-kimiya` also confirms every value is bit-identical
+to kimiya's `src/mathx_data.cyr` (the gates run it when kimiya's checkout is beside this one).
+
 ## probe_tables.py
 
 Compiles every generated constant and cell with the Cyrius compiler (`build/oracle-probe/`)

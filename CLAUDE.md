@@ -48,6 +48,7 @@ cargo test --manifest-path rust-old/Cargo.toml --all-features   # the Rust oracl
 ```sh
 cargo run --release --locked --manifest-path scripts/oracle/Cargo.toml -- --check   # golden corpus + generated .cyr up to date
 python3 -I -B scripts/oracle/validate.py .                                         # independent check of the corpus
+python3 -I -B scripts/oracle/mathx_tables.py --check                               # src/mathx_data.cyr current
 OUT=/tmp/ushma-gates bash scripts/gates.sh                                         # every gate, every target
 ```
 

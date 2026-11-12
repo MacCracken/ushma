@@ -35,7 +35,10 @@ if [ -f scripts/oracle/Cargo.toml ]; then
     for py in validate.py probe_tables.py cr_verify.py mathx_tables.py; do
         if [ -f "scripts/oracle/$py" ]; then
             case "$py" in
-                mathx_tables.py) PAT='stale|STALE|ok' run python3 -I -B "scripts/oracle/$py" --check ;;
+                mathx_tables.py)
+                    flag=--check
+                    [ -f ../kimiya/src/mathx_data.cyr ] && flag=--check-kimiya
+                    PAT='STALE|DIFFERS|current' run python3 -I -B "scripts/oracle/$py" "$flag" ;;
                 probe_tables.py) PAT='FAIL|checked' run python3 -I -B "scripts/oracle/$py" . --all-targets ;;
                 *) PAT='FAIL|rows|ok|checked|mismatch' TAILN=6 run python3 -I -B "scripts/oracle/$py" . ;;
             esac

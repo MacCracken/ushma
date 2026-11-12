@@ -18,6 +18,8 @@
 
 include "tests/ulp.cyr"
 include "src/constants.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
 include "src/material_data.cyr"
 include "src/state_data.cyr"
 include "src/phase_data.cyr"
@@ -242,27 +244,36 @@ fn _par_fill_species(i) {
 }
 
 # ── math ────────────────────────────────────────────────────────────────────────────
-# `f64::` rows: the Cyrius counterpart of each Rust std method (port plan §7.1, port-parity.md §1).
-# - Class A, dispatched: sqrt, abs, ceil (builtins); clamp (f64_clamp, Rust's semantics for valid bounds, which is
-#   compared rather than assumed).
-# - Pending until M1's `_us_*` helpers, because the stdlib has none with Rust's semantics: min / max (f64_min /
-#   f64_max return NaN for a NaN second operand; the shadow lines show where), is_finite / is_nan (no stdlib fn),
-#   powi (no stdlib fn), exp_m1 (none in math or ganita).
-# - Class C, dispatched to the stdlib counterparts and MEASURED (no bound): the step-8 baseline of what the stdlib
-#   gives against glibc. ADR 0004 replaces them with the correctly rounded `_us_cr_*` primitives (src/mathx.cyr),
-#   compared at 0 ulp against the corrected oracle.
+# `f64::` rows: the port's counterpart of each Rust std method (port plan §7.1, port-parity.md §1, §2).
+# - Class A: sqrt, abs, ceil (builtins); clamp (f64_clamp, which has Rust's semantics for valid bounds); min, max,
+#   is_finite, is_nan (src/mathx.cyr's `_us_*` helpers, with Rust's NaN semantics where f64_min / f64_max differ).
+# - Class B: powi (`_us_powi`, compiler-builtins' square-and-multiply order).
+# - Class C (ADR 0004): exp, exp_m1, ln, powf, atan on src/mathx.cyr's correctly rounded primitives, compared at
+#   0 ulp against the corrected oracle (tests/golden/math.cr.tsv): a row glibc misrounds passes as "accepted (ADR
+#   4)", and one that matches glibc's misrounding instead fails. tanh is measured on ganita until its correctly
+#   rounded primitive (M0 part 2c-3).
 fn _par_math(fp, fl): i64 {
     var x: f64 = _par_in(0);
     if (_par_eq(fp, fl, "f64::sqrt") == 1) { var r: f64 = f64_sqrt(x); _par_got_f(r); return 1; }
     if (_par_eq(fp, fl, "f64::abs") == 1) { var r: f64 = f64_abs(x); _par_got_f(r); return 1; }
     if (_par_eq(fp, fl, "f64::ceil") == 1) { var r: f64 = f64_ceil(x); _par_got_f(r); return 1; }
-    if (_par_eq(fp, fl, "f64::exp") == 1) { var r: f64 = f64_exp(x); _par_got_f(r); return 1; }
-    if (_par_eq(fp, fl, "f64::ln") == 1) { var r: f64 = f64_ln(x); _par_got_f(r); return 1; }
-    if (_par_eq(fp, fl, "f64::atan") == 1) { var r: f64 = f64_atan(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::is_finite") == 1) { _par_got_i(_us_is_finite(x)); return 1; }
+    if (_par_eq(fp, fl, "f64::is_nan") == 1) { _par_got_i(_us_is_nan(x)); return 1; }
+    if (_par_eq(fp, fl, "f64::exp") == 1) { var r: f64 = _us_cr_exp(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::exp_m1") == 1) { var r: f64 = _us_cr_expm1(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::ln") == 1) { var r: f64 = _us_cr_ln(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::atan") == 1) { var r: f64 = _us_cr_atan2(x, 1.0); _par_got_f(r); return 1; }
     if (_par_eq(fp, fl, "f64::tanh") == 1) { var r: f64 = ganita_f64_tanh(x); _par_got_f(r); return 1; }
     if (_par_in_n < 2) { return 0; }
+    if (_par_eq(fp, fl, "f64::powi") == 1) {
+        var r: f64 = _us_powi(x, _par_in(1));
+        _par_got_f(r);
+        return 1;
+    }
     var y: f64 = _par_in(1);
-    if (_par_eq(fp, fl, "f64::powf") == 1) { var r: f64 = ganita_f64_pow(x, y); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::max") == 1) { var r: f64 = _us_max(x, y); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::min") == 1) { var r: f64 = _us_min(x, y); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::powf") == 1) { var r: f64 = _us_cr_pow(x, y); _par_got_f(r); return 1; }
     if (_par_eq(fp, fl, "f64::clamp") == 1) {
         var hi: f64 = _par_in(2);
         var r: f64 = f64_clamp(x, y, hi);
@@ -298,14 +309,19 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
     return 0;
 }
 
-# Shadow comparisons, never gated: the same golden rows through another Cyrius candidate.
-# - the exp / ln / atan polyfills (the same bits on every target) beside the builtins (x87 on x86_64), and atan as
-#   ganita's atan2(x, 1);
-# - the stdlib min / max that M1's helpers replace, to show where their NaN semantics differ from Rust's.
+# Shadow comparisons, never gated: the same golden rows through the stdlib candidates the correctly rounded
+# primitives replace (ADR 0004), against the same reference (the corrected oracle where it has the row):
+# - exp / ln / atan: the builtins (x87 on x86_64, the polyfills on aarch64) and the polyfills (the same bits on every
+#   target); atan also as ganita's atan2(x, 1); powf as ganita's pow;
+# - the stdlib min / max that `_us_min` / `_us_max` replace, to show where their NaN semantics differ from Rust's.
 fn _par_shadows(mp, ml, fp, fl, cls) {
     if (_par_eq(mp, ml, "math") != 1) { return 0; }
     var x: f64 = _par_in(0);
     if (_par_eq(fp, fl, "f64::exp") == 1) {
+        _par_got_n = 0;
+        var rb: f64 = f64_exp(x);
+        _par_got_f(rb);
+        _par_shadow_record("f64::exp ~ f64_exp builtin", cls);
         _par_got_n = 0;
         var r: f64 = _f64_exp_polyfill(x);
         _par_got_f(r);
@@ -314,12 +330,20 @@ fn _par_shadows(mp, ml, fp, fl, cls) {
     }
     if (_par_eq(fp, fl, "f64::ln") == 1) {
         _par_got_n = 0;
+        var rb: f64 = f64_ln(x);
+        _par_got_f(rb);
+        _par_shadow_record("f64::ln ~ f64_ln builtin", cls);
+        _par_got_n = 0;
         var r: f64 = _f64_ln_polyfill(x);
         _par_got_f(r);
         _par_shadow_record("f64::ln ~ _f64_ln_polyfill", cls);
         return 0;
     }
     if (_par_eq(fp, fl, "f64::atan") == 1) {
+        _par_got_n = 0;
+        var rb: f64 = f64_atan(x);
+        _par_got_f(rb);
+        _par_shadow_record("f64::atan ~ f64_atan builtin", cls);
         _par_got_n = 0;
         var r: f64 = _f64_atan_polyfill(x);
         _par_got_f(r);
@@ -332,6 +356,13 @@ fn _par_shadows(mp, ml, fp, fl, cls) {
     }
     if (_par_in_n < 2) { return 0; }
     var y: f64 = _par_in(1);
+    if (_par_eq(fp, fl, "f64::powf") == 1) {
+        _par_got_n = 0;
+        var r: f64 = ganita_f64_pow(x, y);
+        _par_got_f(r);
+        _par_shadow_record("f64::powf ~ ganita_f64_pow", cls);
+        return 0;
+    }
     if (_par_eq(fp, fl, "f64::max") == 1) {
         _par_got_n = 0;
         var r: f64 = f64_max(x, y);
@@ -350,10 +381,15 @@ fn _par_shadows(mp, ml, fp, fl, cls) {
 }
 
 # The class-C bound for a function, in ulps; -1 when none is set yet (the rows are measured). Under ADR 0004 every
-# class-C function is compared at 0 ulp against the corrected oracle once it runs on its correctly rounded primitive
-# (src/mathx.cyr, M0 part 2c); until then the stdlib counterparts are measured, never gated.
+# class-C function on a correctly rounded primitive is compared at 0 ulp against the corrected oracle. tanh is
+# measured until its primitive exists (M0 part 2c-3). A shadow line uses its row's function's bound.
 #must_use
 fn _par_c_bound(fp, fl): i64 {
+    if (_par_eq(fp, fl, "f64::exp") == 1) { return 0; }
+    if (_par_eq(fp, fl, "f64::exp_m1") == 1) { return 0; }
+    if (_par_eq(fp, fl, "f64::ln") == 1) { return 0; }
+    if (_par_eq(fp, fl, "f64::powf") == 1) { return 0; }
+    if (_par_eq(fp, fl, "f64::atan") == 1) { return 0; }
     return 0 - 1;
 }
 
