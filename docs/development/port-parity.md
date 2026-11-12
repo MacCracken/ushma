@@ -41,6 +41,15 @@ matching any NaN, so this doesn't affect parity.
 `validate.py` independently confirms Rust's semantics on all 600 `f64::max` and 600 `f64::min`
 golden rows: a NaN operand is ignored, and (±0, ∓0) gives the second operand.
 
+## 1b. Generated tables on three targets (M0 step 6, 2026-11-11)
+
+`python3 -I -B scripts/oracle/probe_tables.py . --all-targets` compiles all 1,052 generated
+values with the Cyrius compiler: the constants, the four public tables, steam's private
+tables and the other private constants. Each value is checked against the golden rows or an
+independent Python parse of the Rust literals. The output is byte-identical on x86_64 ELF,
+aarch64 (qemu) and x86_64 PE (wine). Decimal literals convert to the same bits on every
+target.
+
 ## 2. Baselines on three targets (M0 step 8)
 
 *Pending (M0 part 3).*

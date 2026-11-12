@@ -13,6 +13,9 @@ compares bit for bit:
   Python's correctly rounded `float()`;
 - `src/constants.cyr`: every `const US_<NAME> = <literal>;` under a `# Rust: ushma::<path>` line
   parses to that constant's golden bits;
+- the public table rows (`<module>::<PRESET>` in `chem`, `material`, `phase`, `state`): every
+  preset's name and fields equal the struct literal in `rust-old/src/<module>.rs`, and the
+  `<module>::<ALL>` row names exactly the slice's entries in order;
 - `math.tsv`, classes A and B: sqrt, abs, ceil, min, max, clamp, is_finite, is_nan and powi are
   recomputed in IEEE double arithmetic (Python floats are binary64; powi follows
   `__powidf2`'s order). Class C rows (glibc's transcendentals) are checked against MPFR by the
@@ -28,6 +31,11 @@ import struct
 import sys
 
 TOKEN = re.compile(r"^(f:[0-9a-f]{16}|i:-?[0-9]+|e:[A-Za-z0-9_]+\.[A-Za-z0-9_]+|s:\S*|n:|E:[A-Za-z0-9_]+|v:[0-9]+)$")
+
+
+def pct(text):
+    """Format 1's `s:` encoding: every byte outside printable ASCII (0x21-0x7e), and `%`, is `%XX`."""
+    return "".join(chr(b) if 0x21 <= b <= 0x7E and b != 0x25 else f"%{b:02X}" for b in text.encode())
 
 
 def bits(x):
@@ -282,6 +290,59 @@ def check_math(rows, rep):
     return counts
 
 
+TABLES = [  # (module, struct, ALL slice)
+    ("material", "ThermalMaterial", "ALL_MATERIALS"),
+    ("state", "GasData", "ALL_GASES"),
+    ("phase", "SubstanceData", "ALL_SUBSTANCES"),
+    ("chem", "Species", "ALL_SPECIES"),
+]
+
+
+def check_tables(root, tables, rep):
+    """The public presets' golden rows against their struct literals in the Rust source."""
+    for module, ty, all_name in TABLES:
+        src = (root / "rust-old/src" / f"{module}.rs").read_text()
+        src = src[: src.find("#[cfg(test)]")] if "#[cfg(test)]" in src else src
+        literals = {}
+        for name, body in re.findall(rf"^pub const (\w+): {ty} = {ty} \{{(.*?)\n\}};", src, re.M | re.S):
+            body = "\n".join(ln.split("//", 1)[0] for ln in body.splitlines())
+            fields = re.findall(r"(\w+):\s*([^,]+),", body)
+            if not fields or fields[0][0] != "name":
+                rep.fail(f"{module}.rs {name}", "no `name` field first")
+                continue
+            m = re.fullmatch(r'Cow::Borrowed\("([^"]*)"\)', fields[0][1].strip())
+            if not m:
+                rep.fail(f"{module}.rs {name}", f"name is {fields[0][1]!r}")
+                continue
+            literals[name] = (m.group(1), [float(v.strip().replace("_", "")) for _, v in fields[1:]])
+        all_m = re.search(rf"^pub const {all_name}: &\[&{ty}\] = &\[(.*?)\];", src, re.M | re.S)
+        all_order = re.findall(r"&(\w+)", all_m.group(1)) if all_m else []
+        seen = set()
+        for n, fn, cls, ins, outs in tables.get(f"{module}.tsv", []):
+            where = f"{module}.tsv:{n}"
+            if not fn.startswith(f"{module}::") or ins:
+                continue
+            rust = fn.split("::", 1)[1]
+            if rust == all_name:
+                names = [t[2:] for t in outs[1:]]
+                if outs[0] != f"v:{len(names)}" or names != all_order:
+                    rep.fail(where, f"{fn} names {names}, the slice is {all_order}")
+                else:
+                    rep.ok()
+                continue
+            if rust not in literals:
+                continue  # a function row (M1+), not a preset
+            seen.add(rust)
+            name, vals = literals[rust]
+            want = [f"s:{pct(name)}"] + [f"f:{bits(v):016x}" for v in vals]
+            if outs == want:
+                rep.ok()
+            else:
+                rep.fail(where, f"{fn}: golden {outs}, Rust literal {want}")
+        if seen != set(literals):
+            rep.fail(f"{module}.tsv", f"presets without a golden row: {sorted(set(literals) - seen)}")
+
+
 def main():
     root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
     rep = Report()
@@ -295,10 +356,11 @@ def main():
     tables = {p.name: read_tsv(p, rep) for p in files}
     golden = check_constants(root, tables.get("constants.tsv", []), rep)
     check_constants_cyr(root, golden, rep)
+    check_tables(root, tables, rep)
     counts = check_math(tables.get("math.tsv", []), rep)
     total = sum(len(v) for v in tables.values())
     print(f"files: {len(files)}; rows: {total}; math classes: {dict(sorted(counts.items()))}")
-    print(f"independently recomputed: {rep.checked} (constants, src/constants.cyr, math classes A and B)")
+    print(f"independently recomputed: {rep.checked} (constants, src/constants.cyr, table presets, math classes A and B)")
     print(f"FAILURES: {rep.failures}")
     return 1 if rep.failures else 0
 

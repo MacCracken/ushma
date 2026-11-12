@@ -35,6 +35,7 @@ if [ -f scripts/oracle/Cargo.toml ]; then
         if [ -f "scripts/oracle/$py" ]; then
             case "$py" in
                 mathx_tables.py) PAT='stale|STALE|ok' run python3 -I -B "scripts/oracle/$py" --check ;;
+                probe_tables.py) PAT='FAIL|checked' run python3 -I -B "scripts/oracle/$py" . --all-targets ;;
                 *) PAT='FAIL|rows|ok|checked|mismatch' TAILN=6 run python3 -I -B "scripts/oracle/$py" . ;;
             esac
         fi

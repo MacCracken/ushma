@@ -68,11 +68,22 @@ fn positional(x: f64) -> String {
 /// (attributes in between are skipped), as `# ` comment lines. Empty if there is none.
 /// Only comments are read from the Rust source; values always come from the oracle's API.
 pub fn doc_comment(src: &str, item: &str) -> Result<String, String> {
+    doc_comment_after(src, "", item)
+}
+
+/// As [`doc_comment`], for the first line starting with `item` (after leading whitespace) that
+/// follows the first line starting with `anchor`: a field inside `pub struct GasData {`.
+pub fn doc_comment_after(src: &str, anchor: &str, item: &str) -> Result<String, String> {
     let lines: Vec<&str> = src.lines().collect();
-    let at = lines
+    let from = lines
         .iter()
-        .position(|l| l.trim_start().starts_with(item))
-        .ok_or_else(|| format!("no `{item}` in the Rust source"))?;
+        .position(|l| l.trim_start().starts_with(anchor))
+        .ok_or_else(|| format!("no `{anchor}` in the Rust source"))?;
+    let at = from
+        + lines[from..]
+            .iter()
+            .position(|l| l.trim_start().starts_with(item))
+            .ok_or_else(|| format!("no `{item}` after `{anchor}` in the Rust source"))?;
     let mut docs = Vec::new();
     let mut k = at;
     while k > 0 {
@@ -91,6 +102,55 @@ pub fn doc_comment(src: &str, item: &str) -> Result<String, String> {
     for d in docs {
         let _ = writeln!(out, "{}", comment_line(d.trim_end()));
     }
+    Ok(out)
+}
+
+/// `var <name>: f64[n] = { … };`, one value per line with its row label as a comment.
+pub fn f64_column(name: &str, values: &[f64], labels: &[String]) -> Result<String, String> {
+    if values.len() != labels.len() {
+        return Err(format!(
+            "{name}: {} values, {} labels",
+            values.len(),
+            labels.len()
+        ));
+    }
+    let mut out = format!("var {name}: f64[{}] = {{\n", values.len());
+    for (v, l) in values.iter().zip(labels) {
+        let _ = writeln!(out, "    {},  # {l}", f64_lit(*v)?);
+    }
+    out.push_str("};\n");
+    Ok(out)
+}
+
+/// A NUL-terminated string blob and its offsets: `var <prefix>_NAME_OFF: u16[n]` (row i's offset)
+/// and `var <prefix>_NAME_BYTES: u8[m]` (every string's UTF-8 bytes and a NUL, in row order).
+pub fn name_blob(prefix: &str, names: &[String], what: &str) -> Result<String, String> {
+    let mut off = Vec::new();
+    let mut bytes: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut at = 0_usize;
+    for n in names {
+        if n.as_bytes().contains(&0) {
+            return Err(format!("{prefix}: `{n}` holds a NUL"));
+        }
+        off.push(u16::try_from(at).map_err(|_| format!("{prefix}: blob past 64 KiB"))?);
+        let mut b = n.as_bytes().to_vec();
+        b.push(0);
+        at += b.len();
+        bytes.push((n.clone(), b));
+    }
+    let mut out = format!("# Offset of row i's name in {prefix}_NAME_BYTES ({what}).\n");
+    let _ = writeln!(out, "var {prefix}_NAME_OFF: u16[{}] = {{", off.len());
+    for (o, n) in off.iter().zip(names) {
+        let _ = writeln!(out, "    {o},  # {n}");
+    }
+    out.push_str("};\n\n");
+    out.push_str("# Every name, NUL-terminated, in row order (UTF-8).\n");
+    let _ = writeln!(out, "var {prefix}_NAME_BYTES: u8[{at}] = {{");
+    for (n, b) in &bytes {
+        let list: Vec<String> = b.iter().map(u8::to_string).collect();
+        let _ = writeln!(out, "    {},  # {n}", list.join(", "));
+    }
+    out.push_str("};\n");
     Ok(out)
 }
 

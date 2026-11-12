@@ -18,14 +18,20 @@
 //!
 //! Adapted from kimiya's `scripts/oracle/` (same format, same rules; tanmatra's originally).
 //! Modules are added at their milestone, with the golden grid from the port plan §6: `constants`
-//! and `math` (M0 part 2a), then the table data (part 2b), then each module's rows from M1 on.
+//! and `math` (M0 part 2a); the table data and the rows that pin it (part 2b: `chem`, `material`,
+//! `phase`, `state`, plus the private `steam_data` and `constants_private`); each module's own rows
+//! from M1 on.
 
 mod cyr;
 mod glibc;
 mod grids;
 mod m_constants;
 mod m_math;
+mod rustsrc;
 mod t_constants;
+mod t_private;
+mod t_steam;
+mod t_tables;
 mod tsv;
 
 use std::collections::BTreeSet;
@@ -33,9 +39,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-/// Every golden emitter, in file-name order.
-fn golden_modules() -> Vec<tsv::Module> {
-    vec![m_constants::emit(), m_math::emit()]
+/// Every golden emitter, in file-name order: `constants`, `math`, and the four modules the
+/// public tables seed (`chem`, `material`, `phase`, `state`; M0 part 2b).
+fn golden_modules() -> Result<Vec<tsv::Module>, String> {
+    let mut v = vec![m_constants::emit(), m_math::emit()];
+    v.extend(t_tables::golden()?);
+    v.sort_by_key(|m| m.name);
+    Ok(v)
 }
 
 /// One generated file: its path from the repo root, its contents, and a summary.
@@ -52,13 +62,31 @@ fn read(path: &Path) -> Result<String, String> {
 /// Every generated Cyrius source, in file-name order. Each is built from the oracle's API; the
 /// Rust source is read for comments (and, for private data, literals with a completeness proof).
 fn cyrius_outputs(root: &Path, prov: &str) -> Result<Vec<Output>, String> {
-    let files = [("src/constants.cyr", t_constants::emit(root, prov)?)];
+    let steam_src = read(&root.join("rust-old/src/steam.rs"))?;
+    let mut files = vec![
+        (
+            "src/constants.cyr".to_string(),
+            t_constants::emit(root, prov)?,
+        ),
+        (
+            "src/constants_private.cyr".to_string(),
+            t_private::emit(root, prov)?,
+        ),
+        (
+            "src/steam_data.cyr".to_string(),
+            t_steam::emit(&steam_src, prov)?,
+        ),
+    ];
+    for t in t_tables::all() {
+        files.push((format!("src/{}.cyr", t.file), t.emit_cyr(root, prov)?));
+    }
+    files.sort();
     Ok(files
         .into_iter()
         .map(|(rel, text)| {
             let lines = text.lines().count();
             Output {
-                rel: rel.to_string(),
+                rel,
                 text,
                 summary: format!("{lines} lines"),
             }
@@ -182,7 +210,7 @@ fn run() -> Result<bool, String> {
 
     let mut outputs = Vec::new();
     let mut emitted = BTreeSet::new();
-    for module in golden_modules() {
+    for module in golden_modules()? {
         let name = format!("{}.tsv", module.name);
         emitted.insert(name.clone());
         outputs.push(Output {
