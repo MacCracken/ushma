@@ -29,6 +29,7 @@ include "src/material_data.cyr"
 include "src/material.cyr"
 include "src/transfer.cyr"
 include "src/state_data.cyr"
+include "src/state.cyr"
 include "src/phase_data.cyr"
 include "src/chem_data.cyr"
 
@@ -461,6 +462,126 @@ fn _par_material(fp, fl): i64 {
     return 0;
 }
 
+# ── state ───────────────────────────────────────────────────────────────────────────
+
+# A UsGas from the row's four input tokens (s:name, critical_t, critical_p, acentric_factor): 1, or 0.
+fn _par_gas_in(g: *UsGas): i64 {
+    if (_par_in_n != 4) { return 0; }
+    var nw[8];
+    var name = _par_in_text(0, &nw);
+    if (name == 0) { return 0; }
+    var tc: f64 = _par_in(1);
+    var pc: f64 = _par_in(2);
+    var om: f64 = _par_in(3);
+    g.name = name;
+    g.name_len = load64(&nw);
+    g.critical_t = tc;
+    g.critical_p = pc;
+    g.acentric_factor = om;
+    return 1;
+}
+
+# One GasData JSON row: 1 when handled, 0 for none, -1 for unusable inputs.
+fn _par_gas_json(fp, fl): i64 {
+    if (_par_mat_sb == 0) {
+        _par_mat_sb = str_builder_new();
+        _par_mat_arena = arena_allocator_growable(65536);
+    }
+    var g: UsGas;
+    if (_par_eq(fp, fl, "state::GasData::from_json") == 1) {
+        var dn[8];
+        var doc = _par_in_text(0, &dn);
+        if (doc == 0) { return 0 - 1; }
+        var n = load64(&dn);
+        reset_via(_par_mat_arena);
+        var t, v = us_gas_from_json_a(_par_mat_arena, doc, n, &g);
+        if (is_err_result(t) == 1) {
+            _par_got_err(v);
+            if (_par_bayan_mapped_refusal(doc, n) == 1) { _par_adr5 = 1; }
+            return 1;
+        }
+        if (_par_has_int_neg_zero(doc, n) == 1) { _par_adr5 = 1; }
+        _par_got_text(g.name, g.name_len);
+        var tc: f64 = g.critical_t;
+        var pc: f64 = g.critical_p;
+        var om: f64 = g.acentric_factor;
+        _par_got_f(tc);
+        _par_got_f(pc);
+        _par_got_f(om);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::GasData::to_json") == 1) {
+        if (_par_gas_in(&g) == 0) { return 0 - 1; }
+        store64(_par_mat_sb + 8, 0);
+        us_gas_to_json(_par_mat_sb, &g);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    return 0;
+}
+
+# One state row: 1 when handled, 0 for a function with no counterpart yet, -1 for unusable inputs.
+fn _par_state(fp, fl): i64 {
+    var j = _par_gas_json(fp, fl);
+    if (j != 0) { return j; }
+    var a: f64 = _par_in(0);
+    var b: f64 = _par_in(1);
+    var c: f64 = _par_in(2);
+    var d: f64 = _par_in(3);
+    var e: f64 = _par_in(4);
+    if (_par_eq(fp, fl, "state::ideal_gas_pressure") == 1) {
+        var t, v = us_ideal_gas_pressure(a, b, c);
+        _par_got_res(t, v);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::ideal_gas_volume") == 1) {
+        var t1, v1 = us_ideal_gas_volume(a, b, c);
+        _par_got_res(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::ideal_gas_temperature") == 1) {
+        var t2, v2 = us_ideal_gas_temperature(a, b, c);
+        _par_got_res(t2, v2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::van_der_waals_pressure") == 1) {
+        var t3, v3 = us_van_der_waals_pressure(a, b, c, d, e);
+        _par_got_res(t3, v3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::isothermal_work") == 1) {
+        var t4, v4 = us_isothermal_work(a, b, c, d);
+        _par_got_res(t4, v4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::isobaric_work") == 1) {
+        var w: f64 = us_isobaric_work(a, b, c);
+        _par_got_f(w);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::adiabatic_temperature") == 1) {
+        var t5, v5 = us_adiabatic_temperature(a, b, c, d);
+        _par_got_res(t5, v5);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::compressibility_factor") == 1) {
+        var t6, v6 = us_compressibility_factor(a, b, c, d);
+        _par_got_res(t6, v6);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::reduced_temperature") == 1) {
+        var tr: f64 = us_reduced_temperature(a, b);
+        _par_got_f(tr);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::reduced_pressure") == 1) {
+        var pr: f64 = us_reduced_pressure(a, b);
+        _par_got_f(pr);
+        return 1;
+    }
+    return 0;
+}
+
 # ── transfer ────────────────────────────────────────────────────────────────────────
 
 # Appends a Result: the f64 payload of Ok, or `E:Variant` for Err.
@@ -669,6 +790,7 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "transfer") == 1) { return _par_transfer(fp, fl); }
     _par_adr5 = 0;
     if (_par_eq(mp, ml, "material") == 1 && _par_in_n != 0) { return _par_material(fp, fl); }
+    if (_par_eq(mp, ml, "state") == 1 && _par_in_n != 0) { return _par_state(fp, fl); }
     if (_par_in_n != 0) { return 0; }   # a preset row has no inputs; anything else is a module function
     if (_par_eq(mp, ml, "material") == 1) {
         return _par_table(fp, fl, "material", "ALL_MATERIALS", _par_tab_material, US_MATERIAL_COUNT,
@@ -776,8 +898,9 @@ fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "f64::powf") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::atan") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::tanh") == 1) { return 0; }
-    # Every class-C transfer function computes on the _us_cr_* primitives.
+    # Every class-C transfer and state function computes on the _us_cr_* primitives.
     if (fl > 10 && _par_eq(fp, 10, "transfer::") == 1) { return 0; }
+    if (fl > 7 && _par_eq(fp, 7, "state::") == 1) { return 0; }
     return 0 - 1;
 }
 

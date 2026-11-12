@@ -1,8 +1,9 @@
 # ushma fuzz harness: every reader of untrusted input (port plan §6). Run with `cyrius fuzz --poison --bounds`.
 #
-# The targets so far: USHMA_LOG parsing (`us_log_parse`) and the `ThermalMaterial` decoder (`us_material_from_json_a`,
-# which must also round-trip: what it accepts re-encodes, reads back, and re-encodes to the same bytes). The other
-# JSON decoders and the daimon response handling join as they port. Each target must accept any bytes: return a
+# The targets so far: USHMA_LOG parsing (`us_log_parse`), and the `ThermalMaterial` and `GasData` decoders
+# (`us_material_from_json_a`, `us_gas_from_json_a`), which must also round-trip: what one accepts re-encodes, reads
+# back, and re-encodes to the same bytes. The other JSON decoders and the daimon response handling join as they
+# port. Each target must accept any bytes: return a
 # defined result, never crash, never write outside its buffers (the poisoning allocator and --bounds check that).
 #
 # Inputs are seeded and deterministic: mutations (flips, inserts, deletes, truncations, case changes) of the valid
@@ -18,6 +19,8 @@ include "src/logging.cyr"
 include "src/json.cyr"
 include "src/material_data.cyr"
 include "src/material.cyr"
+include "src/state_data.cyr"
+include "src/state.cyr"
 
 var _fz_state = 0x2545F4914F6CDD1D;
 var _fz_bad = 0;
@@ -25,6 +28,7 @@ var _fz_arena = 0;
 var _fz_sb = 0;
 var _fz_sb2 = 0;
 var _fz_read = 0;
+var _fz_gas_read = 0;
 
 # xorshift64*: the next pseudo-random word.
 fn fz_next(): i64 {
@@ -75,11 +79,41 @@ fn fz_material(data, len) {
     return 0;
 }
 
+# The GasData decoder on one input: any result is fine, but an accepted document must round-trip.
+fn fz_gas(data, len) {
+    var g: UsGas;
+    reset_via(_fz_arena);
+    var t, v = us_gas_from_json_a(_fz_arena, data, len, &g);
+    if (is_ok(t) == 0) {
+        if (v != US_ERR_DESERIALIZE) { _fz_bad = _fz_bad + 1; }
+        return 0;
+    }
+    _fz_gas_read = _fz_gas_read + 1;
+    store64(_fz_sb + 8, 0);
+    us_gas_to_json(_fz_sb, &g);
+    var g2: UsGas;
+    var t2, v2 = us_gas_from_json_a(_fz_arena, load64(_fz_sb), load64(_fz_sb + 8), &g2);
+    if (is_ok(t2) == 0) {
+        # NaN and ±∞ write as null, which reads back as no f64 (as fz_material).
+        var tc: f64 = g.critical_t;
+        var pc: f64 = g.critical_p;
+        var om: f64 = g.acentric_factor;
+        if (_us_is_finite(tc) + _us_is_finite(pc) + _us_is_finite(om) == 3) { _fz_bad = _fz_bad + 1; }
+        return 0;
+    }
+    store64(_fz_sb2 + 8, 0);
+    us_gas_to_json(_fz_sb2, &g2);
+    var n1 = load64(_fz_sb + 8);
+    if (n1 != load64(_fz_sb2 + 8) || memeq(load64(_fz_sb), load64(_fz_sb2), n1) == 0) { _fz_bad = _fz_bad + 1; }
+    return 0;
+}
+
 # Fuzz target: one input of `len` bytes at `data`, through every reader.
 fn fuzz_main(data, len) {
     var lv = us_log_parse(data, len);
     if (lv < 0 - 1 || lv > LOG_FATAL + 1) { _fz_bad = _fz_bad + 1; }
     fz_material(data, len);
+    fz_gas(data, len);
     return 0;
 }
 
@@ -134,7 +168,7 @@ fn main() {
     _fz_sb2 = str_builder_new();
     var cap = 192;
     var buf = alloc(cap + 1);
-    var seeds = alloc(8 * 14);
+    var seeds = alloc(8 * 17);
     store64(seeds, "trace");
     store64(seeds + 8, "debug");
     store64(seeds + 16, "info");
@@ -152,6 +186,10 @@ fn main() {
     store64(seeds + 96, fz_cat(un, "\"melting_point\":1e16,\"boiling_point\":5,\"x\":[1,{\"y\":null}]}"));
     var rv = "{\"boiling_point\":5,\"melting_point\":4,\"density\":3,";
     store64(seeds + 104, fz_cat(rv, "\"specific_heat\":2,\"conductivity\":1,\"name\":\"r\"}"));
+    var n2 = "{\"name\":\"Nitrogen\",\"critical_t\":126.19,";
+    store64(seeds + 112, fz_cat(n2, "\"critical_p\":3390000.0,\"acentric_factor\":0.037}"));
+    store64(seeds + 120, "[\"Water\",647.096,22064000.0,0.344]");
+    store64(seeds + 128, "{\"acentric_factor\":-0.0,\"critical_p\":1e-5,\"critical_t\":1e16,\"name\":\"\\u00e9\"}");
     var i = 0;
     while (i < 50000) {
         var n = 0;
@@ -160,7 +198,7 @@ fn main() {
             var k = 0;
             while (k < n) { store8(buf + k, fz_below(256)); k = k + 1; }
         } else {
-            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(14)));
+            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(17)));
         }
         fuzz_main(buf, n);
         i = i + 1;
@@ -172,6 +210,8 @@ fn main() {
     }
     print("fuzz: ok (50000 inputs; material documents read: ", 49);
     fmt_int(_fz_read);
+    print(", gas documents read: ", 22);
+    fmt_int(_fz_gas_read);
     println(")");
     return 0;
 }

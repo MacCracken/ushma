@@ -30,8 +30,10 @@ mod m_constants;
 mod m_fmtf;
 mod m_material;
 mod m_math;
+mod m_state;
 mod m_transfer;
 mod rustsrc;
+mod sweep;
 mod t_constants;
 mod t_private;
 mod t_steam;
@@ -56,6 +58,9 @@ fn golden_modules() -> Result<Vec<tsv::Module>, String> {
     for m in &mut tables {
         if m.name == "material" {
             m_material::rows(m);
+        }
+        if m.name == "state" {
+            m_state::rows(m);
         }
     }
     v.extend(tables);

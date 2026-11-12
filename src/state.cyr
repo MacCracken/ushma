@@ -1,0 +1,299 @@
+# state.cyr — equations of state: the ideal gas, van der Waals, work and adiabatic relations, compressibility, reduced
+# coordinates, and the reference gases' critical data (Rust 1.4.0 `state`). All SI: pascals, cubic meters, kelvins,
+# moles.
+#
+# Each function computes in the order Rust 1.4.0 writes, so its arithmetic is bit-identical (class B), and its ln and
+# pow are correctly rounded (ADR 0004, class C). A refusal returns Err(US_ERR_*) and reports its value at DEBUG
+# (src/validate.cyr). ideal_gas_pressure and van_der_waals_pressure open a DEBUG span under Rust's span name.
+#
+# A gas is a UsGas: its name (bytes and length), critical temperature and pressure, and acentric factor. The 8
+# reference gases are generated tables (src/state_data.cyr: `US_GAS_<NAME>` indices, `US_GAS_COUNT`); us_gas_preset
+# fills a UsGas from one. Its JSON is serde_json's `GasData` document, `{"name":…,"critical_t":…,"critical_p":…,
+# "acentric_factor":…}` (ADR 0005; src/json.cyr has the rules).
+
+struct UsGas {
+    name;
+    name_len;
+    critical_t: f64;
+    critical_p: f64;
+    acentric_factor: f64;
+}
+
+# --- Ideal gas ---
+
+# The ideal gas law P = nRT / V (Pa). Err(US_ERR_INVALID_PARAMETER) unless n ≥ 0, Err(US_ERR_INVALID_TEMPERATURE)
+# unless T ≥ 0, Err(US_ERR_INVALID_VOLUME) unless V > 0.
+#must_use
+fn us_ideal_gas_pressure(moles: f64, temperature: f64, volume: f64): Result {
+    _us_span_enter("ideal_gas_pressure", 18);
+    if (_us_finite_ge(moles, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_ideal_gas_pressure", "moles", moles));
+    }
+    if (_us_finite_ge(temperature, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_ideal_gas_pressure", "temperature", temperature));
+    }
+    if (_us_finite_gt(volume, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_ideal_gas_pressure", "volume", volume));
+    }
+    var p: f64 = moles * US_GAS_CONSTANT * temperature / volume;
+    _us_span_exit();
+    return Ok(p);
+}
+
+# The ideal gas volume V = nRT / P (m³). Err(US_ERR_INVALID_PARAMETER) unless n ≥ 0, Err(US_ERR_INVALID_TEMPERATURE)
+# unless T ≥ 0, Err(US_ERR_INVALID_PRESSURE) unless P > 0.
+#must_use
+fn us_ideal_gas_volume(moles: f64, temperature: f64, pressure: f64): Result {
+    if (_us_finite_ge(moles, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_ideal_gas_volume", "moles", moles));
+    }
+    if (_us_finite_ge(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_ideal_gas_volume", "temperature", temperature));
+    }
+    if (_us_finite_gt(pressure, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE, "us_ideal_gas_volume", "pressure", pressure));
+    }
+    var v: f64 = moles * US_GAS_CONSTANT * temperature / pressure;
+    return Ok(v);
+}
+
+# The ideal gas temperature T = PV / (nR) (K). Err(US_ERR_INVALID_PARAMETER) unless n ≥ 0, Err(US_ERR_INVALID_PRESSURE)
+# unless P ≥ 0, Err(US_ERR_INVALID_VOLUME) unless V ≥ 0, Err(US_ERR_DIVISION_BY_ZERO) when n < 1e-30.
+#must_use
+fn us_ideal_gas_temperature(pressure: f64, volume: f64, moles: f64): Result {
+    if (_us_finite_ge(moles, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_ideal_gas_temperature", "moles", moles));
+    }
+    if (_us_finite_ge(pressure, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE, "us_ideal_gas_temperature", "pressure", pressure));
+    }
+    if (_us_finite_ge(volume, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_ideal_gas_temperature", "volume", volume));
+    }
+    var am: f64 = f64_abs(moles);
+    if (_us_finite_ge(am, _US_TINY) == 0) {
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_ideal_gas_temperature", "moles", moles));
+    }
+    var t: f64 = pressure * volume / (moles * US_GAS_CONSTANT);
+    return Ok(t);
+}
+
+# --- Van der Waals ---
+
+# The van der Waals pressure P = nRT / (V − nb) − a(n/V)² (Pa), with a the attraction (Pa·m⁶/mol²) and b the excluded
+# volume (m³/mol). Err(US_ERR_INVALID_PARAMETER) unless n ≥ 0, Err(US_ERR_INVALID_TEMPERATURE) unless T > 0,
+# Err(US_ERR_INVALID_VOLUME) unless V > 0, Err(US_ERR_INVALID_PARAMETER) unless a is finite, b ≥ 0 and V − nb > 0.
+#must_use
+fn us_van_der_waals_pressure(moles: f64, temperature: f64, volume: f64, a: f64, b: f64): Result {
+    _us_span_enter("van_der_waals_pressure", 22);
+    if (_us_finite_ge(moles, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_van_der_waals_pressure", "moles", moles));
+    }
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_van_der_waals_pressure", "temperature", temperature));
+    }
+    if (_us_finite_gt(volume, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_van_der_waals_pressure", "volume", volume));
+    }
+    if (_us_is_finite(a) == 0 || _us_finite_ge(b, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_ff(US_ERR_INVALID_PARAMETER, "us_van_der_waals_pressure", "parameters", "a", a, "b", b));
+    }
+    var v_eff: f64 = volume - moles * b;
+    if (_us_finite_gt(v_eff, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_van_der_waals_pressure", "V-nb", v_eff));
+    }
+    var density: f64 = moles / volume;
+    var p: f64 = moles * US_GAS_CONSTANT * temperature / v_eff - a * density * density;
+    _us_span_exit();
+    return Ok(p);
+}
+
+# --- Work and adiabatic relations ---
+
+# Work of an isothermal ideal-gas expansion W = nRT·ln(V₂/V₁) (J). Err(US_ERR_INVALID_PARAMETER) unless n ≥ 0,
+# Err(US_ERR_INVALID_TEMPERATURE) unless T ≥ 0, Err(US_ERR_INVALID_VOLUME) unless V₁ > 0 and V₂ > 0.
+#must_use
+fn us_isothermal_work(moles: f64, temperature: f64, v1: f64, v2: f64): Result {
+    if (_us_finite_ge(moles, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_isothermal_work", "moles", moles));
+    }
+    if (_us_finite_ge(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_isothermal_work", "temperature", temperature));
+    }
+    if (_us_finite_gt(v1, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_isothermal_work", "v1", v1));
+    }
+    if (_us_finite_gt(v2, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_isothermal_work", "v2", v2));
+    }
+    var lr: f64 = _us_cr_ln(v2 / v1);
+    var w: f64 = moles * US_GAS_CONSTANT * temperature * lr;
+    return Ok(w);
+}
+
+# Work of an isobaric process W = P(V₂ − V₁) (J).
+#must_use
+#pure
+fn us_isobaric_work(pressure: f64, v1: f64, v2: f64): f64 {
+    var w: f64 = pressure * (v2 - v1);
+    return w;
+}
+
+# The temperature after an adiabatic change of volume, T₂ = T₁(V₁/V₂)^(γ−1) (K). Err(US_ERR_INVALID_TEMPERATURE)
+# unless T₁ > 0, Err(US_ERR_INVALID_PARAMETER) unless γ > 1, Err(US_ERR_INVALID_VOLUME) unless V₁ > 0 and V₂ > 0.
+#must_use
+fn us_adiabatic_temperature(t1: f64, v1: f64, v2: f64, gamma: f64): Result {
+    if (_us_finite_gt(t1, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_adiabatic_temperature", "t1", t1));
+    }
+    if (_us_finite_gt(gamma, 1.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_adiabatic_temperature", "gamma", gamma));
+    }
+    if (_us_finite_gt(v1, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_adiabatic_temperature", "v1", v1));
+    }
+    if (_us_finite_gt(v2, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_adiabatic_temperature", "v2", v2));
+    }
+    var pw: f64 = _us_cr_pow(v1 / v2, gamma - 1.0);
+    var t2: f64 = t1 * pw;
+    return Ok(t2);
+}
+
+# The compressibility factor Z = PV / (nRT): 1 for an ideal gas. Err(US_ERR_INVALID_PRESSURE) unless P > 0,
+# Err(US_ERR_INVALID_VOLUME) unless V > 0, Err(US_ERR_INVALID_TEMPERATURE) unless T > 0,
+# Err(US_ERR_INVALID_PARAMETER) unless n is finite, Err(US_ERR_DIVISION_BY_ZERO) when |nRT| < 1e-30.
+#must_use
+fn us_compressibility_factor(pressure: f64, volume: f64, moles: f64, temperature: f64): Result {
+    if (_us_finite_gt(pressure, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE, "us_compressibility_factor", "pressure", pressure));
+    }
+    if (_us_finite_gt(volume, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_compressibility_factor", "volume", volume));
+    }
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_compressibility_factor", "temperature", temperature));
+    }
+    if (_us_is_finite(moles) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_compressibility_factor", "moles", moles));
+    }
+    var denom: f64 = moles * US_GAS_CONSTANT * temperature;
+    var ad: f64 = f64_abs(denom);
+    if (_us_finite_ge(ad, _US_TINY) == 0) {
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_compressibility_factor", "nRT", denom));
+    }
+    var z: f64 = pressure * volume / denom;
+    return Ok(z);
+}
+
+# --- Reduced coordinates ---
+
+# Reduced temperature T_r = T / T_c.
+#must_use
+#pure
+fn us_reduced_temperature(t: f64, t_critical: f64): f64 {
+    var r: f64 = t / t_critical;
+    return r;
+}
+
+# Reduced pressure P_r = P / P_c.
+#must_use
+#pure
+fn us_reduced_pressure(p: f64, p_critical: f64): f64 {
+    var r: f64 = p / p_critical;
+    return r;
+}
+
+# --- Reference gases ---
+
+# The name of reference gas `i` (a C string into the generated table), or 0 when `i` is no reference gas.
+#must_use
+fn us_gas_name(i): cstring {
+    if (i < 0 || i >= US_GAS_COUNT) { return 0; }
+    var off = load16(&_US_GAS_NAME_OFF + (2 * i));
+    return &_US_GAS_NAME_BYTES + off;
+}
+
+# Fills *out with reference gas `i` (`US_GAS_NITROGEN` … `US_GAS_PROPANE`): Ok(0), or Err(US_ERR_INVALID_PARAMETER)
+# when `i` is no reference gas.
+#must_use
+fn us_gas_preset(i, out: *UsGas): Result {
+    if (i < 0 || i >= US_GAS_COUNT) {
+        return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_gas_preset", "index", i));
+    }
+    var name = us_gas_name(i);
+    var tc: f64 = US_GAS_CRITICAL_T[i];
+    var pc: f64 = US_GAS_CRITICAL_P[i];
+    var om: f64 = US_GAS_ACENTRIC_FACTOR[i];
+    out.name = name;
+    out.name_len = strlen(name);
+    out.critical_t = tc;
+    out.critical_p = pc;
+    out.acentric_factor = om;
+    return Ok(0);
+}
+
+# Appends *g as serde_json writes a `GasData`.
+fn us_gas_to_json(sb, g: *UsGas) {
+    var tc: f64 = g.critical_t;
+    var pc: f64 = g.critical_p;
+    var om: f64 = g.acentric_factor;
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "name", 1);
+    _us_jw_str(sb, g.name, g.name_len);
+    _us_jw_key(sb, "critical_t", 0);
+    _us_jw_f64(sb, tc);
+    _us_jw_key(sb, "critical_p", 0);
+    _us_jw_f64(sb, pc);
+    _us_jw_key(sb, "acentric_factor", 0);
+    _us_jw_f64(sb, om);
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# Reads a `GasData` document (`n` bytes at `buf`) into *out, its name copied onto allocator `a`: Ok(0), or
+# Err(US_ERR_DESERIALIZE), leaving *out unchanged. The parse tree is on `a` too: reset it when the result is used.
+#must_use
+fn us_gas_from_json_a(a, buf, n, out: *UsGas): Result {
+    var v = _us_jr_parse(a, buf, n);
+    var form = _us_jr_form(v, 4);
+    if (form == 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_gas_from_json")); }
+    var np[8];
+    var nn[8];
+    if (_us_jr_str(a, _us_jr_at(v, form, 0, "name"), &np, &nn) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_gas_from_json"));
+    }
+    var w[24];
+    if (_us_jr_f64(_us_jr_at(v, form, 1, "critical_t"), &w) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_gas_from_json"));
+    }
+    if (_us_jr_f64(_us_jr_at(v, form, 2, "critical_p"), &w + 8) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_gas_from_json"));
+    }
+    if (_us_jr_f64(_us_jr_at(v, form, 3, "acentric_factor"), &w + 16) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_gas_from_json"));
+    }
+    var tc: f64 = load64(&w);
+    var pc: f64 = load64(&w + 8);
+    var om: f64 = load64(&w + 16);
+    out.name = load64(&np);
+    out.name_len = load64(&nn);
+    out.critical_t = tc;
+    out.critical_p = pc;
+    out.acentric_factor = om;
+    return Ok(0);
+}
+
+# us_gas_from_json_a on the global heap: for a one-off read (each call's tree and name stay allocated).
+#must_use
+fn us_gas_from_json(buf, n, out: *UsGas): Result {
+    return us_gas_from_json_a(default_alloc(), buf, n, out);
+}

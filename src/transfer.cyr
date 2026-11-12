@@ -10,9 +10,6 @@
 # DEBUG span under Rust's span name: conduction, radiation, fin_rectangular_heat, lmtd_parallel, lmtd_counter,
 # view_factor_parallel_plates and view_factor_perpendicular_plates.
 
-# The smallest magnitude a divisor may have (Rust's 1e-30).
-var _US_TINY: f64 = 0.000000000000000000000000000001;
-
 # Fourier's law: q = k·A·(T_hot − T_cold) / L (W). Err(US_ERR_INVALID_CONDUCTIVITY) when k is negative or not finite,
 # Err(US_ERR_DIVISION_BY_ZERO) when |L| < 1e-30 or L is not finite.
 #must_use

@@ -5,7 +5,7 @@
 > (`# rust <file>: <test>`), at its module's milestone. Nothing is deferred: a test not ported yet is one whose
 > milestone hasn't come. The golden corpus (`tests/golden/`) checks every ported function on its grid besides.
 
-**479 Rust tests:** 102 ported; 78 at M2, 95 at M3, 64 at M4, 62 at M5, 27 at M6, 51 at M7.
+**479 Rust tests:** 130 ported; 50 at M2, 95 at M3, 64 at M4, 62 at M5, 27 at M6, 51 at M7.
 
 | Rust file | Tests | Ported | Due, unported | Later (milestone) |
 |---|---:|---:|---:|---|
@@ -21,12 +21,12 @@
 | `src/numerical.rs` | 27 | 0 | 0 | 27 (M6) |
 | `src/phase.rs` | 44 | 0 | 0 | 44 (M3) |
 | `src/stat.rs` | 33 | 0 | 0 | 33 (M5) |
-| `src/state.rs` | 47 | 0 | 0 | 47 (M2) |
+| `src/state.rs` | 47 | 28 | 0 | 19 (M2) |
 | `src/steam.rs` | 46 | 0 | 0 | 46 (M3) |
 | `src/transfer.rs` | 67 | 67 | 0 | — |
 | `src/validate.rs` | 2 | 2 | 0 | — |
 | `tests/integration.rs` | 30 | 6 | 0 | 8 (M2), 5 (M3), 5 (M4), 6 (M5) |
-| **Total** | **479** | **102** | **0** | |
+| **Total** | **479** | **130** | **0** | |
 
 ## Where each is ported
 
@@ -59,6 +59,34 @@
 | `src/material.rs` `test_volumetric_heat_capacity` | `tests/material.tcyr` `test_rust_material` |
 | `src/material.rs` `test_water_phase_transitions` | `tests/material.tcyr` `test_rust_material` |
 | `src/material.rs` `test_water_specific_heat` | `tests/material.tcyr` `test_rust_material` |
+| `src/state.rs` `test_adiabatic_invalid_gamma` | `tests/state.tcyr` `test_adiabatic` |
+| `src/state.rs` `test_adiabatic_roundtrip` | `tests/state.tcyr` `test_adiabatic` |
+| `src/state.rs` `test_adiabatic_temperature` | `tests/state.tcyr` `test_adiabatic` |
+| `src/state.rs` `test_adiabatic_temperature_validates_t1` | `tests/state.tcyr` `test_adiabatic` |
+| `src/state.rs` `test_all_gases_count` | `tests/state.tcyr` `test_gas_data` |
+| `src/state.rs` `test_compressibility_factor_validates_inputs` | `tests/state.tcyr` `test_compressibility` |
+| `src/state.rs` `test_compressibility_factor_zero_temp` | `tests/state.tcyr` `test_compressibility` |
+| `src/state.rs` `test_compressibility_ideal` | `tests/state.tcyr` `test_compressibility` |
+| `src/state.rs` `test_gas_constant_is_exact` | `tests/state.tcyr` `test_gas_data` |
+| `src/state.rs` `test_gas_data_serde_roundtrip` | `tests/state.tcyr` `test_gas_data` |
+| `src/state.rs` `test_gas_data_valid` | `tests/state.tcyr` `test_gas_data` |
+| `src/state.rs` `test_ideal_gas_pressure` | `tests/state.tcyr` `test_ideal_gas` |
+| `src/state.rs` `test_ideal_gas_rejects_negative_moles` | `tests/state.tcyr` `test_ideal_gas`, `tests/state.tcyr` `test_van_der_waals`, `tests/state.tcyr` `test_work` |
+| `src/state.rs` `test_ideal_gas_roundtrip` | `tests/state.tcyr` `test_ideal_gas` |
+| `src/state.rs` `test_ideal_gas_stp` | `tests/state.tcyr` `test_ideal_gas` |
+| `src/state.rs` `test_ideal_gas_temperature_zero_moles` | `tests/state.tcyr` `test_ideal_gas` |
+| `src/state.rs` `test_ideal_gas_zero_temp` | `tests/state.tcyr` `test_ideal_gas` |
+| `src/state.rs` `test_isobaric_work` | `tests/state.tcyr` `test_work` |
+| `src/state.rs` `test_isothermal_work_compression` | `tests/state.tcyr` `test_work` |
+| `src/state.rs` `test_isothermal_work_expansion` | `tests/state.tcyr` `test_work` |
+| `src/state.rs` `test_isothermal_work_negative_temp` | `tests/state.tcyr` `test_work` |
+| `src/state.rs` `test_isothermal_work_zero_temp` | `tests/state.tcyr` `test_work` |
+| `src/state.rs` `test_negative_temperature` | `tests/state.tcyr` `test_ideal_gas` |
+| `src/state.rs` `test_reduced_coordinates` | `tests/state.tcyr` `test_gas_data` |
+| `src/state.rs` `test_van_der_waals` | `tests/state.tcyr` `test_van_der_waals` |
+| `src/state.rs` `test_van_der_waals_negative_temp` | `tests/state.tcyr` `test_van_der_waals` |
+| `src/state.rs` `test_van_der_waals_volume_too_small` | `tests/state.tcyr` `test_van_der_waals` |
+| `src/state.rs` `test_zero_volume` | `tests/state.tcyr` `test_ideal_gas` |
 | `src/transfer.rs` `test_biot_number` | `tests/transfer.tcyr` `test_storage_diffusivity_biot` |
 | `src/transfer.rs` `test_biot_number_zero_conductivity` | `tests/transfer.tcyr` `test_storage_diffusivity_biot` |
 | `src/transfer.rs` `test_boundary_layer_invalid` | `tests/transfer.tcyr` `test_boundary_layers` |

@@ -9,6 +9,9 @@
 # `conductivity=-1`); otherwise it costs one level test. The value is written by fmtf's Display form into a stack
 # buffer, so a refusal never allocates unless a value's text is longer than the buffer.
 
+# The smallest magnitude a divisor may have (Rust's 1e-30, written positionally).
+var _US_TINY: f64 = 0.000000000000000000000000000001;
+
 # 1 when x is finite and strictly greater than `bound` (a finite bound), else 0. `x > bound` is false for NaN and −∞,
 # `x < +∞` for NaN and +∞, so one branch-free expression is the whole test, and #inline takes it: three checks cost
 # 6 ns instead of 21 (M1d's review, docs/benchmarks-rust-v-cyrius.md).

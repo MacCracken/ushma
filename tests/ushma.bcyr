@@ -15,6 +15,8 @@ include "src/json.cyr"
 include "src/material_data.cyr"
 include "src/material.cyr"
 include "src/transfer.cyr"
+include "src/state_data.cyr"
+include "src/state.cyr"
 
 # Keeps results observable, so no call can be dropped.
 var _bn_sink = 0;
@@ -167,6 +169,42 @@ fn b_vf_perpendicular(x): i64 {
     return v;
 }
 
+# ideal_gas_pressure(1, 300, 0.025).
+fn b_ig_pressure(x): i64 {
+    var t, v = us_ideal_gas_pressure(1.0, 300.0, 0.025);
+    return v;
+}
+
+# ideal_gas_volume(1, 300, 101325).
+fn b_ig_volume(x): i64 {
+    var t, v = us_ideal_gas_volume(1.0, 300.0, 101325.0);
+    return v;
+}
+
+# van_der_waals_pressure(1, 300, 0.025, 0.3658, 4.286e-5).
+fn b_vdw(x): i64 {
+    var t, v = us_van_der_waals_pressure(1.0, 300.0, 0.025, 0.3658, 0.00004286);
+    return v;
+}
+
+# isothermal_work(1, 300, 0.01, 0.02).
+fn b_iso_work(x): i64 {
+    var t, v = us_isothermal_work(1.0, 300.0, 0.01, 0.02);
+    return v;
+}
+
+# adiabatic_temperature(300, 0.02, 0.01, 1.4).
+fn b_adiabatic(x): i64 {
+    var t, v = us_adiabatic_temperature(300.0, 0.02, 0.01, 1.4);
+    return v;
+}
+
+# compressibility_factor(101325, 0.02241, 1, 273.15).
+fn b_z(x): i64 {
+    var t, v = us_compressibility_factor(101325.0, 0.02241, 1.0, 273.15);
+    return v;
+}
+
 # Fills the two resistance lists the benchmarks use.
 fn bn_lists() {
     _bn_series = alloc(40);
@@ -232,6 +270,12 @@ fn main(): i64 {
     bn_run("transfer/eff_counter", &b_eff_counter, 0, 1000000);
     bn_run("transfer/view_factor_disks", &b_vf_disks, 0, 1000000);
     bn_run("transfer/view_factor_perpendicular", &b_vf_perpendicular, 0, 1000000);
+    bn_run("state/ideal_gas_pressure", &b_ig_pressure, 0, 1000000);
+    bn_run("state/ideal_gas_volume", &b_ig_volume, 0, 1000000);
+    bn_run("state/van_der_waals", &b_vdw, 0, 1000000);
+    bn_run("state/isothermal_work", &b_iso_work, 0, 1000000);
+    bn_run("state/adiabatic_temperature", &b_adiabatic, 0, 1000000);
+    bn_run("state/compressibility_factor", &b_z, 0, 1000000);
     return 0;
 }
 

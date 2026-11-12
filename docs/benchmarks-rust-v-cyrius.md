@@ -53,3 +53,14 @@ first run for part 2).
 **What is left.** The rows with a transcendental pay for correct rounding, which is the accuracy target (ADR 0004).
 The rest of the gap is the harness floor (4 ns a call) and, in the seven instrumented functions, the level-gated span
 (7 ns for the pair with DEBUG off, the span row less the floor).
+
+## M2
+
+| Benchmark | Rust 1.4.0 (ns) | Cyrius (ns) | Notes |
+|---|---|---|---|
+| state/ideal_gas_pressure | 9.58 | 24 | three checks, nRT/V, a level-gated span |
+| state/ideal_gas_volume | 3.74 | 16 | three checks, nRT/P |
+| state/van_der_waals | 12.54 | 38 | five checks and a refusal test on V − nb, a span |
+| state/isothermal_work | 9.42 | 83 | four checks, a correctly rounded ln |
+| state/adiabatic_temperature | 17.15 | 155 | four checks, a correctly rounded pow |
+| state/compressibility_factor | 4.46 | 21 | five checks, PV/(nRT) |

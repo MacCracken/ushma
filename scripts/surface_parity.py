@@ -11,7 +11,8 @@ For each Rust module whose milestone has come (`PORTED`), it lists rust-old/src/
 - `pub struct T` / `pub enum T`             -> `struct <TYPES[T]>` / `enum <TYPES[T]>`
 - `#[derive(Serialize)]` / `Deserialize`    -> `fn us_<t>_to_json(` / `fn us_<t>_from_json(` (ADR 0005)
 - `pub const X: f64` (any module)           -> `const US_X =` (src/constants.cyr, generated)
-- `pub const X: T`, T a preset type         -> `const US_<t>_X =` and `fn us_<t>_preset(`
+- `pub const X: T`, T a preset type         -> `const US_<T>_X =` (`US_X` when X already starts `<T>_`) and
+                                               `fn us_<t>_preset(`
 - `UshmaError::Variant`                     -> `US_ERR_<SNAKE>` in `enum UsError`
 
 Where the rules give no single name, MAPPED lists the Cyrius names that carry the item, and they are checked too:
@@ -39,10 +40,15 @@ WIRING = {
 # The free-function prefix per module (default `us_`).
 PREFIX = {"logging": "us_log_"}
 # Rust type -> (Cyrius type, the `us_<t>_` prefix of its functions and preset constants).
-TYPES = {"ThermalMaterial": ("UsMaterial", "material"), "UshmaError": ("UsError", "error")}
+TYPES = {
+    "ThermalMaterial": ("UsMaterial", "material"),
+    "UshmaError": ("UsError", "error"),
+    "GasData": ("UsGas", "gas"),
+}
 # Rust item -> the Cyrius names that carry it ("fn x", "const X", "enum X", "struct X"), where the rules give none.
 MAPPED = {
     "material::const ALL_MATERIALS": ["const US_MATERIAL_COUNT", "fn us_material_preset"],
+    "state::const ALL_GASES": ["const US_GAS_COUNT", "fn us_gas_preset"],
     "error::type Result": ["fn is_ok", "fn is_err_result"],
     "error::UshmaError: Display": ["fn us_error_message", "fn us_error_name"],
 }
@@ -136,7 +142,9 @@ def counterpart(module, kind, ty, name):
     if kind == "const" and ty in ("f64", "usize"):
         return [f"const US_{name}"]
     if kind == "const" and t:
-        return [f"const US_{t[1].upper()}_{name}", f"fn us_{t[1]}_preset"]
+        # A preset already named by its type (GAS_NITROGEN) keeps its name; others take it (COPPER: US_MATERIAL_COPPER).
+        pre = t[1].upper() + "_"
+        return [f"const US_{name if name.startswith(pre) else pre + name}", f"fn us_{t[1]}_preset"]
     if kind == "variant":
         return [f"const US_ERR_{snake(name).upper()}"]
     return None
@@ -174,9 +182,13 @@ for module in PORTED:
             found += 1
     print(f"{module:<20} {found}/{len(items)} Rust public items have their Cyrius names")
 for key in MAPPED:
-    if key not in seen_mapped:
-        missing += 1
-        print(f"STALE    MAPPED names {key}, which is no public item of a ported module")
+    module, label = key.split("::", 1)
+    if key in seen_mapped:
+        continue
+    if module in SCHEDULED and label in {lab for lab, *_ in rust_items(module)}:
+        continue  # mapped ahead of its milestone; checked once the module is PORTED
+    missing += 1
+    print(f"STALE    MAPPED names {key}, which is no public Rust item")
 # Public constants are generated for every module at once (src/constants.cyr), so they are checked everywhere.
 consts = 0
 for module in SCHEDULED:

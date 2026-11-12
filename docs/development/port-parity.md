@@ -473,3 +473,20 @@ The harness's summary at the end of M1, identical on x86_64 ELF, `--bounds`, PE 
 - **Tests** (`scripts/rust_test_ledger.py`, `docs/development/rust-test-ledger.md`): all 96 unit tests of error,
   validate, logging, material and transfer are ported, and the 6 integration tests that call only transfer and
   material (`tests/integration.tcyr`). The other 377 are counted under their milestones.
+
+## 5. M2 (2026-11-12 on)
+
+After M2a the harness's summary is `8 modules, 0 failing | rows: 64039 ok, 0 failed, 0 measured, 0 pending, 44
+accepted (ADR 4: 34)`.
+
+- **state, part 1** (M2a): 4,250 rows.
+  - The presets and `ALL_GASES`: 9.
+  - **Class B** (the ideal gas law three ways, van der Waals, isobaric work, Z, the reduced coordinates): every row
+    bit-identical, refusals included. Van der Waals runs V across nb ± 3 ulps, so the V − nb > 0 refusal switches
+    on the row where Rust's does.
+  - **Class C** (isothermal work's ln, the adiabatic temperature's pow): 0 ulp against MPFR, and glibc misrounds
+    none of these rows, so there is no `state.cr.tsv`.
+  - **`GasData`'s JSON:** 18 `to_json` documents byte for byte; 78 `from_json` documents, 73 ok and 5 accepted under
+    ADR 5, the same mapped divergences as material's (two duplicate keys in an unknown field, deep nesting, an
+    integer `-0`, an integer ≥ 2^63).
+  - **`validate.py`** reproduces all 4,145 function rows with glibc's primitives.

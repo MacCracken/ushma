@@ -877,7 +877,118 @@ def m_vf_disks(a, p):
     return F(fdiv(2.0 * k2, s + fsqrt(s * s - 4.0 * k2)))
 
 
+GAS_R = 8.31446261815324  # state::GAS_CONSTANT
+
+
+def m_ig_pressure(a, p):
+    n, temp, v = a
+    if not fge(n, 0.0):
+        return E("InvalidParameter")
+    if not fge(temp, 0.0):
+        return E("InvalidTemperature")
+    if not fgt(v, 0.0):
+        return E("InvalidVolume")
+    return F(fdiv(n * GAS_R * temp, v))
+
+
+def m_ig_volume(a, p):
+    n, temp, pr = a
+    if not fge(n, 0.0):
+        return E("InvalidParameter")
+    if not fge(temp, 0.0):
+        return E("InvalidTemperature")
+    if not fgt(pr, 0.0):
+        return E("InvalidPressure")
+    return F(fdiv(n * GAS_R * temp, pr))
+
+
+def m_ig_temperature(a, p):
+    pr, v, n = a
+    if not fge(n, 0.0):
+        return E("InvalidParameter")
+    if not fge(pr, 0.0):
+        return E("InvalidPressure")
+    if not fge(v, 0.0):
+        return E("InvalidVolume")
+    if not fge(abs(n), TINY):
+        return E("DivisionByZero")
+    return F(fdiv(pr * v, n * GAS_R))
+
+
+def m_vdw(a, p):
+    n, temp, v, aa, b = a
+    if not fge(n, 0.0):
+        return E("InvalidParameter")
+    if not fgt(temp, 0.0):
+        return E("InvalidTemperature")
+    if not fgt(v, 0.0):
+        return E("InvalidVolume")
+    if not math.isfinite(aa) or not fge(b, 0.0):
+        return E("InvalidParameter")
+    v_eff = v - n * b
+    if not fgt(v_eff, 0.0):
+        return E("InvalidParameter")
+    d = fdiv(n, v)
+    return F(fdiv(n * GAS_R * temp, v_eff) - aa * d * d)
+
+
+def m_iso_work(a, p):
+    n, temp, v1, v2 = a
+    if not fge(n, 0.0):
+        return E("InvalidParameter")
+    if not fge(temp, 0.0):
+        return E("InvalidTemperature")
+    if not fgt(v1, 0.0) or not fgt(v2, 0.0):
+        return E("InvalidVolume")
+    return F(n * GAS_R * temp * p.log(fdiv(v2, v1)))
+
+
+def m_adiabatic(a, p):
+    t1, v1, v2, g = a
+    if not fgt(t1, 0.0):
+        return E("InvalidTemperature")
+    if not fgt(g, 1.0):
+        return E("InvalidParameter")
+    if not fgt(v1, 0.0) or not fgt(v2, 0.0):
+        return E("InvalidVolume")
+    return F(t1 * p.pow(fdiv(v1, v2), g - 1.0))
+
+
+def m_z(a, p):
+    pr, v, n, temp = a
+    if not fgt(pr, 0.0):
+        return E("InvalidPressure")
+    if not fgt(v, 0.0):
+        return E("InvalidVolume")
+    if not fgt(temp, 0.0):
+        return E("InvalidTemperature")
+    if not math.isfinite(n):
+        return E("InvalidParameter")
+    d = n * GAS_R * temp
+    if not fge(abs(d), TINY):
+        return E("DivisionByZero")
+    return F(fdiv(pr * v, d))
+
+
+def unmodelled(fn, ins):
+    """Rows of a modelled module that other checks own: the table presets (no inputs; check_tables) and the JSON
+    documents (serde_json's text and verdicts, which the harness compares byte for byte; ADR 0005)."""
+    return not ins or fn.endswith("::to_json") or fn.endswith("::from_json")
+
+
 MODELS = {
+    "state": {
+        "state::ideal_gas_pressure": m_ig_pressure,
+        "state::ideal_gas_volume": m_ig_volume,
+        "state::ideal_gas_temperature": m_ig_temperature,
+        "state::van_der_waals_pressure": m_vdw,
+        "state::isothermal_work": m_iso_work,
+        "state::isobaric_work": lambda a, p: F(a[0] * (a[2] - a[1])),
+        "state::adiabatic_temperature": m_adiabatic,
+        "state::compressibility_factor": m_z,
+        "state::reduced_temperature": lambda a, p: F(fdiv(a[0], a[1])),
+        "state::reduced_pressure": lambda a, p: F(fdiv(a[0], a[1])),
+    },
     "transfer": {
         "transfer::conduction": m_conduction,
         "transfer::convection": lambda a, p: F(a[0] * a[1] * (a[2] - a[3])),
@@ -927,6 +1038,8 @@ def check_models(tables, rep, exact):
     token (NaN matching any NaN). Off the corpus's libm platform only rows with no transcendental are checked."""
     for mod, models in MODELS.items():
         for n, fn, cls, ins, outs in tables.get(f"{mod}.tsv", []):
+            if unmodelled(fn, ins):
+                continue
             model = models.get(fn)
             if model is None:
                 rep.fail(f"{mod}.tsv:{n}", f"{fn} has no model")

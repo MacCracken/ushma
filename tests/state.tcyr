@@ -1,0 +1,289 @@
+# state tests (M2a: the ideal gas to the reduced coordinates, and the reference gases).
+#
+# Rust 1.4.0's state.rs tests for these functions and GasData, one for one (28 of its 47; the cubic equations, virial
+# forms, Pitzer and Kay's rules join with M2b), each also checking the refusal's code. Then a reference test of the
+# spans: ideal_gas_pressure and van_der_waals_pressure open a DEBUG span under Rust's span name, and close it on every
+# path.
+
+include "src/constants.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+include "src/json.cyr"
+include "src/state_data.cyr"
+include "src/state.cyr"
+
+var _nan: f64 = 0.0;
+
+# |a − b| as an f64.
+fn absdiff(a: f64, b: f64): f64 {
+    var d: f64 = a - b;
+    if (d < 0.0) { d = 0.0 - d; }
+    return d;
+}
+
+# The Ok value of a Result (asserting it is Ok).
+fn okv(t, v, name): i64 {
+    assert_eq(is_ok(t), 1, name);
+    return v;
+}
+
+# Asserts a Result is Err(code).
+fn errc(t, v, code, name) {
+    assert_eq(is_err_result(t), 1, name);
+    if (is_err_result(t) == 1) { assert_streq(us_error_name(v), us_error_name(code), name); }
+    return 0;
+}
+
+# The ring's raw bytes contain the C string `s`: 1 or 0.
+fn ring_has(s): i64 {
+    var cap = 8192;
+    var buf = alloc(cap);
+    var n = sakshi_ring_read_raw(buf, cap);
+    var sl = strlen(s);
+    var k = 0;
+    while (k + sl <= n) {
+        if (memeq(buf + k, s, sl) == 1) { return 1; }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# The ideal gas law three ways, its refusals, and T = 0.
+# rust src/state.rs: test_ideal_gas_stp, test_ideal_gas_pressure, test_ideal_gas_roundtrip, test_negative_temperature
+# rust src/state.rs: test_zero_volume, test_ideal_gas_temperature_zero_moles, test_ideal_gas_zero_temp
+# rust src/state.rs: test_ideal_gas_rejects_negative_moles
+fn test_ideal_gas() {
+    test_group("ideal gas");
+    var t, v = us_ideal_gas_volume(1.0, US_STANDARD_TEMP, US_ATM);
+    var vm: f64 = okv(t, v, "STP volume is Ok");
+    var d: f64 = absdiff(vm, 0.02241);
+    assert(d < 0.001, "1 mol at STP: 22.41 L");
+    var t2, v2 = us_ideal_gas_pressure(1.0, US_STANDARD_TEMP, 0.02241);
+    var p: f64 = okv(t2, v2, "STP pressure is Ok");
+    var dp: f64 = absdiff(p, US_ATM);
+    var rel: f64 = dp / US_ATM;
+    assert(rel < 0.01, "22.41 L at STP: 1 atm");
+    var t3, v3 = us_ideal_gas_volume(2.0, 300.0, US_ATM);
+    var v300: f64 = okv(t3, v3, "volume is Ok");
+    var t4, v4 = us_ideal_gas_pressure(2.0, 300.0, v300);
+    var back: f64 = okv(t4, v4, "pressure back is Ok");
+    var db: f64 = absdiff(back, US_ATM);
+    var relb: f64 = db / US_ATM;
+    assert(relb < 0.000001, "P(V(P)) = P");
+    var t5, v5 = us_ideal_gas_pressure(1.0, -10.0, 1.0);
+    errc(t5, v5, US_ERR_INVALID_TEMPERATURE, "negative temperature");
+    var t6, v6 = us_ideal_gas_pressure(1.0, 300.0, 0.0);
+    errc(t6, v6, US_ERR_INVALID_VOLUME, "zero volume");
+    var t7, v7 = us_ideal_gas_temperature(US_ATM, 0.02241, 0.0);
+    errc(t7, v7, US_ERR_DIVISION_BY_ZERO, "zero moles");
+    var t8, v8 = us_ideal_gas_pressure(1.0, 0.0, 0.02241);
+    var p0: f64 = okv(t8, v8, "T = 0 is Ok");
+    var ap0: f64 = f64_abs(p0);
+    assert(ap0 < 0.000000000000000000000000000001, "T = 0: P = 0");
+    var t9, v9 = us_ideal_gas_temperature(US_ATM, 0.0224, -1.0);
+    errc(t9, v9, US_ERR_INVALID_PARAMETER, "temperature from negative moles");
+    var ta, va = us_ideal_gas_pressure(-1.0, 300.0, 0.0224);
+    errc(ta, va, US_ERR_INVALID_PARAMETER, "pressure from negative moles");
+    var tb, vb = us_ideal_gas_volume(-1.0, 300.0, US_ATM);
+    errc(tb, vb, US_ERR_INVALID_PARAMETER, "volume from negative moles");
+    var tc, vc = us_ideal_gas_volume(1.0, 300.0, 0.0);
+    errc(tc, vc, US_ERR_INVALID_PRESSURE, "zero pressure");
+}
+
+# Van der Waals: CO₂ near 1 atm, and its refusals.
+# rust src/state.rs: test_van_der_waals, test_van_der_waals_negative_temp, test_van_der_waals_volume_too_small
+# rust src/state.rs: test_ideal_gas_rejects_negative_moles
+fn test_van_der_waals() {
+    test_group("van der Waals");
+    var t, v = us_van_der_waals_pressure(1.0, US_STANDARD_TEMP, 0.02241, 0.3658, 0.00004286);
+    var p: f64 = okv(t, v, "CO2 at STP is Ok");
+    var dp: f64 = absdiff(p, US_ATM);
+    var rel: f64 = dp / US_ATM;
+    assert(rel < 0.05, "close to 1 atm, but not ideal");
+    var t2, v2 = us_van_der_waals_pressure(1.0, -10.0, 0.02241, 0.3658, 0.00004286);
+    errc(t2, v2, US_ERR_INVALID_TEMPERATURE, "negative temperature");
+    var t3, v3 = us_van_der_waals_pressure(1.0, 0.0, 0.02241, 0.3658, 0.00004286);
+    errc(t3, v3, US_ERR_INVALID_TEMPERATURE, "T = 0 is refused too");
+    var t4, v4 = us_van_der_waals_pressure(1.0, 300.0, 0.000001, 0.3658, 0.00004286);
+    errc(t4, v4, US_ERR_INVALID_PARAMETER, "V < nb");
+    var t5, v5 = us_van_der_waals_pressure(-1.0, 300.0, 0.0224, 0.1364, 0.00003219);
+    errc(t5, v5, US_ERR_INVALID_PARAMETER, "negative moles");
+    var t6, v6 = us_van_der_waals_pressure(1.0, 300.0, 0.0224, _nan, 0.00003219);
+    errc(t6, v6, US_ERR_INVALID_PARAMETER, "NaN a");
+}
+
+# Isothermal and isobaric work.
+# rust src/state.rs: test_isothermal_work_expansion, test_isothermal_work_compression, test_isobaric_work
+# rust src/state.rs: test_isothermal_work_negative_temp, test_isothermal_work_zero_temp
+# rust src/state.rs: test_ideal_gas_rejects_negative_moles
+fn test_work() {
+    test_group("work");
+    var t, v = us_isothermal_work(1.0, 300.0, 0.01, 0.02);
+    var we: f64 = okv(t, v, "expansion is Ok");
+    assert(we > 0.0, "expansion: positive work");
+    var t2, v2 = us_isothermal_work(1.0, 300.0, 0.02, 0.01);
+    var wc: f64 = okv(t2, v2, "compression is Ok");
+    assert(wc < 0.0, "compression: negative work");
+    var wb: f64 = us_isobaric_work(US_ATM, 0.01, 0.02);
+    var want: f64 = US_ATM * 0.01;
+    var d: f64 = absdiff(wb, want);
+    assert(d < 1.0, "W = P (V2 - V1)");
+    var t3, v3 = us_isothermal_work(1.0, -10.0, 0.01, 0.02);
+    errc(t3, v3, US_ERR_INVALID_TEMPERATURE, "negative temperature");
+    var t4, v4 = us_isothermal_work(1.0, 0.0, 0.01, 0.02);
+    var w0: f64 = okv(t4, v4, "T = 0 is Ok");
+    var aw0: f64 = f64_abs(w0);
+    assert(aw0 < 0.000000000000000000000000000001, "T = 0: no work");
+    var t5, v5 = us_isothermal_work(-1.0, 300.0, 1.0, 2.0);
+    errc(t5, v5, US_ERR_INVALID_PARAMETER, "negative moles");
+    var t6, v6 = us_isothermal_work(1.0, 300.0, 0.0, 2.0);
+    errc(t6, v6, US_ERR_INVALID_VOLUME, "V1 = 0");
+}
+
+# The adiabatic relation: compression heats, γ > 1, the round trip, and T₁'s refusals.
+# rust src/state.rs: test_adiabatic_temperature, test_adiabatic_invalid_gamma, test_adiabatic_roundtrip
+# rust src/state.rs: test_adiabatic_temperature_validates_t1
+fn test_adiabatic() {
+    test_group("adiabatic");
+    var t, v = us_adiabatic_temperature(300.0, 0.02, 0.01, 1.4);
+    var t2v: f64 = okv(t, v, "compression is Ok");
+    assert(t2v > 300.0, "compression heats");
+    var t2, v2 = us_adiabatic_temperature(300.0, 0.02, 0.01, 1.0);
+    errc(t2, v2, US_ERR_INVALID_PARAMETER, "gamma = 1");
+    var t3, v3 = us_adiabatic_temperature(300.0, 0.02, 0.01, 0.5);
+    errc(t3, v3, US_ERR_INVALID_PARAMETER, "gamma < 1");
+    var t4, v4 = us_adiabatic_temperature(t2v, 0.01, 0.02, 1.4);
+    var t3v: f64 = okv(t4, v4, "expansion back is Ok");
+    var d: f64 = absdiff(t3v, 300.0);
+    assert(d < 0.0000000001, "compress then expand: back to 300 K");
+    var t5, v5 = us_adiabatic_temperature(-300.0, 0.02, 0.01, 1.4);
+    errc(t5, v5, US_ERR_INVALID_TEMPERATURE, "negative T1");
+    var t6, v6 = us_adiabatic_temperature(_nan, 0.02, 0.01, 1.4);
+    errc(t6, v6, US_ERR_INVALID_TEMPERATURE, "NaN T1");
+    var t7, v7 = us_adiabatic_temperature(300.0, 0.02, 0.01, _nan);
+    errc(t7, v7, US_ERR_INVALID_PARAMETER, "NaN gamma");
+}
+
+# The compressibility factor: 1 for an ideal gas at STP, and its refusals.
+# rust src/state.rs: test_compressibility_ideal, test_compressibility_factor_zero_temp
+# rust src/state.rs: test_compressibility_factor_validates_inputs
+fn test_compressibility() {
+    test_group("compressibility factor");
+    var t, v = us_compressibility_factor(US_ATM, 0.02241, 1.0, US_STANDARD_TEMP);
+    var z: f64 = okv(t, v, "STP is Ok");
+    var d: f64 = absdiff(z, 1.0);
+    assert(d < 0.01, "Z ~ 1 at STP");
+    var t2, v2 = us_compressibility_factor(US_ATM, 0.02241, 1.0, 0.0);
+    errc(t2, v2, US_ERR_INVALID_TEMPERATURE, "T = 0");
+    var t3, v3 = us_compressibility_factor(_nan, 0.0224, 1.0, 273.15);
+    errc(t3, v3, US_ERR_INVALID_PRESSURE, "NaN pressure");
+    var t4, v4 = us_compressibility_factor(US_ATM, 0.0224, 1.0, -273.15);
+    errc(t4, v4, US_ERR_INVALID_TEMPERATURE, "negative temperature");
+    var t5, v5 = us_compressibility_factor(US_ATM, 0.022414, 1.0, US_STANDARD_TEMP);
+    var z2: f64 = okv(t5, v5, "22.414 L is Ok");
+    var d2: f64 = absdiff(z2, 1.0);
+    assert(d2 < 0.001, "Z = 1 within 1e-3 at 22.414 L");
+    var t6, v6 = us_compressibility_factor(US_ATM, 0.0224, 0.0, 273.15);
+    errc(t6, v6, US_ERR_DIVISION_BY_ZERO, "zero moles");
+}
+
+# The reference gases (count, validity, JSON round trip), the reduced coordinates, and R's exactness.
+# rust src/state.rs: test_all_gases_count, test_gas_data_valid, test_gas_data_serde_roundtrip, test_reduced_coordinates
+# rust src/state.rs: test_gas_constant_is_exact
+fn test_gas_data() {
+    test_group("reference gases");
+    assert_eq(US_GAS_COUNT, 8, "8 reference gases");
+    var g: UsGas;
+    var ok = 1;
+    var i = 0;
+    while (i < US_GAS_COUNT) {
+        var t, v = us_gas_preset(i, &g);
+        if (is_ok(t) != 1) { ok = 0; }
+        var tc: f64 = g.critical_t;
+        var pc: f64 = g.critical_p;
+        var om: f64 = g.acentric_factor;
+        if (tc <= 0.0 || pc <= 0.0 || om < 0.0) { ok = 0; }
+        i = i + 1;
+    }
+    assert_eq(ok, 1, "every gas: Tc > 0, Pc > 0, omega >= 0");
+    var t2, v2 = us_gas_preset(US_GAS_COUNT, &g);
+    errc(t2, v2, US_ERR_INVALID_PARAMETER, "past the last gas");
+    assert_eq(us_gas_name(US_GAS_COUNT), 0, "no name past the last gas");
+    var t3, v3 = us_gas_preset(US_GAS_CO2, &g);
+    var sb = str_builder_new();
+    us_gas_to_json(sb, &g);
+    var back: UsGas;
+    var t4, v4 = us_gas_from_json(load64(sb), load64(sb + 8), &back);
+    assert_eq(is_ok(t4), 1, "CO2's document reads back");
+    assert_streq(back.name, "Carbon dioxide", "its name");
+    var btc: f64 = back.critical_t;
+    var d: f64 = absdiff(btc, 304.13);
+    assert(d < 0.01, "its critical temperature");
+    var tr: f64 = us_reduced_temperature(300.0, 304.13);
+    var wtr: f64 = 300.0 / 304.13;
+    var dtr: f64 = absdiff(tr, wtr);
+    assert(dtr < 0.0000000001, "Tr = T / Tc");
+    var pr: f64 = us_reduced_pressure(5000000.0, 7375000.0);
+    var wpr: f64 = 5000000.0 / 7375000.0;
+    var dpr: f64 = absdiff(pr, wpr);
+    assert(dpr < 0.0000000001, "Pr = P / Pc");
+    var r: f64 = US_AVOGADRO * US_BOLTZMANN_K;
+    var dr: f64 = absdiff(US_GAS_CONSTANT, r);
+    assert(dr < 0.00000000000001, "R = N_A k_B exactly");
+    var t5, v5 = us_gas_from_json("[\"n\",1,2,3]", 11, &back);
+    assert_eq(is_ok(t5), 1, "the sequence form");
+    var t6, v6 = us_gas_from_json("[\"n\",1,2]", 9, &back);
+    errc(t6, v6, US_ERR_DESERIALIZE, "a sequence too short");
+}
+
+# The span named `name` opened and closed: depth back to 0, `events` events in the ring.
+fn span_seen(name, events, label) {
+    assert_eq(sakshi_span_depth(), 0, label);
+    assert_eq(sakshi_ring_event_count(), events, label);
+    assert_eq(ring_has(name), 1, label);
+    sakshi_ring_clear();
+    return 0;
+}
+
+# ideal_gas_pressure and van_der_waals_pressure open a DEBUG span under Rust's span name and close it on Ok and on
+# Err; at INFO they record nothing.
+fn test_spans() {
+    test_group("spans");
+    sakshi_output_buffer();
+    sakshi_set_level(SK_DEBUG);
+    sakshi_ring_clear();
+    var t, v = us_ideal_gas_pressure(1.0, 300.0, 0.0224);
+    span_seen("ideal_gas_pressure", 2, "ideal_gas_pressure");
+    var t1, v1 = us_ideal_gas_pressure(1.0, 300.0, 0.0);
+    span_seen("ideal_gas_pressure", 3, "ideal_gas_pressure, refused");
+    var t2, v2 = us_van_der_waals_pressure(1.0, 300.0, 0.0224, 0.1364, 0.00003219);
+    span_seen("van_der_waals_pressure", 2, "van_der_waals_pressure");
+    var t3, v3 = us_van_der_waals_pressure(1.0, 300.0, 0.000001, 0.3658, 0.00004286);
+    span_seen("van_der_waals_pressure", 3, "van_der_waals_pressure, refused");
+    sakshi_set_level(SK_INFO);
+    sakshi_ring_clear();
+    var t4, v4 = us_ideal_gas_pressure(1.0, 300.0, 0.0224);
+    assert_eq(sakshi_ring_event_count(), 0, "no span event at INFO");
+}
+
+# Runs every group and returns the failure count.
+fn main() {
+    alloc_init();
+    _nan = 0.0 / 0.0;
+    test_ideal_gas();
+    test_van_der_waals();
+    test_work();
+    test_adiabatic();
+    test_compressibility();
+    test_gas_data();
+    test_spans();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);
