@@ -11,8 +11,17 @@
 //! at the adaptive exact multiples ± 1 ulp and its sub-step cap (bisected, on the 10-node setup) ± 2 ulps, and on malformed grids (fewer than
 //! 3 nodes, Δx or α not positive, a condition out of range, a NaN node). JSON: `BoundaryCondition`, `Side` and
 //! `ThermalGrid1D`. Class B throughout (+ − × ÷ and ceil), A for JSON.
+//!
+//! M6b: a 2D grid is written as its rows (`v:ny`, each `v:len` and its nodes), then nx, ny, Δx, Δy and its four
+//! conditions (left, right, bottom, top). `ThermalGrid2D::new` over sizes, extents and initial temperatures at the
+//! edges; `set_boundary` on every side with each kind of condition, on a usable and a malformed grid;
+//! `solve_steady_state` on seven setups (square and not, every condition, 3×3 to 20×20), each at a generous iteration
+//! limit and at exactly the converging count and one fewer (the switch to "did not converge"), the tolerance at the
+//! edges, and malformed grids (a missing row, a short last row, nx < 3, Δx not positive, a bad condition, a NaN node).
+//! A ragged row other than the last cannot be held by the port's flat grid, so none is generated. JSON:
+//! `ThermalGrid2D`, its ragged and mis-shaped documents among them (ADR 0002 row 2).
 
-use ushma::numerical::{BoundaryCondition as Bc, Side, ThermalGrid1D};
+use ushma::numerical::{BoundaryCondition as Bc, Side, ThermalGrid1D, ThermalGrid2D};
 
 use crate::json_cases::variants;
 use crate::sweep::{around, edges};
@@ -294,6 +303,242 @@ fn step_rows(m: &mut Module) {
     }
 }
 
+/// A usize as an `i:` token, or, past i64 (only a document's 2^63 variant reaches that; bayan refuses it, ADR 5), its
+/// exact decimal as an `s:` token.
+fn usize_tok(n: usize) -> Tok {
+    match i64::try_from(n) {
+        Ok(x) => i(x),
+        Err(_) => s(n.to_string()),
+    }
+}
+
+fn g2_toks(g: &ThermalGrid2D) -> Vec<Tok> {
+    let mut v = vec![Tok::V(g.nodes.len())];
+    for row in &g.nodes {
+        v.push(Tok::V(row.len()));
+        v.extend(row.iter().map(|&x| f(x)));
+    }
+    v.extend([usize_tok(g.nx), usize_tok(g.ny), f(g.dx), f(g.dy)]);
+    for b in [&g.bc_left, &g.bc_right, &g.bc_bottom, &g.bc_top] {
+        v.extend(bc_toks(b));
+    }
+    v
+}
+
+fn side_tok(sd: Side) -> Tok {
+    Tok::E("Side", format!("{sd:?}"))
+}
+
+/// The seven solve setups.
+fn setups2() -> Vec<ThermalGrid2D> {
+    let mk = |nx: usize, ny: usize, lx: f64, ly: f64, t: f64, bcs: &[(Side, Bc)]| {
+        let mut g = ThermalGrid2D::new(nx, ny, lx, ly, t).expect("setup");
+        for &(sd, b) in bcs {
+            g.set_boundary(sd, b);
+        }
+        g
+    };
+    let fixed4 = [
+        (Side::Left, Bc::Fixed(400.0)),
+        (Side::Right, Bc::Fixed(400.0)),
+        (Side::Top, Bc::Fixed(400.0)),
+        (Side::Bottom, Bc::Fixed(400.0)),
+    ];
+    vec![
+        mk(5, 5, 1.0, 1.0, 300.0, &fixed4),
+        mk(
+            7,
+            7,
+            1.0,
+            1.0,
+            350.0,
+            &[
+                (Side::Left, Bc::Fixed(400.0)),
+                (Side::Right, Bc::Fixed(300.0)),
+            ],
+        ),
+        mk(
+            11,
+            5,
+            0.5,
+            0.2,
+            350.0,
+            &[
+                (Side::Left, Bc::Fixed(400.0)),
+                (Side::Right, conv(10.0, 300.0, 2.0)),
+            ],
+        ),
+        mk(
+            6,
+            8,
+            0.3,
+            0.7,
+            320.0,
+            &[
+                (Side::Right, Bc::Fixed(280.0)),
+                (Side::Bottom, conv(15.0, 350.0, 1.5)),
+                (Side::Top, Bc::Fixed(310.0)),
+            ],
+        ),
+        mk(3, 3, 1.0, 1.0, 300.0, &[(Side::Left, Bc::Fixed(500.0))]),
+        mk(
+            20,
+            20,
+            1.0,
+            1.0,
+            300.0,
+            &[
+                (Side::Left, Bc::Fixed(400.0)),
+                (Side::Right, Bc::Fixed(300.0)),
+            ],
+        ),
+        mk(
+            6,
+            6,
+            0.1,
+            0.1,
+            300.0,
+            &[
+                (Side::Left, conv(100.0, 400.0, 2.0)),
+                (Side::Right, conv(5.0, 250.0, 0.5)),
+                (Side::Bottom, conv(0.0, 300.0, 1.0)),
+                (Side::Top, Bc::Fixed(360.0)),
+            ],
+        ),
+    ]
+}
+
+fn solve_row(m: &mut Module, g: &ThermalGrid2D, tol: f64, max: usize) {
+    let mut after = g.clone();
+    let out = match after.solve_steady_state(tol, max) {
+        Ok(n) => {
+            let mut v = vec![i(i64::try_from(n).expect("small"))];
+            v.extend(g2_toks(&after));
+            v
+        }
+        Err(z) => vec![err(&z)],
+    };
+    let mut ins = g2_toks(g);
+    ins.extend([f(tol), i(i64::try_from(max).expect("small"))]);
+    m.row(
+        "numerical::ThermalGrid2D::solve_steady_state",
+        Class::B,
+        &ins,
+        &out,
+    );
+}
+
+fn grid2d_rows(m: &mut Module) {
+    // new(nx, ny, lx, ly, T₀)
+    let mut news: Vec<(usize, usize, f64, f64, f64)> = Vec::new();
+    for nx in [0, 2, 3, 4, 10] {
+        for ny in [2, 3, 7] {
+            news.push((nx, ny, 1.0, 1.0, 300.0));
+        }
+    }
+    for e in edges() {
+        news.push((5, 5, e, 1.0, 300.0));
+        news.push((5, 5, 1.0, e, 300.0));
+        news.push((5, 5, 1.0, 1.0, e));
+    }
+    for (nx, ny, lx, ly, t) in news {
+        let ins = [
+            i(i64::try_from(nx).expect("small")),
+            i(i64::try_from(ny).expect("small")),
+            f(lx),
+            f(ly),
+            f(t),
+        ];
+        let out = match ThermalGrid2D::new(nx, ny, lx, ly, t) {
+            Ok(g) => g2_toks(&g),
+            Err(z) => vec![err(&z)],
+        };
+        m.row("numerical::ThermalGrid2D::new", Class::B, &ins, &out);
+    }
+    // set_boundary(side, bc) on a usable grid and on one missing a row
+    let base = ThermalGrid2D::new(5, 4, 1.0, 0.6, 300.0).expect("base");
+    let mut popped = base.clone();
+    popped.nodes.pop();
+    let bcs = [
+        Bc::Fixed(400.0),
+        Bc::Insulated,
+        conv(25.0, 350.0, 2.0),
+        Bc::Fixed(f64::NAN),
+    ];
+    for g in [&base, &popped] {
+        for sd in [Side::Left, Side::Right, Side::Top, Side::Bottom] {
+            for b in &bcs {
+                let mut after = g.clone();
+                after.set_boundary(sd, *b);
+                let mut ins = g2_toks(g);
+                ins.push(side_tok(sd));
+                ins.extend(bc_toks(b));
+                m.row(
+                    "numerical::ThermalGrid2D::set_boundary",
+                    Class::B,
+                    &ins,
+                    &g2_toks(&after),
+                );
+            }
+        }
+    }
+    // solve_steady_state: each setup at a generous limit, at its converging count and one fewer, tolerances at the edges
+    for g in setups2() {
+        let tol = if g.nx == 11 {
+            1e-12
+        } else if g.nx == 20 {
+            1e-4
+        } else {
+            1e-6
+        };
+        let n = g
+            .clone()
+            .solve_steady_state(tol, 1_000_000)
+            .expect("converges");
+        solve_row(m, &g, tol, 1_000_000);
+        solve_row(m, &g, tol, n);
+        solve_row(m, &g, tol, n - 1);
+        solve_row(m, &g, tol, 0);
+        solve_row(m, &g, tol, 1);
+        if g.nx <= 7 {
+            for e in edges() {
+                solve_row(m, &g, e, 50);
+            }
+        }
+    }
+    // malformed grids
+    let ok = setups2().remove(1);
+    let edit = |f: &dyn Fn(&mut ThermalGrid2D)| {
+        let mut g = ok.clone();
+        f(&mut g);
+        g
+    };
+    for g in [
+        edit(&|g| {
+            g.nodes.pop();
+        }),
+        edit(&|g| {
+            g.nodes.last_mut().expect("rows").pop();
+        }),
+        edit(&|g| g.nodes.push(vec![300.0; 7])),
+        edit(&|g| {
+            g.nx = 2;
+            for r in &mut g.nodes {
+                r.truncate(2);
+            }
+        }),
+        edit(&|g| g.dx = 0.0),
+        edit(&|g| g.dy = f64::NAN),
+        edit(&|g| g.bc_left = Bc::Fixed(f64::NAN)),
+        edit(&|g| g.bc_top = conv(25.0, 300.0, 0.0)),
+        edit(&|g| g.bc_bottom = conv(-1.0, 300.0, 1.0)),
+        edit(&|g| g.nodes[3][3] = f64::NAN),
+        edit(&|g| g.nodes[2][4] = f64::INFINITY),
+    ] {
+        solve_row(m, &g, 1e-6, 1000);
+    }
+}
+
 fn decode<T: for<'de> serde::Deserialize<'de>>(
     doc: &str,
     toks: impl Fn(&T) -> Vec<Tok>,
@@ -435,12 +680,60 @@ fn json_rows(m: &mut Module) {
             &decode::<ThermalGrid1D>(doc, g1_toks),
         );
     }
+    // ThermalGrid2D
+    let mut g2s = setups2();
+    g2s.truncate(5);
+    let mut solved = g2s[1].clone();
+    solved.solve_steady_state(1e-6, 100_000).expect("solves");
+    g2s.push(solved);
+    let mut odd = g2s[0].clone();
+    odd.nodes[2][2] = f64::NAN;
+    g2s.push(odd);
+    let mut hdocs = Vec::new();
+    for g in &g2s {
+        let doc = serde_json::to_string(g).expect("serialize");
+        m.row(
+            "numerical::ThermalGrid2D::to_json",
+            Class::A,
+            &g2_toks(g),
+            &[s(doc.clone())],
+        );
+        hdocs.push(doc);
+    }
+    let base = hdocs[4].clone();
+    add_variants(&mut hdocs, &base);
+    let bcs = r#""bc_left":"Insulated","bc_right":"Insulated","bc_bottom":"Insulated","bc_top":{"Fixed":1}"#;
+    for body in [
+        r#""nodes":[[1,2,3],[4,5,6],[7,8,9]],"nx":3,"ny":3"#,
+        r#""nodes":[[1,2,3],[4,5],[7,8,9]],"nx":3,"ny":3"#,
+        r#""nodes":[[1,2,3],[4,5,6]],"nx":3,"ny":3"#,
+        r#""nodes":[[1,2,3,4],[5,6,7,8],[9,10,11,12]],"nx":3,"ny":4"#,
+        r#""nodes":[[1,2,3],[4,5,6],[7,8,9]],"nx":3.0,"ny":3"#,
+        r#""nodes":[[1,2,3],[4,5,6],[7,8,9]],"nx":-3,"ny":3"#,
+        r#""nodes":[[1,2,3],[4,5,6],[7,8,9]],"ny":3"#,
+        r#""nodes":[[1,"2",3],[4,5,6],[7,8,9]],"nx":3,"ny":3"#,
+        r#""nodes":[1,2,3],"nx":3,"ny":1"#,
+        r#""nodes":[],"nx":0,"ny":0"#,
+    ] {
+        hdocs.push(format!(r#"{{{body},"dx":0.5,"dy":0.5,{bcs}}}"#));
+    }
+    hdocs.push(r#"[[[1,2,3],[4,5,6],[7,8,9]],3,3,0.5,0.5,"Insulated","Insulated","Insulated","Insulated"]"#.to_string());
+    hdocs.extend(["[]", "null"].map(String::from));
+    for doc in &hdocs {
+        m.row(
+            "numerical::ThermalGrid2D::from_json",
+            Class::A,
+            &[s(doc.clone())],
+            &decode::<ThermalGrid2D>(doc, g2_toks),
+        );
+    }
 }
 
 pub fn emit() -> Module {
     let mut m = Module::new("numerical");
     grid_rows(&mut m);
     step_rows(&mut m);
+    grid2d_rows(&mut m);
     json_rows(&mut m);
     m
 }

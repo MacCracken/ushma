@@ -520,6 +520,22 @@ fn b_adaptive(g: *UsGrid1D): i64 {
     return v;
 }
 
+var _bn_g2_nodes = 0;
+
+# Rust's bench clones the 20×20 grid (left 400 K, right 300 K) and solves the copy to 1e-4: the port copies the 400
+# nodes into a reused grid, then solves it.
+fn b_gauss_seidel(g: *UsGrid2D): i64 {
+    var d = slice_ptr(g.nodes);
+    var s = slice_ptr(_bn_g2_nodes);
+    var k = 0;
+    while (k < 400) {
+        store64(d + (8 * k), load64(s + (8 * k)));
+        k = k + 1;
+    }
+    var t, v = us_grid2d_solve_steady_state(g, 0.0001, 10000);
+    return v;
+}
+
 # Fills the two resistance lists the benchmarks use.
 fn bn_lists() {
     _bn_series = alloc(40);
@@ -668,6 +684,19 @@ fn main(): i64 {
     var ms: f64 = us_grid1d_max_stable_dt(&g3);
     _bn_g1_dt = 4.0 * ms;
     bn_run("numerical/adaptive_1d_4substeps", &b_adaptive, &g3, 100000);
+    var gsrc: UsGrid2D;
+    var tgs, vgs = us_grid2d_new(&gsrc, 20, 20, 1.0, 1.0, 300.0);
+    var bcf: UsBoundaryCondition;
+    us_boundary_fixed(&bcf, 400.0);
+    var tsb, vsb = us_grid2d_set_boundary(&gsrc, US_SIDE_LEFT, &bcf);
+    us_boundary_fixed(&bcf, 300.0);
+    var tsc, vsc = us_grid2d_set_boundary(&gsrc, US_SIDE_RIGHT, &bcf);
+    _bn_g2_nodes = gsrc.nodes;
+    var gw: UsGrid2D;
+    var tgw, vgw = us_grid2d_new(&gw, 20, 20, 1.0, 1.0, 300.0);
+    var tsd, vsd = us_grid2d_set_boundary(&gw, US_SIDE_LEFT, us_grid2d_bc(&gsrc, US_SIDE_LEFT));
+    var tse, vse = us_grid2d_set_boundary(&gw, US_SIDE_RIGHT, us_grid2d_bc(&gsrc, US_SIDE_RIGHT));
+    bn_run("numerical/gauss_seidel_2d_20x20", &b_gauss_seidel, &gw, 100);
     return 0;
 }
 

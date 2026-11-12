@@ -1,7 +1,7 @@
-# numerical tests (M6a: boundary conditions and the 1D grid).
+# numerical tests (M6a: boundary conditions and the 1D grid; M6b: the 2D grid).
 #
-# Rust 1.4.0's numerical.rs tests for these, one for one (15 of its 27; the 2D grid and the network join with M6b and
-# M6c), each also checking the refusal's code. Then reference tests of the two spans, the grid's layout, a reused
+# Rust 1.4.0's numerical.rs tests for these, one for one (21 of its 27; the network joins with M6c), each also checking
+# the refusal's code. Then reference tests of the two spans, the grid's layout, a reused
 # Crank–Nicolson scratch (no allocation after the first step), and refused allocations.
 
 include "src/constants.cyr"
@@ -402,6 +402,161 @@ fn test_reference() {
     assert_eq(is_ok(t5), 1, "allowed, it steps");
 }
 
+# A 2D grid into *g, asserting it is Ok.
+fn grid2(g: *UsGrid2D, nx, ny, lx: f64, ly: f64, t0: f64) {
+    var t, v = us_grid2d_new(g, nx, ny, lx, ly, t0);
+    assert_eq(is_ok(t), 1, "the 2D grid is Ok");
+    return 0;
+}
+
+# Sets side `side` of *g to *bc, asserting it is Ok.
+fn side(g: *UsGrid2D, sd, bc: *UsBoundaryCondition) {
+    var t, v = us_grid2d_set_boundary(g, sd, bc);
+    assert_eq(is_ok(t), 1, "the side is set");
+    return 0;
+}
+
+# The 2D grid: its shape, a field fixed at 400 K all round settling to 400 K, two fixed sides settling to the linear
+# profile, a convective side matching the analytic 1D slab, the construction refusals, and bad states refused.
+# rust src/numerical.rs: test_grid2d_construction, test_grid2d_uniform_boundaries, test_grid2d_two_fixed_sides
+# rust src/numerical.rs: test_grid2d_invalid, test_grid_2d_convective_boundary_matches_analytic
+# rust src/numerical.rs: test_grid_2d_nan_and_bad_shape
+fn test_grid2d() {
+    test_group("2D grid");
+    var g: UsGrid2D;
+    grid2(&g, 10, 10, 1.0, 1.0, 300.0);
+    assert(g.nx == 10 && g.ny == 10 && vec_len(g.nodes) == 100, "10 rows of 10");
+    var f4: UsBoundaryCondition;
+    us_boundary_fixed(&f4, 400.0);
+    var u: UsGrid2D;
+    grid2(&u, 11, 11, 1.0, 1.0, 300.0);
+    side(&u, US_SIDE_LEFT, &f4);
+    side(&u, US_SIDE_RIGHT, &f4);
+    side(&u, US_SIDE_TOP, &f4);
+    side(&u, US_SIDE_BOTTOM, &f4);
+    var t1, v1 = us_grid2d_solve_steady_state(&u, 0.000001, 10000);
+    assert(is_ok(t1) == 1 && v1 > 0, "converges in some sweeps");
+    var flat = 1;
+    var j = 1;
+    while (j < 10) {
+        var i = 1;
+        while (i < 10) {
+            var t: f64 = us_grid2d_node(&u, i, j);
+            var d: f64 = absdiff(t, 400.0);
+            if (d >= 0.01) { flat = 0; }
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    assert_eq(flat, 1, "every interior node at 400 K");
+    var f3: UsBoundaryCondition;
+    var ins: UsBoundaryCondition;
+    us_boundary_fixed(&f3, 300.0);
+    us_boundary_insulated(&ins);
+    var w: UsGrid2D;
+    grid2(&w, 21, 21, 1.0, 1.0, 350.0);
+    side(&w, US_SIDE_LEFT, &f4);
+    side(&w, US_SIDE_RIGHT, &f3);
+    side(&w, US_SIDE_TOP, &ins);
+    side(&w, US_SIDE_BOTTOM, &ins);
+    var t2, v2 = us_grid2d_solve_steady_state(&w, 0.000001, 50000);
+    var mid: f64 = us_grid2d_node(&w, 10, 10);
+    var dm: f64 = absdiff(mid, 350.0);
+    assert(is_ok(t2) == 1 && dm < 2.0, "two fixed sides: the midpoint at 350 K");
+    var e1, f1 = us_grid2d_new(&g, 2, 10, 1.0, 1.0, 300.0);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "nx = 2");
+    var e2, f2 = us_grid2d_new(&g, 10, 10, 0.0, 1.0, 300.0);
+    errc(e2, f2, US_ERR_INVALID_PARAMETER, "lx = 0");
+    var c: UsGrid2D;
+    grid2(&c, 11, 5, 0.5, 0.2, 350.0);
+    var cv: UsBoundaryCondition;
+    conv(&cv, 10.0, 2.0, 300.0);
+    side(&c, US_SIDE_LEFT, &f4);
+    side(&c, US_SIDE_RIGHT, &cv);
+    var t3, v3 = us_grid2d_solve_steady_state(&c, 0.000000000001, 200000);
+    var wall: f64 = 300.0 + 100.0 * (1.0 / 10.0) / (0.5 / 2.0 + 1.0 / 10.0);
+    var got: f64 = us_grid2d_node(&c, 10, 2);
+    var dw: f64 = absdiff(got, wall);
+    var moved: f64 = absdiff(got, 350.0);
+    assert(is_ok(t3) == 1 && dw < 0.000001 && moved > 1.0, "a convective side: the analytic wall temperature");
+    var nan: f64 = 0.0 / 0.0;
+    var e3, f3b = us_grid2d_new(&g, 5, 5, 1.0, 1.0, nan);
+    errc(e3, f3b, US_ERR_INVALID_PARAMETER, "T0 NaN");
+    var b: UsGrid2D;
+    grid2(&b, 5, 5, 1.0, 1.0, 300.0);
+    var bn: *UsBoundaryCondition = us_grid2d_bc(&b, US_SIDE_LEFT);
+    us_boundary_fixed(bn, nan);
+    var e4, f4b = us_grid2d_solve_steady_state(&b, 0.000001, 100);
+    errc(e4, f4b, US_ERR_INVALID_PARAMETER, "a Fixed NaN side");
+    var n2: UsGrid2D;
+    grid2(&n2, 5, 5, 1.0, 1.0, 300.0);
+    us_grid2d_set_node(&n2, 2, 2, nan);
+    var e5, f5 = us_grid2d_solve_steady_state(&n2, 0.000001, 100);
+    errc(e5, f5, US_ERR_INVALID_PARAMETER, "a NaN node: the field turns non-finite");
+    var p: UsGrid2D;
+    grid2(&p, 5, 5, 1.0, 1.0, 300.0);
+    vec_truncate(p.nodes, 20);
+    var e6, f6 = us_grid2d_solve_steady_state(&p, 0.000001, 100);
+    errc(e6, f6, US_ERR_INVALID_PARAMETER, "a missing row");
+    side(&p, US_SIDE_LEFT, &f4);
+    assert_eq(vec_len(p.nodes), 20, "set_boundary on a bad shape writes nothing, and does not fault");
+    var q: UsGrid2D;
+    grid2(&q, 5, 5, 1.0, 1.0, 300.0);
+    var e7, f7 = us_grid2d_solve_steady_state(&q, nan, 10);
+    errc(e7, f7, US_ERR_INVALID_PARAMETER, "tolerance NaN");
+}
+
+# Reference for the 2D grid: the span, a side that is no US_SIDE_* code, the node accessors, the shape check after
+# an edited nx, the size guard, refused allocations, and a grid's document.
+fn test_grid2d_reference() {
+    test_group("2D reference");
+    var g: UsGrid2D;
+    grid2(&g, 6, 4, 0.5, 0.3, 300.0);
+    var f4: UsBoundaryCondition;
+    us_boundary_fixed(&f4, 400.0);
+    var e1, f1 = us_grid2d_set_boundary(&g, US_SIDE_COUNT, &f4);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "no such side");
+    assert_eq(us_grid2d_bc(&g, 0 - 1), 0, "no side -1");
+    side(&g, US_SIDE_TOP, &f4);
+    var top: f64 = us_grid2d_node(&g, 3, 3);
+    var bot: f64 = us_grid2d_node(&g, 3, 0);
+    assert(top == 400.0 && bot == 300.0, "the top row fixed at once, the bottom not");
+    var nan: f64 = us_grid2d_node(&g, 6, 0);
+    assert(nan != nan && us_grid2d_set_node(&g, 0, 4, 1.0) == 0, "no column 6, no row 4");
+    sakshi_output_buffer();
+    sakshi_set_level(SK_DEBUG);
+    sakshi_ring_clear();
+    var t1, v1 = us_grid2d_solve_steady_state(&g, 0.0001, 1000);
+    assert_eq(ring_has("solve_steady_state"), 1, "solve_steady_state's span");
+    var t2, v2 = us_grid2d_solve_steady_state(&g, 0.0 - 1.0, 10);
+    assert_eq(sakshi_span_depth(), 0, "every span closed, a refused one too");
+    sakshi_set_level(SK_INFO);
+    sakshi_ring_clear();
+    g.nx = 5;
+    var e2, f2 = us_grid2d_solve_steady_state(&g, 0.0001, 10);
+    errc(e2, f2, US_ERR_INVALID_PARAMETER, "nx edited: 24 nodes are not 5 x 4");
+    g.nx = 6;
+    var sb = str_builder_new();
+    us_grid2d_to_json(sb, &g);
+    var back: UsGrid2D;
+    var t3, v3 = us_grid2d_from_json(load64(sb), load64(sb + 8), &back);
+    var sb2 = str_builder_new();
+    us_grid2d_to_json(sb2, &back);
+    var n = load64(sb + 8);
+    assert(is_ok(t3) == 1 && back.nx == 6 && back.ny == 4, "a grid's document reads back, 6 x 4");
+    assert(n == load64(sb2 + 8) && memeq(load64(sb), load64(sb2), n) == 1, "written again, the same bytes");
+    var h: UsGrid2D;
+    var e3, f3 = us_grid2d_new(&h, 20000, 20000, 1.0, 1.0, 300.0);
+    errc(e3, f3, US_ERR_OUT_OF_MEMORY, "4e8 nodes pass a vec's 2^28 words: refused, not aborted");
+    var g1: UsGrid1D;
+    var e4, f4b = us_grid1d_new(&g1, 300000000, 1.0, 0.0001, 300.0, &f4, &f4);
+    errc(e4, f4b, US_ERR_OUT_OF_MEMORY, "3e8 nodes in 1D: refused too");
+    var ta = test_allocator();
+    test_allocator_fail_after(ta, 0);
+    var e5, f5 = us_grid2d_new_a(ta, &h, 5, 5, 1.0, 1.0, 300.0);
+    errc(e5, f5, US_ERR_OUT_OF_MEMORY, "the 2D grid's nodes refused");
+}
+
 # Runs every group and returns the failure count.
 fn main() {
     alloc_init();
@@ -411,6 +566,8 @@ fn main() {
     test_adaptive();
     test_state();
     test_reference();
+    test_grid2d();
+    test_grid2d_reference();
     return assert_summary();
 }
 

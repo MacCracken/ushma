@@ -60,6 +60,7 @@ TYPES = {
     "BoundaryCondition": ("UsBoundary", "boundary"),
     "Side": ("UsSide", "side"),
     "ThermalGrid1D": ("UsGrid1D", "grid1d"),
+    "ThermalGrid2D": ("UsGrid2D", "grid2d"),
 }
 # Rust item -> the Cyrius names that carry it ("fn x", "const X", "enum X", "struct X"), where the rules give none.
 MAPPED = {

@@ -1,5 +1,6 @@
-# numerical.cyr — numerical heat conduction (Rust 1.4.0 `numerical`): boundary conditions and the 1D transient grid
-# with its explicit, Crank–Nicolson and adaptive steps (M6a). SI: kelvins, metres, seconds, W/(m·K).
+# numerical.cyr — numerical heat conduction (Rust 1.4.0 `numerical`): boundary conditions, the 1D transient grid with
+# its explicit, Crank–Nicolson and adaptive steps (M6a), and the 2D steady-state grid with its Gauss–Seidel solve
+# (M6b). SI: kelvins, metres, seconds, W/(m·K).
 #
 # Each function computes in the order Rust 1.4.0 writes, so its arithmetic is bit-identical (class B); its unary minus
 # is a sign flip (_us_neg). A refusal returns Err(US_ERR_*) and reports its value at DEBUG (src/validate.cyr), leaving
@@ -7,7 +8,8 @@
 #
 # A boundary condition is a UsBoundaryCondition: its kind (a UsBoundary code) and the values that kind carries (ADR
 # 0002 row 15). A grid is a UsGrid1D the caller owns: its nodes are a stdlib vec on the grid's allocator, and it keeps
-# its own Crank–Nicolson scratch, so a step allocates nothing after the first (ADR 0002 row 2). Its fields are public
+# its own Crank–Nicolson scratch, so a step allocates nothing after the first (ADR 0002 row 2). A UsGrid2D stores its
+# nodes flat and row-major, ny rows of nx (row 2), and its JSON keeps Rust's rows of rows. Their fields are public
 # as Rust's are, and every step checks them (Rust's `check`), so a grid edited by hand, or read from JSON, is refused
 # rather than trusted. JSON is serde_json's (ADR 0005; src/json.cyr has the rules).
 
@@ -58,6 +60,25 @@ struct UsGrid1D {
 # address: `&g.bc_left` is no Cyrius expression.
 const _US_G1_LEFT = 32;
 const _US_G1_RIGHT = 72;
+
+# A 2D steady-state conduction grid (Rust's ThermalGrid2D). `nodes` holds ny rows of nx node temperatures (K) as f64
+# words, row-major: column i of row j (Rust's nodes[j][i]) is word j·nx + i.
+struct UsGrid2D {
+    alloc;
+    nodes;
+    nx;
+    ny;
+    dx: f64;
+    dy: f64;
+    bc_left: UsBoundaryCondition;
+    bc_right: UsBoundaryCondition;
+    bc_bottom: UsBoundaryCondition;
+    bc_top: UsBoundaryCondition;
+}
+
+# The byte offset of a UsGrid2D's first boundary condition (after alloc, nodes, nx, ny, dx, dy); the four follow in
+# Rust's field order: left, right, bottom, top.
+const _US_G2_BC = 48;
 
 # --- Names ---
 
@@ -197,7 +218,8 @@ fn us_grid1d_set_node(g: *UsGrid1D, i, t: f64): i64 {
 # Fills *out with a 1D grid of `num_nodes` nodes over `length` m at diffusivity `alpha` (m²/s), every node at
 # `t_initial` K but a Fixed end at its own temperature, its vecs on the global heap. Ok(0), or
 # Err(US_ERR_INVALID_PARAMETER) unless num_nodes ≥ 3, length and α are > 0, t_initial is finite and both conditions are
-# valid; Err(US_ERR_OUT_OF_MEMORY) when a vec was refused. *out is unchanged on a refusal.
+# valid; Err(US_ERR_OUT_OF_MEMORY) when a vec was refused or num_nodes passes a vec's 2^28 words (where vec_push would
+# abort). *out is unchanged on a refusal.
 #must_use
 fn us_grid1d_new(out: *UsGrid1D, num_nodes, length: f64, alpha: f64, t_initial: f64, bc_left: *UsBoundaryCondition,
   bc_right: *UsBoundaryCondition): Result {
@@ -209,6 +231,9 @@ fn us_grid1d_new(out: *UsGrid1D, num_nodes, length: f64, alpha: f64, t_initial: 
 fn us_grid1d_new_a(a, out: *UsGrid1D, num_nodes, length: f64, alpha: f64, t_initial: f64,
   bc_left: *UsBoundaryCondition, bc_right: *UsBoundaryCondition): Result {
     if (num_nodes < 3) { return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_grid1d_new", "num_nodes", num_nodes)); }
+    if (num_nodes > VEC_CAP_MAX) {
+        return Err(_us_fail_i(US_ERR_OUT_OF_MEMORY, "us_grid1d_new", "num_nodes", num_nodes));
+    }
     if (_us_finite_gt(length, 0.0) == 0) {
         return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_grid1d_new", "length", length));
     }
@@ -542,6 +567,307 @@ fn us_grid1d_step_adaptive(g: *UsGrid1D, dt_target: f64): Result {
     return Ok(dt_target);
 }
 
+# --- The 2D grid ---
+
+# The address of the boundary condition on `side` of *g (a US_SIDE_* code), to read or set it; 0 for no side.
+#must_use
+fn us_grid2d_bc(g: *UsGrid2D, side): *UsBoundaryCondition {
+    var b = g;
+    if (side == US_SIDE_LEFT) { return b + _US_G2_BC; }
+    if (side == US_SIDE_RIGHT) { return b + _US_G2_BC + 40; }
+    if (side == US_SIDE_BOTTOM) { return b + _US_G2_BC + 80; }
+    if (side == US_SIDE_TOP) { return b + _US_G2_BC + 120; }
+    return 0;
+}
+
+# The temperature of the node in column `i`, row `j` of *g (Rust's nodes[j][i], K), or NaN when there is none.
+#must_use
+fn us_grid2d_node(g: *UsGrid2D, i, j): f64 {
+    var nx = g.nx;
+    if (i < 0 || j < 0 || i >= nx || j >= g.ny || j * nx + i >= vec_len(g.nodes)) {
+        var nan: f64 = 0.0 / 0.0;
+        return nan;
+    }
+    var t: f64 = vec_get(g.nodes, j * nx + i);
+    return t;
+}
+
+# Sets the node in column `i`, row `j` of *g to `t` K: 1, or 0 when there is none.
+fn us_grid2d_set_node(g: *UsGrid2D, i, j, t: f64): i64 {
+    var nx = g.nx;
+    if (i < 0 || j < 0 || i >= nx || j >= g.ny || j * nx + i >= vec_len(g.nodes)) { return 0; }
+    vec_set(g.nodes, j * nx + i, t);
+    return 1;
+}
+
+# Fills *out with an nx × ny grid over `lx` × `ly` m, every node at `t_initial` K and every side insulated, its nodes
+# on the global heap. Ok(0), or Err(US_ERR_INVALID_PARAMETER) unless nx and ny are ≥ 3, lx and ly are > 0 and
+# t_initial is finite; Err(US_ERR_OUT_OF_MEMORY) when the nodes were refused or nx·ny passes a vec's 2^28 words. *out
+# is unchanged on a refusal.
+#must_use
+fn us_grid2d_new(out: *UsGrid2D, nx, ny, lx: f64, ly: f64, t_initial: f64): Result {
+    return us_grid2d_new_a(default_alloc(), out, nx, ny, lx, ly, t_initial);
+}
+
+# us_grid2d_new with the nodes on allocator `a`.
+#must_use
+fn us_grid2d_new_a(a, out: *UsGrid2D, nx, ny, lx: f64, ly: f64, t_initial: f64): Result {
+    if (nx < 3 || ny < 3) {
+        var bad = nx;
+        if (nx >= 3) { bad = ny; }
+        return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_grid2d_new", "size", bad));
+    }
+    if (_us_finite_gt(lx, 0.0) == 0) { return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_grid2d_new", "lx", lx)); }
+    if (_us_finite_gt(ly, 0.0) == 0) { return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_grid2d_new", "ly", ly)); }
+    if (_us_is_finite(t_initial) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_grid2d_new", "t_initial", t_initial));
+    }
+    if (nx > VEC_CAP_MAX / ny) { return Err(_us_fail_i(US_ERR_OUT_OF_MEMORY, "us_grid2d_new", "nx", nx)); }
+    var nodes = vec_new_a(a);
+    if (nodes == 0) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_grid2d_new")); }
+    var n = nx * ny;
+    var k = 0;
+    while (k < n) {
+        if (vec_push_a(a, nodes, t_initial) < 0) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_grid2d_new")); }
+        k = k + 1;
+    }
+    var fx: f64 = f64_from(nx - 1);
+    var fy: f64 = f64_from(ny - 1);
+    var dx: f64 = lx / fx;
+    var dy: f64 = ly / fy;
+    out.alloc = a;
+    out.nodes = nodes;
+    out.nx = nx;
+    out.ny = ny;
+    out.dx = dx;
+    out.dy = dy;
+    var s = 0;
+    while (s < US_SIDE_COUNT) {
+        us_boundary_insulated(us_grid2d_bc(out, s));
+        s = s + 1;
+    }
+    return Ok(0);
+}
+
+# 1 when *g's shape is usable (Rust's `check_shape`: nx and ny ≥ 3, nx·ny nodes, Δx and Δy finite and > 0), else 0.
+fn _us_g2_shape(g: *UsGrid2D): i64 {
+    var nx = g.nx;
+    var ny = g.ny;
+    if (nx < 3 || ny < 3) { return 0; }
+    if (nx > VEC_CAP_MAX / ny || vec_len(g.nodes) != nx * ny) { return 0; }
+    var dx: f64 = g.dx;
+    var dy: f64 = g.dy;
+    return _us_finite_gt(dx, 0.0) & _us_finite_gt(dy, 0.0);
+}
+
+# Writes the Fixed conditions' temperatures onto their sides of *g: left (column 0), right (column nx − 1), bottom
+# (row 0), top (row ny − 1), in that order, so a corner takes the later side's.
+fn _us_g2_apply_fixed(g: *UsGrid2D) {
+    var nx = g.nx;
+    var ny = g.ny;
+    var d = slice_ptr(g.nodes);
+    var bl: *UsBoundaryCondition = us_grid2d_bc(g, US_SIDE_LEFT);
+    var br: *UsBoundaryCondition = us_grid2d_bc(g, US_SIDE_RIGHT);
+    var bb: *UsBoundaryCondition = us_grid2d_bc(g, US_SIDE_BOTTOM);
+    var bt: *UsBoundaryCondition = us_grid2d_bc(g, US_SIDE_TOP);
+    var k = 0;
+    if (bl.kind == US_BOUNDARY_FIXED) {
+        var tl: f64 = bl.t;
+        k = 0;
+        while (k < ny) {
+            store64(d + (8 * (k * nx)), tl);
+            k = k + 1;
+        }
+    }
+    if (br.kind == US_BOUNDARY_FIXED) {
+        var tr: f64 = br.t;
+        k = 0;
+        while (k < ny) {
+            store64(d + (8 * (k * nx + nx - 1)), tr);
+            k = k + 1;
+        }
+    }
+    if (bb.kind == US_BOUNDARY_FIXED) {
+        var tb: f64 = bb.t;
+        k = 0;
+        while (k < nx) {
+            store64(d + (8 * k), tb);
+            k = k + 1;
+        }
+    }
+    if (bt.kind == US_BOUNDARY_FIXED) {
+        var tt: f64 = bt.t;
+        k = 0;
+        while (k < nx) {
+            store64(d + (8 * ((ny - 1) * nx + k)), tt);
+            k = k + 1;
+        }
+    }
+    return 0;
+}
+
+# Sets the condition on `side` of *g to *bc, and, when the grid's shape is usable, writes the Fixed sides onto it at
+# once (the conditions are checked by us_grid2d_solve_steady_state). Ok(0), or Err(US_ERR_INVALID_PARAMETER) when `side`
+# is no US_SIDE_* code (Rust's enum holds none).
+#must_use
+fn us_grid2d_set_boundary(g: *UsGrid2D, side, bc: *UsBoundaryCondition): Result {
+    var dst = us_grid2d_bc(g, side);
+    if (dst == 0) { return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_grid2d_set_boundary", "side", side)); }
+    memcpy(dst, bc, sizeof(UsBoundaryCondition));
+    if (_us_g2_shape(g) == 1) { _us_g2_apply_fixed(g); }
+    return Ok(0);
+}
+
+# A flux boundary's new value from its interior neighbour `tin`: the neighbour itself (insulated), or
+# (T_in + Bi·T_fluid)/(1 + Bi) (convective, Bi = h·Δ/k).
+fn _us_g2_flux_value(bc: *UsBoundaryCondition, tin: f64, spacing: f64): f64 {
+    if (bc.kind == US_BOUNDARY_INSULATED) { return tin; }
+    var bi: f64 = _us_bc_biot(bc, spacing);
+    var tf: f64 = bc.t_fluid;
+    var v: f64 = (tin + bi * tf) / (1.0 + bi);
+    return v;
+}
+
+# The NaN-propagating maximum of the running change `m` and a new change `d` (Rust's `if d > m || d.is_nan()`).
+fn _us_nanmax(m: f64, d: f64): f64 {
+    if (d > m || d != d) { return d; }
+    return m;
+}
+
+# Updates the insulated and convective sides of *g from their interior neighbours: for each interior row the left and
+# right, then for each interior column the bottom and top. The largest change, NaN-propagating.
+fn _us_g2_apply_flux(g: *UsGrid2D): f64 {
+    var nx = g.nx;
+    var ny = g.ny;
+    var dx: f64 = g.dx;
+    var dy: f64 = g.dy;
+    var d = slice_ptr(g.nodes);
+    var bl: *UsBoundaryCondition = us_grid2d_bc(g, US_SIDE_LEFT);
+    var br: *UsBoundaryCondition = us_grid2d_bc(g, US_SIDE_RIGHT);
+    var bb: *UsBoundaryCondition = us_grid2d_bc(g, US_SIDE_BOTTOM);
+    var bt: *UsBoundaryCondition = us_grid2d_bc(g, US_SIDE_TOP);
+    var m: f64 = 0.0;
+    var j = 1;
+    while (j < ny - 1) {
+        var row = d + (8 * (j * nx));
+        if (bl.kind != US_BOUNDARY_FIXED) {
+            var tin: f64 = load64(row + 8);
+            var v: f64 = _us_g2_flux_value(bl, tin, dx);
+            var old: f64 = load64(row);
+            var ch: f64 = f64_abs(v - old);
+            m = _us_nanmax(m, ch);
+            store64(row, v);
+        }
+        if (br.kind != US_BOUNDARY_FIXED) {
+            var tin2: f64 = load64(row + (8 * (nx - 2)));
+            var v2: f64 = _us_g2_flux_value(br, tin2, dx);
+            var old2: f64 = load64(row + (8 * (nx - 1)));
+            var ch2: f64 = f64_abs(v2 - old2);
+            m = _us_nanmax(m, ch2);
+            store64(row + (8 * (nx - 1)), v2);
+        }
+        j = j + 1;
+    }
+    var i = 1;
+    while (i < nx - 1) {
+        if (bb.kind != US_BOUNDARY_FIXED) {
+            var tin3: f64 = load64(d + (8 * (nx + i)));
+            var v3: f64 = _us_g2_flux_value(bb, tin3, dy);
+            var old3: f64 = load64(d + (8 * i));
+            var ch3: f64 = f64_abs(v3 - old3);
+            m = _us_nanmax(m, ch3);
+            store64(d + (8 * i), v3);
+        }
+        if (bt.kind != US_BOUNDARY_FIXED) {
+            var tin4: f64 = load64(d + (8 * ((ny - 2) * nx + i)));
+            var v4: f64 = _us_g2_flux_value(bt, tin4, dy);
+            var old4: f64 = load64(d + (8 * ((ny - 1) * nx + i)));
+            var ch4: f64 = f64_abs(v4 - old4);
+            m = _us_nanmax(m, ch4);
+            store64(d + (8 * ((ny - 1) * nx + i)), v4);
+        }
+        i = i + 1;
+    }
+    return m;
+}
+
+# Solves *g for the steady state by Gauss–Seidel: each sweep T_ij = (rx·(T_i−1,j + T_i+1,j) + ry·(T_i,j−1 + T_i,j+1))
+# / (2·(rx + ry)), rx = 1/Δx², ry = 1/Δy², then the flux sides (insulated T_b = T_in, convective T_b = (T_in +
+# Bi·T_fluid)/(1 + Bi)), first-order at the wall. Ok(the sweeps until the largest change is below `tolerance`), or
+# Err(US_ERR_INVALID_PARAMETER) for a bad shape, a bad condition (left, right, bottom, top), a tolerance not finite
+# and > 0, a field that turns non-finite, or no convergence in `max_iterations` sweeps (the field is then left
+# iterated, as 1.4.0's is).
+#must_use
+fn us_grid2d_solve_steady_state(g: *UsGrid2D, tolerance: f64, max_iterations): Result {
+    _us_span_enter("solve_steady_state", 18);
+    if (_us_g2_shape(g) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_grid2d_solve_steady_state", "shape", g.nx));
+    }
+    var s = 0;
+    while (s < US_SIDE_COUNT) {
+        var order = s;
+        if (s == 2) { order = US_SIDE_BOTTOM; }
+        if (s == 3) { order = US_SIDE_TOP; }
+        var code = _us_bc_check(us_grid2d_bc(g, order), "us_grid2d_solve_steady_state");
+        if (code != 0) {
+            _us_span_exit();
+            return Err(code);
+        }
+        s = s + 1;
+    }
+    if (_us_finite_gt(tolerance, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_grid2d_solve_steady_state", "tolerance", tolerance));
+    }
+    _us_g2_apply_fixed(g);
+    var dx: f64 = g.dx;
+    var dy: f64 = g.dy;
+    var rx: f64 = 1.0 / (dx * dx);
+    var ry: f64 = 1.0 / (dy * dy);
+    var den: f64 = 2.0 * (rx + ry);
+    var nx = g.nx;
+    var ny = g.ny;
+    var d = slice_ptr(g.nodes);
+    var it = 0;
+    while (it < max_iterations) {
+        var m: f64 = 0.0;
+        var j = 1;
+        while (j < ny - 1) {
+            var row = d + (8 * (j * nx));
+            var i = 1;
+            while (i < nx - 1) {
+                var at = row + (8 * i);
+                var old: f64 = load64(at);
+                var w: f64 = load64(at - 8);
+                var e: f64 = load64(at + 8);
+                var sn: f64 = load64(at - (8 * nx));
+                var no: f64 = load64(at + (8 * nx));
+                var nv: f64 = (rx * (w + e) + ry * (sn + no)) / den;
+                store64(at, nv);
+                var ch: f64 = f64_abs(nv - old);
+                m = _us_nanmax(m, ch);
+                i = i + 1;
+            }
+            j = j + 1;
+        }
+        var fc: f64 = _us_g2_apply_flux(g);
+        m = _us_nanmax(m, fc);
+        if (_us_is_finite(m) == 0) {
+            _us_span_exit();
+            return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_grid2d_solve_steady_state", "iteration", it + 1));
+        }
+        if (m < tolerance) {
+            _us_span_exit();
+            return Ok(it + 1);
+        }
+        it = it + 1;
+    }
+    _us_span_exit();
+    return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_grid2d_solve_steady_state", "max_iterations",
+        max_iterations));
+}
+
 # --- JSON ---
 
 # Appends *bc as serde_json writes a `BoundaryCondition` (externally tagged): `{"Fixed":T}`, `"Insulated"`, or
@@ -761,4 +1087,161 @@ fn us_grid1d_from_json_a(a, buf, n, out: *UsGrid1D): Result {
 #must_use
 fn us_grid1d_from_json(buf, n, out: *UsGrid1D): Result {
     return us_grid1d_from_json_a(default_alloc(), buf, n, out);
+}
+
+# Appends *g as serde_json writes a `ThermalGrid2D`: its nodes as rows of nx (a hand-edited grid's last row may be
+# shorter; with nx < 1, one row), then nx, ny, Δx, Δy and the four conditions.
+fn us_grid2d_to_json(sb, g: *UsGrid2D) {
+    var nx = g.nx;
+    var n = vec_len(g.nodes);
+    var w = nx;
+    if (w < 1) { w = n; }
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "nodes", 1);
+    str_builder_putc(sb, 91);
+    var k = 0;
+    while (k < n) {
+        if (k % w == 0) {
+            if (k > 0) {
+                str_builder_putc(sb, 93);
+                str_builder_putc(sb, 44);
+            }
+            str_builder_putc(sb, 91);
+        } else {
+            str_builder_putc(sb, 44);
+        }
+        var t: f64 = vec_get(g.nodes, k);
+        _us_jw_f64(sb, t);
+        k = k + 1;
+    }
+    if (n > 0) { str_builder_putc(sb, 93); }
+    str_builder_putc(sb, 93);
+    _us_jw_key(sb, "nx", 0);
+    _us_jw_usize(sb, nx);
+    _us_jw_key(sb, "ny", 0);
+    _us_jw_usize(sb, g.ny);
+    var dx: f64 = g.dx;
+    var dy: f64 = g.dy;
+    _us_jw_key(sb, "dx", 0);
+    _us_jw_f64(sb, dx);
+    _us_jw_key(sb, "dy", 0);
+    _us_jw_f64(sb, dy);
+    _us_jw_key(sb, "bc_left", 0);
+    us_boundary_to_json(sb, us_grid2d_bc(g, US_SIDE_LEFT));
+    _us_jw_key(sb, "bc_right", 0);
+    us_boundary_to_json(sb, us_grid2d_bc(g, US_SIDE_RIGHT));
+    _us_jw_key(sb, "bc_bottom", 0);
+    us_boundary_to_json(sb, us_grid2d_bc(g, US_SIDE_BOTTOM));
+    _us_jw_key(sb, "bc_top", 0);
+    us_boundary_to_json(sb, us_grid2d_bc(g, US_SIDE_TOP));
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# The fields of a ThermalGrid2D, in declaration order.
+fn _us_g2_field(k): cstring {
+    match k {
+        0 => { return "nodes"; }
+        1 => { return "nx"; }
+        2 => { return "ny"; }
+        3 => { return "dx"; }
+        4 => { return "dy"; }
+        5 => { return "bc_left"; }
+        6 => { return "bc_right"; }
+        7 => { return "bc_bottom"; }
+        8 => { return "bc_top"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# A ThermalGrid2D node `v` (object or 9-element sequence) into *out, its nodes on allocator `a`: 0, 1 for a malformed
+# document, 2 for a well-formed one whose nodes are not ny rows of nx (which the flat grid cannot hold; ADR 0002 row
+# 2), or 3 for a refused vec. *out is unchanged unless 0.
+fn _us_jr_grid2d(a, v, out: *UsGrid2D): i64 {
+    var form = _us_jr_form(v, 9);
+    if (form == 0) { return 1; }
+    var rows = _us_jr_at(v, form, 0, "nodes");
+    if (rows == 0 || bayan_json_v_tag(rows) != JTAG_ARR) { return 1; }
+    var ints[16];
+    if (_us_jr_usize(_us_jr_at(v, form, 1, "nx"), &ints) == 0) { return 1; }
+    if (_us_jr_usize(_us_jr_at(v, form, 2, "ny"), &ints + 8) == 0) { return 1; }
+    var w[16];
+    if (_us_jr_f64(_us_jr_at(v, form, 3, "dx"), &w) == 0 || _us_jr_f64(_us_jr_at(v, form, 4, "dy"), &w + 8) == 0) {
+        return 1;
+    }
+    var bcs[160];
+    var s = 0;
+    while (s < 4) {
+        if (_us_jr_boundary(_us_jr_at(v, form, 5 + s, _us_g2_field(5 + s)), &bcs + (40 * s)) == 0) { return 1; }
+        s = s + 1;
+    }
+    var nr = bayan_json_v_arr_len(rows);
+    var k = 0;
+    while (k < nr) {
+        var r = bayan_json_v_arr_get(rows, k);
+        if (r == 0 || bayan_json_v_tag(r) != JTAG_ARR) { return 1; }
+        var nc = bayan_json_v_arr_len(r);
+        var c = 0;
+        while (c < nc) {
+            var x[8];
+            if (_us_jr_f64(bayan_json_v_arr_get(r, c), &x) == 0) { return 1; }
+            c = c + 1;
+        }
+        k = k + 1;
+    }
+    var nx = load64(&ints);
+    var ny = load64(&ints + 8);
+    var shaped = 1;
+    if (nr != ny) { shaped = 0; }
+    k = 0;
+    while (k < nr && shaped == 1) {
+        if (bayan_json_v_arr_len(bayan_json_v_arr_get(rows, k)) != nx) { shaped = 0; }
+        k = k + 1;
+    }
+    if (shaped == 0) { return 2; }
+    var nodes = vec_new_a(a);
+    if (nodes == 0) { return 3; }
+    k = 0;
+    while (k < nr) {
+        var r2 = bayan_json_v_arr_get(rows, k);
+        var c2 = 0;
+        while (c2 < nx) {
+            var y[8];
+            if (_us_jr_f64(bayan_json_v_arr_get(r2, c2), &y) == 0) { return 1; }
+            if (vec_push_a(a, nodes, load64(&y)) < 0) { return 3; }
+            c2 = c2 + 1;
+        }
+        k = k + 1;
+    }
+    var dx: f64 = load64(&w);
+    var dy: f64 = load64(&w + 8);
+    out.alloc = a;
+    out.nodes = nodes;
+    out.nx = nx;
+    out.ny = ny;
+    out.dx = dx;
+    out.dy = dy;
+    var ob = out;
+    memcpy(ob + _US_G2_BC, &bcs, 160);
+    return 0;
+}
+
+# Reads a `ThermalGrid2D` document (`n` bytes at `buf`; an object, or a 9-element sequence) into *out, its nodes (which
+# then grow on `a`) and the parse tree on allocator `a`. Rust checks nothing at decode, and nor does this, but the flat
+# grid holds only ny rows of nx: a document whose rows are otherwise (1.4.0 decodes it and refuses it at the first
+# solve) is refused here (ADR 0002 row 2). Ok(0), or Err(US_ERR_DESERIALIZE), or Err(US_ERR_OUT_OF_MEMORY) for a
+# refused vec, leaving *out unchanged.
+#must_use
+fn us_grid2d_from_json_a(a, buf, n, out: *UsGrid2D): Result {
+    var r = _us_jr_grid2d(a, _us_jr_parse(a, buf, n), out);
+    if (r == 3) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_grid2d_from_json")); }
+    if (r != 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_grid2d_from_json")); }
+    return Ok(0);
+}
+
+# us_grid2d_from_json_a on the global heap: for a one-off read (its tree and nodes stay allocated).
+#must_use
+fn us_grid2d_from_json(buf, n, out: *UsGrid2D): Result {
+    return us_grid2d_from_json_a(default_alloc(), buf, n, out);
 }

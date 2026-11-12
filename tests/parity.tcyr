@@ -575,6 +575,153 @@ fn _par_got_g1(g: *UsGrid1D) {
 }
 
 var _par_g1 = 0;
+var _par_g2 = 0;
+# 1 when the current row's document is a ThermalGrid2D whose rows are not ny × nx: the flat grid refuses it at decode,
+# 1.4.0 at the first solve (ADR 0002 row 2).
+var _par_adr2 = 0;
+
+# A 2D grid from input token `at` (`v:rows`, each `v:len` and its nodes; nx, ny, Δx, Δy; four conditions) into *g,
+# whose vec exists, its rows flattened: the index after it, or -1.
+fn _par_g2_in(g: *UsGrid2D, at): i64 {
+    if (at >= _par_in_n || load64(_par_in_k + at * 8) != 118) { return 0 - 1; }
+    var nr = _par_in(at);
+    vec_truncate(g.nodes, 0);
+    var i = at + 1;
+    var r = 0;
+    while (r < nr) {
+        if (i >= _par_in_n || load64(_par_in_k + i * 8) != 118) { return 0 - 1; }
+        var n = _par_in(i);
+        var k = 0;
+        while (k < n) {
+            vec_push(g.nodes, _par_in(i + 1 + k));
+            k = k + 1;
+        }
+        i = i + 1 + n;
+        r = r + 1;
+    }
+    g.nx = _par_in(i);
+    g.ny = _par_in(i + 1);
+    var dx: f64 = _par_in(i + 2);
+    var dy: f64 = _par_in(i + 3);
+    g.dx = dx;
+    g.dy = dy;
+    i = i + 4;
+    var sides[32];
+    store64(&sides, US_SIDE_LEFT);
+    store64(&sides + 8, US_SIDE_RIGHT);
+    store64(&sides + 16, US_SIDE_BOTTOM);
+    store64(&sides + 24, US_SIDE_TOP);
+    var s = 0;
+    while (s < 4) {
+        i = _par_bc_in(i, us_grid2d_bc(g, load64(&sides + 8 * s)));
+        if (i < 0) { return 0 - 1; }
+        s = s + 1;
+    }
+    return i;
+}
+
+# Appends *g as its golden tokens: its nodes in rows of nx (the last row the remainder), then nx, ny, Δx, Δy and the
+# four conditions.
+fn _par_got_g2(g: *UsGrid2D) {
+    var n = vec_len(g.nodes);
+    var nx = g.nx;
+    if (nx < 1) { nx = n; }
+    var rows = 0;
+    if (n > 0) { rows = (n + nx - 1) / nx; }
+    _par_got_seq(rows);
+    var k = 0;
+    while (k < n) {
+        if (k % nx == 0) {
+            var left = n - k;
+            if (left > nx) { left = nx; }
+            _par_got_seq(left);
+        }
+        _par_got_f(vec_get(g.nodes, k));
+        k = k + 1;
+    }
+    _par_got_i(g.nx);
+    _par_got_i(g.ny);
+    var dx: f64 = g.dx;
+    var dy: f64 = g.dy;
+    _par_got_f(dx);
+    _par_got_f(dy);
+    _par_got_bc(us_grid2d_bc(g, US_SIDE_LEFT));
+    _par_got_bc(us_grid2d_bc(g, US_SIDE_RIGHT));
+    _par_got_bc(us_grid2d_bc(g, US_SIDE_BOTTOM));
+    _par_got_bc(us_grid2d_bc(g, US_SIDE_TOP));
+    return 0;
+}
+
+# One ThermalGrid2D row: 1 when handled, 0 for none, -1 for unusable inputs.
+fn _par_grid2d(fp, fl): i64 {
+    if (_par_g2 == 0) {
+        _par_g2 = alloc(sizeof(UsGrid2D));
+        var tg, vg = us_grid2d_new(_par_g2, 3, 3, 1.0, 1.0, 0.0);
+    }
+    if (_par_eq(fp, fl, "numerical::ThermalGrid2D::new") == 1) {
+        var lx: f64 = _par_in(2);
+        var ly: f64 = _par_in(3);
+        var t0: f64 = _par_in(4);
+        var g: UsGrid2D;
+        var tn, vn = us_grid2d_new(&g, _par_in(0), _par_in(1), lx, ly, t0);
+        if (is_ok(tn) == 1) { _par_got_g2(&g); } else { _par_got_err(vn); }
+        return 1;
+    }
+    if (_par_eq(fp, fl, "numerical::ThermalGrid2D::to_json") == 1) {
+        if (_par_g2_in(_par_g2, 0) != _par_in_n) { return 0 - 1; }
+        store64(_par_mat_sb + 8, 0);
+        us_grid2d_to_json(_par_mat_sb, _par_g2);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "numerical::ThermalGrid2D::from_json") == 1) {
+        var dn[8];
+        var doc = _par_in_text(0, &dn);
+        if (doc == 0) { return 0 - 1; }
+        var n = load64(&dn);
+        reset_via(_par_mat_arena);
+        var h: UsGrid2D;
+        var t, v = us_grid2d_from_json_a(_par_mat_arena, doc, n, &h);
+        if (is_ok(t) == 1) {
+            _par_got_g2(&h);
+            if (_par_has_int_neg_zero(doc, n) == 1) { _par_adr5 = 1; }
+            return 1;
+        }
+        _par_got_err(v);
+        if (_par_bayan_mapped_refusal(doc, n) == 1) { _par_adr5 = 1; }
+        reset_via(_par_mat_arena);
+        var h2: UsGrid2D;
+        if (_us_jr_grid2d(_par_mat_arena, _us_jr_parse(_par_mat_arena, doc, n), &h2) == 2) { _par_adr2 = 1; }
+        return 1;
+    }
+    var op = 0;
+    if (_par_eq(fp, fl, "numerical::ThermalGrid2D::set_boundary") == 1) { op = 1; }
+    if (_par_eq(fp, fl, "numerical::ThermalGrid2D::solve_steady_state") == 1) { op = 2; }
+    if (op == 0) { return 0; }
+    var gi = _par_g2_in(_par_g2, 0);
+    if (gi < 0) { return 0 - 1; }
+    if (op == 1) {
+        var sd = _par_in_enum(gi, &_par_side_text, US_SIDE_COUNT);
+        var bc: UsBoundaryCondition;
+        if (sd < 0 || _par_bc_in(gi + 1, &bc) != _par_in_n) { return 0 - 1; }
+        var ts, vs = us_grid2d_set_boundary(_par_g2, sd, &bc);
+        _par_got_g2(_par_g2);
+        return 1;
+    }
+    if (op == 2) {
+        if (gi + 2 != _par_in_n) { return 0 - 1; }
+        var tol: f64 = _par_in(gi);
+        var t2, v2 = us_grid2d_solve_steady_state(_par_g2, tol, _par_in(gi + 1));
+        if (is_ok(t2) == 1) {
+            _par_got_i(v2);
+            _par_got_g2(_par_g2);
+        } else {
+            _par_got_err(v2);
+        }
+        return 1;
+    }
+    return 0;
+}
 
 # One numerical row: 1 when handled, 0 for a function with no counterpart yet, -1 for unusable inputs.
 fn _par_numerical(fp, fl): i64 {
@@ -588,6 +735,8 @@ fn _par_numerical(fp, fl): i64 {
         _par_mat_sb = str_builder_new();
         _par_mat_arena = arena_allocator_growable(65536);
     }
+    var g2r = _par_grid2d(fp, fl);
+    if (g2r != 0) { return g2r; }
     var bc: UsBoundaryCondition;
     if (_par_eq(fp, fl, "numerical::BoundaryCondition::to_json") == 1) {
         if (_par_bc_in(0, &bc) != _par_in_n) { return 0 - 1; }
@@ -2147,6 +2296,7 @@ fn _par_transfer(fp, fl): i64 {
 fn _par_dispatch(mp, ml, fp, fl): i64 {
     _par_got_n = 0;
     _par_adr5 = 0;   # per row: a stale flag would accept a later failing row in any module
+    _par_adr2 = 0;
     if (_par_eq(mp, ml, "constants") == 1) { return _par_constants(fp, fl); }
     if (_par_eq(mp, ml, "math") == 1) { return _par_math(fp, fl); }
     if (_par_eq(mp, ml, "fmtf") == 1) { return _par_fmtf(fp, fl); }
@@ -2286,6 +2436,7 @@ fn _par_c_bound(fp, fl): i64 {
 #must_use
 fn _par_accepted(fp, fl, ip, il): i64 {
     if (_par_adr5 == 1) { return 5; }
+    if (_par_adr2 == 1) { return 2; }
     return 0;
 }
 

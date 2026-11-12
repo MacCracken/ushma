@@ -176,6 +176,7 @@ the target, so the integrand keeps it. The run was on a loaded machine.
 | numerical/explicit_1d | 45.67 | 591 | 100 nodes, Fo = 0.4: the grid's checks, the stability test, 98 interior updates and two boundary updates, the span (822 before M6a's review) |
 | numerical/crank_nicolson_1d | 888.85 | 2,104 | 100 nodes, dt = 1 s: the Thomas sweep and back substitution in the grid's own scratch, no allocation (Rust allocates its two vectors per step; 2,665 before) |
 | numerical/adaptive_1d_4substeps | 114.92 | 1,295 | 51 nodes, one convective end, 4 explicit sub-steps (1,739 before) |
+| numerical/gauss_seidel_2d_20x20 | 1,411,100 | 3,829,000 | the 20×20 grid (left 400 K, right 300 K) to 1e-4: Rust clones it per solve, the port copies its 400 nodes into a reused grid (no allocation); about 2.5× Rust, the sweeps' arithmetic in Rust's order (M6b) |
 
 **M6a's review.** The first explicit step cost about 8 ns per node, and Crank–Nicolson about 26:
 - **Explicit update:** each pass loaded its node and the next one, recomputing both addresses. It now rolls the old
@@ -186,4 +187,7 @@ the target, so the integrand keeps it. The run was on a loaded machine.
   slower (2,886 ns), because the call costs more than the branch it removes, so the interior rows keep it inline.
 - **The result:** every one of the 844 step rows is unchanged. These are the minimum of the runs on the final code;
   the machine was loaded by other sessions throughout.
+
+**M6b.** Gauss–Seidel is the one stepped kernel within 3× of Rust. Each node's update is four loads, a store and six
+flops, and the sweep's cost dominates the call overhead. Nothing measured worth changing.
 

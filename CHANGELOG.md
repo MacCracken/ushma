@@ -42,6 +42,20 @@ ADRs 0001–0005.
 - **scripts/oracle** — serde_json is built with `float_roundtrip`: its default float parse reads 35,970 of 160,320 of its own shortest texts back 1–2 ulp off (probe 11). Writing is unchanged, and the golden corpus is unaffected
 
 ### Added
+- **M6b, the 2D grid** (port plan §6): `UsGrid2D` with `us_grid2d_new` / `_new_a`, `us_grid2d_set_boundary`, `us_grid2d_solve_steady_state`, the accessors `us_grid2d_bc`, `_node` and `_set_node`, and its JSON.
+  - **Shape** (ADR 0002 row 2): the nodes are stored flat and row-major (Rust's `nodes[j][i]` is word j·nx + i), and the JSON keeps Rust's rows of rows. The flat grid holds only ny rows of nx, so a document whose rows are otherwise is refused at decode. 1.4.0 decodes it and refuses it at the first solve; those 3 rows are accepted under ADR 2 by name.
+  - **Behaviour:** Rust's Gauss–Seidel in Rust's order. Each sweep runs the interior, then the flux sides (left and right per row, then bottom and top per column), with Rust's NaN-propagating largest change. Fixed sides are written at `set_boundary` and before the solve. A field that turns non-finite, or no convergence, is `Err(US_ERR_INVALID_PARAMETER)`, the field left iterated as 1.4.0 leaves it. `solve_steady_state` opens its span under Rust's name. A side that is no `US_SIDE_*` code is refused.
+  - **Golden rows:** `tests/golden/numerical.tsv` grows to 1,462. M6b adds 272 (B 189, A 83; 157 refusals):
+    - `new` over sizes, extents and initial temperatures at the edges;
+    - `set_boundary` on every side with each kind of condition, on a usable grid and one missing a row;
+    - `solve_steady_state` on seven setups (square and not, every condition, 3×3 to 20×20), at a generous limit and at exactly the converging count and one fewer (the switch to "did not converge"), with the tolerance at the edges, and on malformed grids;
+    - the JSON, ragged and mis-shaped documents among them.
+    - Every row passes: 10 JSON rows accepted under ADR 5 (two of them `nx` past 2⁶³) and 3 under ADR 2.
+  - **`validate.py`** models the three from their raw tokens and reproduces their 189 rows.
+  - **Tests:** `tests/numerical.tcyr` grows to 141 assertions: Rust's 6 2D tests (21 of the 27 now), the analytic convective-slab case among them. Reference tests cover the span, the side refusal, the shape check after an edited nx, the size guards and a grid's document. The fuzz harness reads `ThermalGrid2D` documents.
+  - **Benches:** Rust's `numerical/gauss_seidel_2d_20x20`.
+  - **`src/json.cyr`:** `_us_jw_usize` / `_us_jr_usize` for Rust's `usize` fields. An integer only: serde refuses a float, even 3.0.
+  - **Size guards:** `us_grid1d_new` and `us_grid2d_new` refuse a size past a vec's 2²⁸ words as `US_ERR_OUT_OF_MEMORY`, where `vec_push` would abort the process. Found writing M6b; the 1D constructor had the same gap
 - **M6a, boundary conditions and the 1D grid** (port plan §6): `src/numerical.cyr`'s first part.
   - **Types:** `UsBoundary` holds the condition kinds (`US_BOUNDARY_FIXED`, `_INSULATED`, `_CONVECTIVE`), and `UsBoundaryCondition` holds a condition's value, filled by `us_boundary_fixed` / `_insulated` / `_convective` (ADR 0002 row 15). `UsSide` holds the four sides. `UsGrid1D` is the 1D transient grid.
   - **Functions:** `us_grid1d_new` / `_new_a`, `us_grid1d_fourier_number`, `us_grid1d_max_stable_dt`, `us_grid1d_step_explicit`, `us_grid1d_step_crank_nicolson` and `us_grid1d_step_adaptive`, with accessors for the nodes (`us_grid1d_len`, `_node`, `_set_node`) and the two conditions (`us_grid1d_left`, `_right`). All three types have JSON.

@@ -3,7 +3,7 @@
 # The targets so far: USHMA_LOG parsing (`us_log_parse`), and the `ThermalMaterial`, `GasData`, `SubstanceData`,
 # `Phase`, `SaturatedEntry`, `WetSteamProperties`, `SuperheatedEntry`, `StatePoint`, `ProcessKind`, `CycleKind`,
 # `CycleResult`, `RefrigerationResult`, `DiagramPoint`, `CycleComparisonEntry`, `Species`, `BoundaryCondition`,
-# `Side` and `ThermalGrid1D` decoders, which must also round-trip: what one accepts re-encodes, reads
+# `Side`, `ThermalGrid1D` and `ThermalGrid2D` decoders, which must also round-trip: what one accepts re-encodes, reads
 # back, and re-encodes to the same bytes. The other JSON decoders and the daimon response
 # handling join as they port. Each target must accept any bytes: return a defined result, never crash, never write
 # outside its buffers (the poisoning allocator and --bounds check that).
@@ -504,6 +504,52 @@ fn fz_numerical(data, len) {
     return 0;
 }
 
+# The ThermalGrid2D decoder on one input: a refusal is Deserialize; an accepted grid holds ny rows of nx and
+# round-trips.
+fn fz_grid2d(data, len) {
+    var g: UsGrid2D;
+    reset_via(_fz_arena);
+    var t, v = us_grid2d_from_json_a(_fz_arena, data, len, &g);
+    if (is_ok(t) == 0) {
+        if (v != US_ERR_DESERIALIZE) { _fz_bad = _fz_bad + 1; }
+        return 0;
+    }
+    _fz_num_read = _fz_num_read + 1;
+    if (vec_len(g.nodes) != g.nx * g.ny) {
+        _fz_bad = _fz_bad + 1;
+        return 0;
+    }
+    store64(_fz_sb + 8, 0);
+    us_grid2d_to_json(_fz_sb, &g);
+    var g2: UsGrid2D;
+    var t2, v2 = us_grid2d_from_json_a(_fz_arena, load64(_fz_sb), load64(_fz_sb + 8), &g2);
+    if (is_ok(t2) == 0) {
+        # A non-finite number writes as null, which reads back as no f64 (as fz_material).
+        var fin = 1;
+        var s = 0;
+        while (s < US_SIDE_COUNT) {
+            fin = fin & fz_bc_finite(us_grid2d_bc(&g, s));
+            s = s + 1;
+        }
+        var dx: f64 = g.dx;
+        var dy: f64 = g.dy;
+        fin = fin & _us_is_finite(dx) & _us_is_finite(dy);
+        var k = 0;
+        while (k < vec_len(g.nodes)) {
+            var x: f64 = vec_get(g.nodes, k);
+            fin = fin & _us_is_finite(x);
+            k = k + 1;
+        }
+        if (fin == 1) { _fz_bad = _fz_bad + 1; }
+        return 0;
+    }
+    store64(_fz_sb2 + 8, 0);
+    us_grid2d_to_json(_fz_sb2, &g2);
+    var n1 = load64(_fz_sb + 8);
+    if (n1 != load64(_fz_sb2 + 8) || memeq(load64(_fz_sb), load64(_fz_sb2), n1) == 0) { _fz_bad = _fz_bad + 1; }
+    return 0;
+}
+
 # A builder's text as a fresh C string.
 fn fz_text(sb): i64 {
     var n = load64(sb + 8);
@@ -534,6 +580,7 @@ fn fuzz_main(data, len) {
     fz_refr(data, len);
     fz_comparison(data, len);
     fz_numerical(data, len);
+    fz_grid2d(data, len);
     return 0;
 }
 
@@ -590,7 +637,7 @@ fn main() {
     _fz_sb2 = str_builder_new();
     var cap = 2048;
     var buf = alloc(cap + 1);
-    var seeds = alloc(8 * 47);
+    var seeds = alloc(8 * 49);
     store64(seeds, "trace");
     store64(seeds + 8, "debug");
     store64(seeds + 16, "info");
@@ -663,6 +710,11 @@ fn main() {
     var g1 = "{\"nodes\":[400.0,300.0,300.0,300.0],\"dx\":0.333,\"alpha\":0.0001,";
     store64(seeds + 360, fz_cat(g1, "\"bc_left\":{\"Fixed\":400.0},\"bc_right\":\"Insulated\"}"));
     store64(seeds + 368, "[[1,2,3],0.5,0.0001,\"Insulated\",{\"Convective\":[1,2,3]}]");
+    var h1 = "{\"nodes\":[[1,2,3],[4,5,6],[7,8,9]],\"nx\":3,\"ny\":3,\"dx\":0.5,\"dy\":0.5,\"bc_left\":";
+    var h2 = "\"Insulated\",\"bc_right\":{\"Fixed\":1},\"bc_bottom\":\"Insulated\",\"bc_top\":\"Insulated\"}";
+    store64(seeds + 376, fz_cat(h1, h2));
+    var h3 = "[[[1,2,3],[4,5,6],[7,8,9]],3,3,0.5,0.5,";
+    store64(seeds + 384, fz_cat(h3, "\"Insulated\",\"Insulated\",\"Insulated\",\"Insulated\"]"));
     var i = 0;
     while (i < 50000) {
         var n = 0;
@@ -671,7 +723,7 @@ fn main() {
             var k = 0;
             while (k < n) { store8(buf + k, fz_below(256)); k = k + 1; }
         } else {
-            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(47)));
+            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(49)));
         }
         fuzz_main(buf, n);
         i = i + 1;

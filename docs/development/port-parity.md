@@ -675,8 +675,8 @@ At the end of M5 the harness's summary is `12 modules, 0 failing | rows: 144841 
 
 ## 9. M6 (2026-11-12)
 
-After M6a the harness's summary is `13 modules, 0 failing | rows: 146026 ok, 0 failed, 0 measured, 0 pending, 128
-accepted (ADR 4: 63)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
+After M6b the harness's summary is `13 modules, 0 failing | rows: 146288 ok, 0 failed, 0 measured, 0 pending, 138
+accepted (ADR 4: 63)`, identical on x86_64 ELF, `--bounds`, PE and aarch64 (after M6a: 146,026 ok, 128 accepted).
 
 - **numerical, the 1D grid** (M6a): 1,190 rows (class B 1,073, A 117; 336 refusals). The parity is stateful: a step's
   row holds the grid before the step and the grid after it, so each of a trajectory's steps is checked from the
@@ -697,3 +697,22 @@ accepted (ADR 4: 63)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
     each end, a convective k of −0 among them.
   - **JSON:** `BoundaryCondition` (externally tagged: `{"Fixed":T}`, `"Insulated"`, `{"Convective":{…}}` or its
     sequence form), `Side`, and `ThermalGrid1D`, 117 rows, 5 under ADR 5's mapped divergences.
+- **numerical, the 2D grid** (M6b): 272 rows more, 1,462 in all (M6b's: class B 189, A 83; 157 refusals).
+  - **`solve_steady_state`** (106 rows): seven setups (5×5 fixed all round, 7×7 with two fixed sides, the 11×5
+    convective slab of 1.4.0's analytic test at 1e-12, a 6×8 grid with Δx ≠ Δy and three kinds of side, the 3×3
+    minimum, the 20×20 bench grid at 1e-4, and three convective sides, Bi 0, 0.2 and 1, under a fixed top). Each runs at a generous
+    limit, at exactly the sweeps it converges in and one fewer (`Ok(n)` against "did not converge"), at 0 and 1
+    sweeps, and, on the small ones, at every tolerance edge. Eleven malformed grids: a missing row, a short last row,
+    an extra row, nx = 2, Δx = 0, Δy NaN, three bad conditions, and a NaN and an infinite node, which turn the field
+    non-finite in the first sweep.
+  - **`set_boundary`** (32 rows): every side × Fixed, Insulated, Convective and Fixed(NaN), on a usable 5×4 grid and on
+    one missing a row. 1.4.0 writes nothing onto a mis-shaped grid, and nor does the port; a Fixed(NaN) side is
+    written at once and refused at the solve, in both.
+  - **The flat grid:** the port's rows are its nodes cut by nx, so a missing, short-last or extra row reads back as
+    1.4.0 holds it. A ragged middle row cannot be held, and the oracle generates none. Three documents whose rows are
+    not ny × nx are refused at decode, where 1.4.0 decodes them, and are accepted under ADR 2 by name.
+  - **JSON:** 7 `to_json` and 76 `from_json` rows. 7 are accepted under ADR 5: the decoder's 5, and two `nx` values of
+    2⁶³ and 2⁶⁴ − 1, which serde reads as a `usize` and bayan refuses. The oracle writes a `usize` past i64 as its
+    decimal text.
+  - **Surface parity:** probed as ported, numerical has 29 of its 36 items; the missing 7 are the network's (M6c).
+

@@ -5,7 +5,7 @@
 > (`# rust <file>: <test>`), at its module's milestone. Nothing is deferred: a test not ported yet is one whose
 > milestone hasn't come. The golden corpus (`tests/golden/`) checks every ported function on its grid besides.
 
-**479 Rust tests:** 416 ported; 12 at M6, 51 at M7.
+**479 Rust tests:** 422 ported; 6 at M6, 51 at M7.
 
 | Rust file | Tests | Ported | Due, unported | Later (milestone) |
 |---|---:|---:|---:|---|
@@ -18,7 +18,7 @@
 | `src/integration/soorat.rs` | 13 | 0 | 0 | 13 (M7) |
 | `src/logging.rs` | 1 | 1 | 0 | — |
 | `src/material.rs` | 8 | 8 | 0 | — |
-| `src/numerical.rs` | 27 | 15 | 0 | 12 (M6) |
+| `src/numerical.rs` | 27 | 21 | 0 | 6 (M6) |
 | `src/phase.rs` | 44 | 44 | 0 | — |
 | `src/stat.rs` | 33 | 33 | 0 | — |
 | `src/state.rs` | 47 | 47 | 0 | — |
@@ -26,7 +26,7 @@
 | `src/transfer.rs` | 67 | 67 | 0 | — |
 | `src/validate.rs` | 2 | 2 | 0 | — |
 | `tests/integration.rs` | 30 | 30 | 0 | — |
-| **Total** | **479** | **416** | **0** | |
+| **Total** | **479** | **422** | **0** | |
 
 ## Where each is ported
 
@@ -176,7 +176,13 @@
 | `src/numerical.rs` `test_explicit_uniform_stays_uniform` | `tests/numerical.tcyr` `test_explicit` |
 | `src/numerical.rs` `test_grid1d_construction` | `tests/numerical.tcyr` `test_construction` |
 | `src/numerical.rs` `test_grid1d_invalid` | `tests/numerical.tcyr` `test_construction` |
+| `src/numerical.rs` `test_grid2d_construction` | `tests/numerical.tcyr` `test_grid2d` |
+| `src/numerical.rs` `test_grid2d_invalid` | `tests/numerical.tcyr` `test_grid2d` |
+| `src/numerical.rs` `test_grid2d_two_fixed_sides` | `tests/numerical.tcyr` `test_grid2d` |
+| `src/numerical.rs` `test_grid2d_uniform_boundaries` | `tests/numerical.tcyr` `test_grid2d` |
 | `src/numerical.rs` `test_grid_1d_bad_state_is_error_not_panic` | `tests/numerical.tcyr` `test_state` |
+| `src/numerical.rs` `test_grid_2d_convective_boundary_matches_analytic` | `tests/numerical.tcyr` `test_grid2d` |
+| `src/numerical.rs` `test_grid_2d_nan_and_bad_shape` | `tests/numerical.tcyr` `test_grid2d` |
 | `src/numerical.rs` `test_step_adaptive_exact_multiple_of_stable_dt` | `tests/numerical.tcyr` `test_adaptive` |
 | `src/numerical.rs` `test_step_adaptive_substep_cap_and_bad_dt` | `tests/numerical.tcyr` `test_adaptive` |
 | `src/phase.rs` `test_all_substances_count` | `tests/phase.tcyr` `test_table` |

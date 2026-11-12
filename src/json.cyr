@@ -43,6 +43,12 @@ fn _us_jw_f64(sb, x: f64) {
     return 0;
 }
 
+# Appends the non-negative integer `n` (a Rust usize field) in decimal, as serde_json writes it.
+fn _us_jw_usize(sb, n) {
+    str_builder_add_int(sb, n);
+    return 0;
+}
+
 # ── reader ──────────────────────────────────────────────────────────────────────────
 
 # 1 when the `n` bytes at `p` are well-formed UTF-8 (RFC 3629: no overlong forms, no surrogates, nothing past
@@ -228,4 +234,14 @@ fn _us_jr_unit_enum(v, name, count): i64 {
         }
     }
     return 0 - 1;
+}
+
+# A JSON node `v` as serde reads a usize: an integer, not negative (a float, even 3.0, is no usize to serde), into *out.
+# 1, or 0. An integer of 2^63 or more is bayan's to refuse (ADR 5's mapped divergence).
+fn _us_jr_usize(v, out): i64 {
+    if (v == 0 || bayan_json_v_tag(v) != JTAG_INT) { return 0; }
+    var n = bayan_json_v_int(v);
+    if (n < 0) { return 0; }
+    store64(out, n);
+    return 1;
 }

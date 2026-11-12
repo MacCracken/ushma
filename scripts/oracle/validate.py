@@ -2052,6 +2052,135 @@ def m_g1_adaptive(ins, p):
     return [fbits(dt)] + _g1_toks(g)
 
 
+def _g2(ins, at):
+    """A 2D grid from ins[at]: [rows, nx, ny, dx, dy, [left, right, bottom, top]] and the next index."""
+    nr = int(ins[at][2:])
+    at += 1
+    rows = []
+    for _ in range(nr):
+        n = int(ins[at][2:])
+        rows.append([tok_f(t) for t in ins[at + 1 : at + 1 + n]])
+        at += 1 + n
+    nx, ny = int(ins[at][2:]), int(ins[at + 1][2:])
+    dx, dy = tok_f(ins[at + 2]), tok_f(ins[at + 3])
+    at += 4
+    bcs = []
+    for _ in range(4):
+        b, at = _bc(ins, at)
+        bcs.append(b)
+    return [rows, nx, ny, dx, dy, bcs], at
+
+
+def _g2_toks(g):
+    toks = [f"v:{len(g[0])}"]
+    for row in g[0]:
+        toks += [f"v:{len(row)}"] + [fbits(x) for x in row]
+    toks += [f"i:{g[1]}", f"i:{g[2]}", fbits(g[3]), fbits(g[4])]
+    for b in g[5]:
+        toks += _bc_toks(b)
+    return toks
+
+
+def _g2_shape_ok(g):
+    rows, nx, ny = g[0], g[1], g[2]
+    if nx < 3 or ny < 3 or len(rows) != ny or any(len(r) != nx for r in rows):
+        return False
+    return fgt(g[3], 0.0) and fgt(g[4], 0.0)
+
+
+def _g2_apply_fixed(g):
+    rows, nx, ny = g[0], g[1], g[2]
+    left, right, bottom, top = g[5]
+    if left[0] == "Fixed":
+        for j in range(ny):
+            rows[j][0] = left[1]
+    if right[0] == "Fixed":
+        for j in range(ny):
+            rows[j][nx - 1] = right[1]
+    if bottom[0] == "Fixed":
+        for i in range(nx):
+            rows[0][i] = bottom[1]
+    if top[0] == "Fixed":
+        for i in range(nx):
+            rows[ny - 1][i] = top[1]
+
+
+def _nanmax(m, d):
+    return d if (d > m or d != d) else m
+
+
+def _flux(b, tin, spacing):
+    if b[0] == "Insulated":
+        return tin
+    bi = _biot(b, spacing)
+    return fdiv(tin + bi * b[2], 1.0 + bi)
+
+
+def m_g2_new(ins, p):
+    nx, ny = int(ins[0][2:]), int(ins[1][2:])
+    lx, ly, t0 = tok_f(ins[2]), tok_f(ins[3]), tok_f(ins[4])
+    if nx < 3 or ny < 3 or not fgt(lx, 0.0) or not fgt(ly, 0.0) or not math.isfinite(t0):
+        return E("InvalidParameter")
+    ins_bc = ("Insulated",)
+    return _g2_toks([[[t0] * nx for _ in range(ny)], nx, ny, fdiv(lx, float(nx - 1)), fdiv(ly, float(ny - 1)), [ins_bc] * 4])
+
+
+def m_g2_set(ins, p):
+    g, at = _g2(ins, 0)
+    side = ins[at][len("e:Side.") :]
+    b, _ = _bc(ins, at + 1)
+    g[5][{"Left": 0, "Right": 1, "Bottom": 2, "Top": 3}[side]] = b
+    if _g2_shape_ok(g):
+        _g2_apply_fixed(g)
+    return _g2_toks(g)
+
+
+def m_g2_solve(ins, p):
+    g, at = _g2(ins, 0)
+    tol, max_it = tok_f(ins[at]), int(ins[at + 1][2:])
+    if not _g2_shape_ok(g) or not all(_bc_ok(b) for b in g[5]) or not fgt(tol, 0.0):
+        return E("InvalidParameter")
+    _g2_apply_fixed(g)
+    rows, nx, ny, dx, dy = g[0], g[1], g[2], g[3], g[4]
+    left, right, bottom, top = g[5]
+    rx, ry = fdiv(1.0, dx * dx), fdiv(1.0, dy * dy)
+    den = 2.0 * (rx + ry)
+    for it in range(max_it):
+        m = 0.0
+        for j in range(1, ny - 1):
+            r, up, dn = rows[j], rows[j + 1], rows[j - 1]
+            for i in range(1, nx - 1):
+                old = r[i]
+                nv = fdiv(rx * (r[i - 1] + r[i + 1]) + ry * (dn[i] + up[i]), den)
+                r[i] = nv
+                m = _nanmax(m, abs(nv - old))
+        fc = 0.0
+        for j in range(1, ny - 1):
+            if left[0] != "Fixed":
+                v = _flux(left, rows[j][1], dx)
+                fc = _nanmax(fc, abs(v - rows[j][0]))
+                rows[j][0] = v
+            if right[0] != "Fixed":
+                v = _flux(right, rows[j][nx - 2], dx)
+                fc = _nanmax(fc, abs(v - rows[j][nx - 1]))
+                rows[j][nx - 1] = v
+        for i in range(1, nx - 1):
+            if bottom[0] != "Fixed":
+                v = _flux(bottom, rows[1][i], dy)
+                fc = _nanmax(fc, abs(v - rows[0][i]))
+                rows[0][i] = v
+            if top[0] != "Fixed":
+                v = _flux(top, rows[ny - 2][i], dy)
+                fc = _nanmax(fc, abs(v - rows[ny - 1][i]))
+                rows[ny - 1][i] = v
+        m = _nanmax(m, fc)
+        if not math.isfinite(m):
+            return E("InvalidParameter")
+        if m < tol:
+            return [f"i:{it + 1}"] + _g2_toks(g)
+    return E("InvalidParameter")
+
+
 # Functions whose rows hold whole cycle results or term lists: their models read the raw tokens.
 RAW_ARGS = {
     "numerical::ThermalGrid1D::new",
@@ -2060,6 +2189,9 @@ RAW_ARGS = {
     "numerical::ThermalGrid1D::step_explicit",
     "numerical::ThermalGrid1D::step_crank_nicolson",
     "numerical::ThermalGrid1D::step_adaptive",
+    "numerical::ThermalGrid2D::new",
+    "numerical::ThermalGrid2D::set_boundary",
+    "numerical::ThermalGrid2D::solve_steady_state",
     "cycle::compare_cycles",
     "cycle::cycle_ts_diagram",
     "cycle::cycle_pv_diagram",
@@ -2200,6 +2332,9 @@ MODELS = {
         "numerical::ThermalGrid1D::step_explicit": m_g1_explicit,
         "numerical::ThermalGrid1D::step_crank_nicolson": m_g1_cn,
         "numerical::ThermalGrid1D::step_adaptive": m_g1_adaptive,
+        "numerical::ThermalGrid2D::new": m_g2_new,
+        "numerical::ThermalGrid2D::set_boundary": m_g2_set,
+        "numerical::ThermalGrid2D::solve_steady_state": m_g2_solve,
     },
     "stat": {
         "stat::boltzmann_probability": m_boltz_p,
