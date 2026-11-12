@@ -1,0 +1,523 @@
+# phase.cyr — phases and phase changes: the substance table, vapor and sublimation curves, the phase at (T, P), latent
+# heats, and Clausius–Clapeyron (Rust 1.4.0 `phase`). All SI: kelvins, pascals, joules, kilograms.
+#
+# Each function computes in the order Rust 1.4.0 writes, so its arithmetic is bit-identical (class B), and its ln and
+# exp are correctly rounded (ADR 0004, class C). A refusal returns Err(US_ERR_*) and reports its value at DEBUG
+# (src/validate.cyr). phase_at and heat_for_phase_change open a DEBUG span under Rust's span name, carrying the
+# substance's name as Rust's span field does (src/logging.cyr).
+#
+# A phase is a UsPhase code (`US_PHASE_SOLID` … `US_PHASE_SUPERCRITICAL_FLUID`, Rust's variant order; append-only).
+# A substance is a UsSubstance: its name (bytes and length) and ten properties. The 8 reference substances are
+# generated tables (src/phase_data.cyr: `US_SUBSTANCE_<NAME>` indices, `US_SUBSTANCE_COUNT`); us_substance_preset
+# fills a UsSubstance from one. Rust's `SubstanceData` methods are `us_substance_<method>(s, ..)`. JSON is serde_json's:
+# a phase is its variant name as a string, a substance its 11-field document (ADR 0005; src/json.cyr has the rules).
+
+enum UsPhase {
+    US_PHASE_SOLID = 0;
+    US_PHASE_LIQUID = 1;
+    US_PHASE_GAS = 2;
+    US_PHASE_SUPERCRITICAL_FLUID = 3;
+}
+
+# The number of phases.
+const US_PHASE_COUNT = 4;
+
+struct UsSubstance {
+    name;
+    name_len;
+    triple_point_t: f64;
+    triple_point_p: f64;
+    critical_t: f64;
+    critical_p: f64;
+    critical_density: f64;
+    latent_heat_fusion: f64;
+    latent_heat_vaporization: f64;
+    melting_point: f64;
+    boiling_point: f64;
+    molar_mass: f64;
+}
+
+# Rust's f64::EPSILON, 2^-52 (written positionally).
+var _US_EPSILON: f64 = 0.0000000000000002220446049250313;
+
+# --- Phases ---
+
+# The Rust name of phase `ph` ("Solid", "Liquid", "Gas", "SupercriticalFluid"), or 0 when `ph` is no phase.
+#must_use
+#pure
+fn us_phase_name(ph): cstring {
+    match ph {
+        US_PHASE_SOLID => { return "Solid"; }
+        US_PHASE_LIQUID => { return "Liquid"; }
+        US_PHASE_GAS => { return "Gas"; }
+        US_PHASE_SUPERCRITICAL_FLUID => { return "SupercriticalFluid"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# Appends phase `ph` as serde_json writes a `Phase`: its name as a JSON string.
+fn us_phase_to_json(sb, ph) {
+    var name = us_phase_name(ph);
+    if (name == 0) { name = ""; }
+    _us_jw_str(sb, name, strlen(name));
+    return 0;
+}
+
+# The phase a JSON string node names, or -1.
+fn _us_phase_of_str(v): i64 {
+    if (v == 0 || bayan_json_v_tag(v) != JTAG_STR) { return 0 - 1; }
+    var s = bayan_json_v_str(v);
+    var k = 0;
+    while (k < US_PHASE_COUNT) {
+        var name = us_phase_name(k);
+        var nl = strlen(name);
+        if (str_len(s) == nl && memeq(str_data(s), name, nl) == 1) { return k; }
+        k = k + 1;
+    }
+    return 0 - 1;
+}
+
+# Reads a `Phase` document (`n` bytes at `buf`; its tree on allocator `a`): Ok(US_PHASE_*), or Err(US_ERR_DESERIALIZE).
+# serde's forms: the variant name as a string, or an object of that one key with a `null` value.
+#must_use
+fn us_phase_from_json_a(a, buf, n): Result {
+    var v = _us_jr_parse(a, buf, n);
+    if (v == 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_phase_from_json")); }
+    var t = bayan_json_v_tag(v);
+    if (t == JTAG_STR) {
+        var ph = _us_phase_of_str(v);
+        if (ph < 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_phase_from_json")); }
+        return Ok(ph);
+    }
+    if (t == JTAG_OBJ && bayan_json_v_obj_len(v) == 1) {
+        var key = bayan_json_v_obj_key(v, 0);
+        var val = bayan_json_v_obj_val(v, 0);
+        if (val != 0 && bayan_json_v_tag(val) == JTAG_NULL) {
+            var k = 0;
+            while (k < US_PHASE_COUNT) {
+                var name = us_phase_name(k);
+                var nl = strlen(name);
+                if (str_len(key) == nl && memeq(str_data(key), name, nl) == 1) { return Ok(k); }
+                k = k + 1;
+            }
+        }
+    }
+    return Err(_us_fail(US_ERR_DESERIALIZE, "us_phase_from_json"));
+}
+
+# us_phase_from_json_a on the global heap.
+#must_use
+fn us_phase_from_json(buf, n): Result {
+    return us_phase_from_json_a(default_alloc(), buf, n);
+}
+
+# --- Substances ---
+
+# The name of reference substance `i` (a C string into the generated table), or 0 when `i` is no reference substance.
+#must_use
+fn us_substance_name(i): cstring {
+    if (i < 0 || i >= US_SUBSTANCE_COUNT) { return 0; }
+    var off = load16(&_US_SUBSTANCE_NAME_OFF + (2 * i));
+    return &_US_SUBSTANCE_NAME_BYTES + off;
+}
+
+# Fills *out with reference substance `i` (`US_SUBSTANCE_WATER_PHASE` … `US_SUBSTANCE_MERCURY`): Ok(0), or
+# Err(US_ERR_INVALID_PARAMETER) when `i` is no reference substance.
+#must_use
+fn us_substance_preset(i, out: *UsSubstance): Result {
+    if (i < 0 || i >= US_SUBSTANCE_COUNT) {
+        return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_substance_preset", "index", i));
+    }
+    var name = us_substance_name(i);
+    var a: f64 = US_SUBSTANCE_TRIPLE_POINT_T[i];
+    var b: f64 = US_SUBSTANCE_TRIPLE_POINT_P[i];
+    var c: f64 = US_SUBSTANCE_CRITICAL_T[i];
+    var d: f64 = US_SUBSTANCE_CRITICAL_P[i];
+    var e: f64 = US_SUBSTANCE_CRITICAL_DENSITY[i];
+    var f: f64 = US_SUBSTANCE_LATENT_HEAT_FUSION[i];
+    var g: f64 = US_SUBSTANCE_LATENT_HEAT_VAPORIZATION[i];
+    var h: f64 = US_SUBSTANCE_MELTING_POINT[i];
+    var k: f64 = US_SUBSTANCE_BOILING_POINT[i];
+    var m: f64 = US_SUBSTANCE_MOLAR_MASS[i];
+    out.name = name;
+    out.name_len = strlen(name);
+    out.triple_point_t = a;
+    out.triple_point_p = b;
+    out.critical_t = c;
+    out.critical_p = d;
+    out.critical_density = e;
+    out.latent_heat_fusion = f;
+    out.latent_heat_vaporization = g;
+    out.melting_point = h;
+    out.boiling_point = k;
+    out.molar_mass = m;
+    return Ok(0);
+}
+
+# 1 when the triple-point pressure exceeds 1 atm (CO₂): at 1 atm the solid sublimes at the boiling point and no liquid
+# exists; else 0.
+#must_use
+#pure
+fn us_substance_sublimes_at_atmospheric(s: *UsSubstance): i64 {
+    var tpp: f64 = s.triple_point_p;
+    return tpp > US_ATM;
+}
+
+# Integrated Clausius–Clapeyron between (T₁, P₁) and (T₂, P₂), ln P linear in 1/T, at T: P₁ when 1/T₂ − 1/T₁ is
+# below ε in magnitude.
+fn _us_log_interp_inv_t(t: f64, t1: f64, p1: f64, t2: f64, p2: f64): f64 {
+    var span: f64 = 1.0 / t2 - 1.0 / t1;
+    var as: f64 = f64_abs(span);
+    if (as < _US_EPSILON) { return p1; }
+    var frac: f64 = (1.0 / t - 1.0 / t1) / span;
+    var lr: f64 = _us_cr_ln(p2 / p1);
+    var e: f64 = _us_cr_exp(frac * lr);
+    var p: f64 = p1 * e;
+    return p;
+}
+
+# The vapor (liquid–gas) pressure at T (Pa), from the triple point to the critical point: ln P piecewise linear in
+# 1/T through the triple point, the normal boiling point (when it lies between them) and the critical point, so the
+# curve meets all three. Err(US_ERR_UNDEFINED_PHASE_TRANSITION) outside [T_triple, T_c] (or NaN).
+#must_use
+fn us_substance_vapor_pressure(s: *UsSubstance, temperature: f64): Result {
+    var tpt: f64 = s.triple_point_t;
+    var tpp: f64 = s.triple_point_p;
+    var ct: f64 = s.critical_t;
+    var cp: f64 = s.critical_p;
+    var bp: f64 = s.boiling_point;
+    if (_us_finite_ge_any(temperature, tpt) == 0 || temperature > ct) {
+        return Err(_us_fail_f(US_ERR_UNDEFINED_PHASE_TRANSITION, "us_substance_vapor_pressure", "temperature",
+            temperature));
+    }
+    var p: f64 = 0.0;
+    if (bp > tpt && bp < ct) {
+        if (temperature <= bp) {
+            p = _us_log_interp_inv_t(temperature, tpt, tpp, bp, US_ATM);
+        } else {
+            p = _us_log_interp_inv_t(temperature, bp, US_ATM, ct, cp);
+        }
+    } else {
+        p = _us_log_interp_inv_t(temperature, tpt, tpp, ct, cp);
+    }
+    return Ok(p);
+}
+
+# The sublimation (solid–gas) pressure below the triple point (Pa): through the triple point and (T_boil, 1 atm) for a
+# substance that sublimes at 1 atm, else integrated Clausius–Clapeyron from the triple point with
+# L_sub = (L_fus + L_vap)·M. Err(US_ERR_UNDEFINED_PHASE_TRANSITION) unless 0 < T ≤ T_triple, then
+# us_clausius_clapeyron_pressure's refusals.
+#must_use
+fn us_substance_sublimation_pressure(s: *UsSubstance, temperature: f64): Result {
+    var tpt: f64 = s.triple_point_t;
+    var tpp: f64 = s.triple_point_p;
+    var bp: f64 = s.boiling_point;
+    if (_us_finite_gt(temperature, 0.0) == 0 || temperature > tpt) {
+        return Err(_us_fail_f(US_ERR_UNDEFINED_PHASE_TRANSITION, "us_substance_sublimation_pressure", "temperature",
+            temperature));
+    }
+    if (us_substance_sublimes_at_atmospheric(s) == 1 && bp < tpt) {
+        var p: f64 = _us_log_interp_inv_t(temperature, tpt, tpp, bp, US_ATM);
+        return Ok(p);
+    }
+    var lf: f64 = s.latent_heat_fusion;
+    var lv: f64 = s.latent_heat_vaporization;
+    var mm: f64 = s.molar_mass;
+    var l_sub_molar: f64 = (lf + lv) * mm;
+    return us_clausius_clapeyron_pressure(tpp, tpt, temperature, l_sub_molar);
+}
+
+# The specific latent heat of sublimation (J/kg): for a substance that sublimes at 1 atm, the Clausius–Clapeyron slope
+# of the sublimation curve through the triple point and the 1 atm point (CO₂: about 594 kJ/kg against 571 measured);
+# otherwise L_fus + L_vap.
+#must_use
+fn us_substance_latent_heat_sublimation(s: *UsSubstance): f64 {
+    var t1: f64 = s.boiling_point;
+    var t2: f64 = s.triple_point_t;
+    var p2: f64 = s.triple_point_p;
+    var mm: f64 = s.molar_mass;
+    var d_inv_t: f64 = 1.0 / t1 - 1.0 / t2;
+    if (us_substance_sublimes_at_atmospheric(s) == 1 && t1 < t2 && _us_finite_gt(d_inv_t, 0.0) == 1 && mm > 0.0) {
+        var lr: f64 = _us_cr_ln(p2 / US_ATM);
+        var l: f64 = US_GAS_CONSTANT * lr / d_inv_t / mm;
+        return l;
+    }
+    var lf: f64 = s.latent_heat_fusion;
+    var lv: f64 = s.latent_heat_vaporization;
+    var sum: f64 = lf + lv;
+    return sum;
+}
+
+# The phase at (T, P): Ok(US_PHASE_*), by simplified boundaries. Supercritical above both critical values; below the
+# triple point, solid on or above the sublimation curve and gas below it; up to T_c, on or above the vapor curve solid
+# up to the melting point (a vertical melting curve) and liquid above it, gas below the curve; above T_c at P ≤ P_c,
+# gas. Err(US_ERR_INVALID_TEMPERATURE) unless T > 0, Err(US_ERR_INVALID_PRESSURE) unless P > 0, then the curves'
+# refusals.
+#must_use
+fn us_substance_phase_at(s: *UsSubstance, temperature: f64, pressure: f64): Result {
+    _us_span_enter_kv("phase_at", 8, "substance", s.name, s.name_len);
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_substance_phase_at", "temperature", temperature));
+    }
+    if (_us_finite_gt(pressure, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE, "us_substance_phase_at", "pressure", pressure));
+    }
+    var tpt: f64 = s.triple_point_t;
+    var ct: f64 = s.critical_t;
+    var cp: f64 = s.critical_p;
+    var mp: f64 = s.melting_point;
+    if (temperature > ct && pressure > cp) {
+        _us_span_exit();
+        return Ok(US_PHASE_SUPERCRITICAL_FLUID);
+    }
+    if (temperature < tpt) {
+        var t, v = us_substance_sublimation_pressure(s, temperature);
+        _us_span_exit();
+        if (is_err_result(t) == 1) { return Err(v); }
+        var p_sub: f64 = v;
+        if (pressure >= p_sub) { return Ok(US_PHASE_SOLID); }
+        return Ok(US_PHASE_GAS);
+    }
+    if (temperature <= ct) {
+        var t2, v2 = us_substance_vapor_pressure(s, temperature);
+        _us_span_exit();
+        if (is_err_result(t2) == 1) { return Err(v2); }
+        var p_sat: f64 = v2;
+        if (pressure >= p_sat) {
+            if (temperature <= mp) { return Ok(US_PHASE_SOLID); }
+            return Ok(US_PHASE_LIQUID);
+        }
+        return Ok(US_PHASE_GAS);
+    }
+    _us_span_exit();
+    return Ok(US_PHASE_GAS);
+}
+
+# Appends *s as serde_json writes a `SubstanceData`.
+fn us_substance_to_json(sb, s: *UsSubstance) {
+    var a: f64 = s.triple_point_t;
+    var b: f64 = s.triple_point_p;
+    var c: f64 = s.critical_t;
+    var d: f64 = s.critical_p;
+    var e: f64 = s.critical_density;
+    var f: f64 = s.latent_heat_fusion;
+    var g: f64 = s.latent_heat_vaporization;
+    var h: f64 = s.melting_point;
+    var k: f64 = s.boiling_point;
+    var m: f64 = s.molar_mass;
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "name", 1);
+    _us_jw_str(sb, s.name, s.name_len);
+    _us_jw_key(sb, "triple_point_t", 0);
+    _us_jw_f64(sb, a);
+    _us_jw_key(sb, "triple_point_p", 0);
+    _us_jw_f64(sb, b);
+    _us_jw_key(sb, "critical_t", 0);
+    _us_jw_f64(sb, c);
+    _us_jw_key(sb, "critical_p", 0);
+    _us_jw_f64(sb, d);
+    _us_jw_key(sb, "critical_density", 0);
+    _us_jw_f64(sb, e);
+    _us_jw_key(sb, "latent_heat_fusion", 0);
+    _us_jw_f64(sb, f);
+    _us_jw_key(sb, "latent_heat_vaporization", 0);
+    _us_jw_f64(sb, g);
+    _us_jw_key(sb, "melting_point", 0);
+    _us_jw_f64(sb, h);
+    _us_jw_key(sb, "boiling_point", 0);
+    _us_jw_f64(sb, k);
+    _us_jw_key(sb, "molar_mass", 0);
+    _us_jw_f64(sb, m);
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# Reads a `SubstanceData` document (`n` bytes at `buf`) into *out, its name copied onto allocator `a`: Ok(0), or
+# Err(US_ERR_DESERIALIZE), leaving *out unchanged. The parse tree is on `a` too: reset it when the result is used.
+#must_use
+fn us_substance_from_json_a(a, buf, n, out: *UsSubstance): Result {
+    var v = _us_jr_parse(a, buf, n);
+    var form = _us_jr_form(v, 11);
+    if (form == 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_substance_from_json")); }
+    var np[8];
+    var nn[8];
+    if (_us_jr_str(a, _us_jr_at(v, form, 0, "name"), &np, &nn) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_substance_from_json"));
+    }
+    var w[80];
+    var names[80];
+    store64(&names, "triple_point_t");
+    store64(&names + 8, "triple_point_p");
+    store64(&names + 16, "critical_t");
+    store64(&names + 24, "critical_p");
+    store64(&names + 32, "critical_density");
+    store64(&names + 40, "latent_heat_fusion");
+    store64(&names + 48, "latent_heat_vaporization");
+    store64(&names + 56, "melting_point");
+    store64(&names + 64, "boiling_point");
+    store64(&names + 72, "molar_mass");
+    var k = 0;
+    while (k < 10) {
+        if (_us_jr_f64(_us_jr_at(v, form, k + 1, load64(&names + (8 * k))), &w + (8 * k)) == 0) {
+            return Err(_us_fail(US_ERR_DESERIALIZE, "us_substance_from_json"));
+        }
+        k = k + 1;
+    }
+    var a1: f64 = load64(&w);
+    var a2: f64 = load64(&w + 8);
+    var a3: f64 = load64(&w + 16);
+    var a4: f64 = load64(&w + 24);
+    var a5: f64 = load64(&w + 32);
+    var a6: f64 = load64(&w + 40);
+    var a7: f64 = load64(&w + 48);
+    var a8: f64 = load64(&w + 56);
+    var a9: f64 = load64(&w + 64);
+    var a10: f64 = load64(&w + 72);
+    out.name = load64(&np);
+    out.name_len = load64(&nn);
+    out.triple_point_t = a1;
+    out.triple_point_p = a2;
+    out.critical_t = a3;
+    out.critical_p = a4;
+    out.critical_density = a5;
+    out.latent_heat_fusion = a6;
+    out.latent_heat_vaporization = a7;
+    out.melting_point = a8;
+    out.boiling_point = a9;
+    out.molar_mass = a10;
+    return Ok(0);
+}
+
+# us_substance_from_json_a on the global heap: for a one-off read (each call's tree and name stay allocated).
+#must_use
+fn us_substance_from_json(buf, n, out: *UsSubstance): Result {
+    return us_substance_from_json_a(default_alloc(), buf, n, out);
+}
+
+# --- Latent heats and Clausius–Clapeyron ---
+
+# The heat to melt `mass` kg of *s, Q = m·L_fus (J).
+#must_use
+#pure
+fn us_heat_of_fusion(s: *UsSubstance, mass: f64): f64 {
+    var lf: f64 = s.latent_heat_fusion;
+    var q: f64 = mass * lf;
+    return q;
+}
+
+# The heat to vaporize `mass` kg of *s, Q = m·L_vap (J).
+#must_use
+#pure
+fn us_heat_of_vaporization(s: *UsSubstance, mass: f64): f64 {
+    var lv: f64 = s.latent_heat_vaporization;
+    var q: f64 = mass * lv;
+    return q;
+}
+
+# The heat to take `mass` kg of *s from T_start to T_end at 1 atm (J): the sensible heat at an average c_p over the
+# whole range, plus each latent heat crossed (a substance that sublimes at 1 atm crosses one sublimation at its
+# boiling point instead of fusion and vaporization), negative when cooling. Err(US_ERR_INVALID_PARAMETER) unless the
+# mass is positive, Err(US_ERR_INVALID_SPECIFIC_HEAT) unless c_p > 0, Err(US_ERR_INVALID_TEMPERATURE) unless both
+# temperatures are positive.
+#must_use
+fn us_heat_for_phase_change(mass: f64, specific_heat: f64, t_start: f64, t_end: f64, s: *UsSubstance): Result {
+    _us_span_enter_kv("heat_for_phase_change", 21, "substance", s.name, s.name_len);
+    if (_us_finite_gt(mass, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_heat_for_phase_change", "mass", mass));
+    }
+    if (_us_finite_gt(specific_heat, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_SPECIFIC_HEAT, "us_heat_for_phase_change", "specific_heat",
+            specific_heat));
+    }
+    if (_us_finite_gt(t_start, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_heat_for_phase_change", "t_start", t_start));
+    }
+    if (_us_finite_gt(t_end, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_heat_for_phase_change", "t_end", t_end));
+    }
+    var t_lo: f64 = t_end;
+    var t_hi: f64 = t_start;
+    var sign: f64 = 0.0 - 1.0;
+    if (t_end >= t_start) {
+        t_lo = t_start;
+        t_hi = t_end;
+        sign = 1.0;
+    }
+    var mp: f64 = s.melting_point;
+    var bp: f64 = s.boiling_point;
+    var q: f64 = 0.0;
+    q = q + mass * specific_heat * (t_hi - t_lo);
+    if (us_substance_sublimes_at_atmospheric(s) == 1) {
+        if (t_lo < bp && t_hi >= bp) {
+            var ls: f64 = us_substance_latent_heat_sublimation(s);
+            q = q + mass * ls;
+        }
+    } else {
+        if (t_lo < mp && t_hi >= mp) {
+            var lf: f64 = s.latent_heat_fusion;
+            q = q + mass * lf;
+        }
+        if (t_lo < bp && t_hi >= bp) {
+            var lv: f64 = s.latent_heat_vaporization;
+            q = q + mass * lv;
+        }
+    }
+    var r: f64 = sign * q;
+    _us_span_exit();
+    return Ok(r);
+}
+
+# The Clausius–Clapeyron slope dP/dT = L / (T·Δv) (Pa/K), for specific latent heat L (J/kg) and specific volume change
+# Δv (m³/kg). Err(US_ERR_INVALID_TEMPERATURE) unless T > 0, Err(US_ERR_DIVISION_BY_ZERO) when |Δv| < 1e-30,
+# Err(US_ERR_INVALID_PARAMETER) unless L > 0.
+#must_use
+fn us_clausius_clapeyron_slope(latent_heat: f64, temperature: f64, delta_v: f64): Result {
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_clausius_clapeyron_slope", "temperature", temperature));
+    }
+    var adv: f64 = f64_abs(delta_v);
+    if (_us_finite_ge(adv, _US_TINY) == 0) {
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_clausius_clapeyron_slope", "delta_v", delta_v));
+    }
+    if (_us_finite_gt(latent_heat, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_clausius_clapeyron_slope", "latent_heat", latent_heat));
+    }
+    var slope: f64 = latent_heat / (temperature * delta_v);
+    return Ok(slope);
+}
+
+# The integrated Clausius–Clapeyron vapor pressure at T₂ (Pa): ln(P₂/P₁) = −(L/R)·(1/T₂ − 1/T₁), for molar latent heat
+# L (J/mol), an ideal vapor and a negligible liquid volume. Err(US_ERR_INVALID_PRESSURE) unless P₁ > 0,
+# Err(US_ERR_INVALID_TEMPERATURE) unless T₁ > 0 and T₂ > 0, Err(US_ERR_INVALID_PARAMETER) unless L > 0 and the
+# pressure is finite.
+#must_use
+fn us_clausius_clapeyron_pressure(p_ref: f64, t_ref: f64, t_target: f64, latent_heat_molar: f64): Result {
+    if (_us_finite_gt(p_ref, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE, "us_clausius_clapeyron_pressure", "p_ref", p_ref));
+    }
+    if (_us_finite_gt(t_ref, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_clausius_clapeyron_pressure", "t_ref", t_ref));
+    }
+    if (_us_finite_gt(t_target, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_clausius_clapeyron_pressure", "t_target", t_target));
+    }
+    if (_us_finite_gt(latent_heat_molar, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_clausius_clapeyron_pressure", "latent_heat_molar",
+            latent_heat_molar));
+    }
+    var lr: f64 = latent_heat_molar / US_GAS_CONSTANT;
+    var exponent: f64 = (0.0 - lr) * (1.0 / t_target - 1.0 / t_ref);
+    var e: f64 = _us_cr_exp(exponent);
+    var p: f64 = p_ref * e;
+    if (_us_is_finite(p) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_clausius_clapeyron_pressure", "exponent", exponent));
+    }
+    return Ok(p);
+}

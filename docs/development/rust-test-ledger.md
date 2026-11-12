@@ -5,7 +5,7 @@
 > (`# rust <file>: <test>`), at its module's milestone. Nothing is deferred: a test not ported yet is one whose
 > milestone hasn't come. The golden corpus (`tests/golden/`) checks every ported function on its grid besides.
 
-**479 Rust tests:** 180 ported; 95 at M3, 64 at M4, 62 at M5, 27 at M6, 51 at M7.
+**479 Rust tests:** 225 ported; 50 at M3, 64 at M4, 62 at M5, 27 at M6, 51 at M7.
 
 | Rust file | Tests | Ported | Due, unported | Later (milestone) |
 |---|---:|---:|---:|---|
@@ -19,14 +19,14 @@
 | `src/logging.rs` | 1 | 1 | 0 | — |
 | `src/material.rs` | 8 | 8 | 0 | — |
 | `src/numerical.rs` | 27 | 0 | 0 | 27 (M6) |
-| `src/phase.rs` | 44 | 0 | 0 | 44 (M3) |
+| `src/phase.rs` | 44 | 44 | 0 | — |
 | `src/stat.rs` | 33 | 0 | 0 | 33 (M5) |
 | `src/state.rs` | 47 | 47 | 0 | — |
 | `src/steam.rs` | 46 | 0 | 0 | 46 (M3) |
 | `src/transfer.rs` | 67 | 67 | 0 | — |
 | `src/validate.rs` | 2 | 2 | 0 | — |
-| `tests/integration.rs` | 30 | 14 | 0 | 5 (M3), 5 (M4), 6 (M5) |
-| **Total** | **479** | **180** | **0** | |
+| `tests/integration.rs` | 30 | 15 | 0 | 4 (M3), 5 (M4), 6 (M5) |
+| **Total** | **479** | **225** | **0** | |
 
 ## Where each is ported
 
@@ -82,6 +82,50 @@
 | `src/material.rs` `test_volumetric_heat_capacity` | `tests/material.tcyr` `test_rust_material` |
 | `src/material.rs` `test_water_phase_transitions` | `tests/material.tcyr` `test_rust_material` |
 | `src/material.rs` `test_water_specific_heat` | `tests/material.tcyr` `test_rust_material` |
+| `src/phase.rs` `test_all_substances_count` | `tests/phase.tcyr` `test_table` |
+| `src/phase.rs` `test_all_substances_have_valid_data` | `tests/phase.tcyr` `test_table` |
+| `src/phase.rs` `test_ammonia_boiling_point` | `tests/phase.tcyr` `test_table` |
+| `src/phase.rs` `test_clausius_clapeyron_pressure_invalid` | `tests/phase.tcyr` `test_clausius_clapeyron` |
+| `src/phase.rs` `test_clausius_clapeyron_pressure_overflow_is_error` | `tests/phase.tcyr` `test_clausius_clapeyron` |
+| `src/phase.rs` `test_clausius_clapeyron_pressure_roundtrip` | `tests/phase.tcyr` `test_clausius_clapeyron` |
+| `src/phase.rs` `test_clausius_clapeyron_pressure_water` | `tests/phase.tcyr` `test_clausius_clapeyron` |
+| `src/phase.rs` `test_clausius_clapeyron_slope_invalid` | `tests/phase.tcyr` `test_clausius_clapeyron` |
+| `src/phase.rs` `test_clausius_clapeyron_slope_water` | `tests/phase.tcyr` `test_clausius_clapeyron` |
+| `src/phase.rs` `test_co2_critical_point` | `tests/phase.tcyr` `test_table` |
+| `src/phase.rs` `test_co2_heat_for_phase_change_uses_sublimation` | `tests/phase.tcyr` `test_latent_heats` |
+| `src/phase.rs` `test_co2_phase_regions` | `tests/phase.tcyr` `test_phase_at` |
+| `src/phase.rs` `test_co2_sublimation_curve` | `tests/phase.tcyr` `test_curves` |
+| `src/phase.rs` `test_co2_supercritical` | `tests/phase.tcyr` `test_phase_at` |
+| `src/phase.rs` `test_co2_vapor_pressure` | `tests/phase.tcyr` `test_curves` |
+| `src/phase.rs` `test_compressed_liquid_above_critical_pressure` | `tests/phase.tcyr` `test_phase_at` |
+| `src/phase.rs` `test_heat_for_phase_change_cooling` | `tests/phase.tcyr` `test_latent_heats` |
+| `src/phase.rs` `test_heat_for_phase_change_ice_to_steam` | `tests/phase.tcyr` `test_latent_heats` |
+| `src/phase.rs` `test_heat_for_phase_change_invalid` | `tests/phase.tcyr` `test_latent_heats` |
+| `src/phase.rs` `test_heat_for_phase_change_no_transition` | `tests/phase.tcyr` `test_latent_heats` |
+| `src/phase.rs` `test_heat_of_fusion_scales_with_mass` | `tests/phase.tcyr` `test_latent_heats` |
+| `src/phase.rs` `test_heat_of_fusion_water` | `tests/phase.tcyr` `test_latent_heats` |
+| `src/phase.rs` `test_heat_of_vaporization_water` | `tests/phase.tcyr` `test_latent_heats` |
+| `src/phase.rs` `test_mercury_melting_point` | `tests/phase.tcyr` `test_table` |
+| `src/phase.rs` `test_nitrogen_boiling_point` | `tests/phase.tcyr` `test_table` |
+| `src/phase.rs` `test_nitrogen_gas_at_room_temp` | `tests/phase.tcyr` `test_phase_at` |
+| `src/phase.rs` `test_nitrogen_liquid_at_cryogenic` | `tests/phase.tcyr` `test_phase_at` |
+| `src/phase.rs` `test_phase_at_invalid_inputs` | `tests/phase.tcyr` `test_phase_at` |
+| `src/phase.rs` `test_phase_enum_traits` | `tests/phase.tcyr` `test_table` |
+| `src/phase.rs` `test_phase_functions_reject_nan` | `tests/phase.tcyr` `test_latent_heats`, `tests/phase.tcyr` `test_clausius_clapeyron`, `tests/phase.tcyr` `test_phase_at` |
+| `src/phase.rs` `test_phase_serde_roundtrip` | `tests/phase.tcyr` `test_json` |
+| `src/phase.rs` `test_substance_serde_roundtrip` | `tests/phase.tcyr` `test_json` |
+| `src/phase.rs` `test_vapor_pressure_meets_anchor_points` | `tests/phase.tcyr` `test_curves` |
+| `src/phase.rs` `test_water_below_triple_point_low_pressure_is_vapor` | `tests/phase.tcyr` `test_phase_at` |
+| `src/phase.rs` `test_water_critical_point` | `tests/phase.tcyr` `test_table` |
+| `src/phase.rs` `test_water_gas_above_boiling` | `tests/phase.tcyr` `test_phase_at` |
+| `src/phase.rs` `test_water_high_pressure_liquid` | `tests/phase.tcyr` `test_phase_at` |
+| `src/phase.rs` `test_water_high_temp_low_pressure_is_gas` | `tests/phase.tcyr` `test_phase_at` |
+| `src/phase.rs` `test_water_latent_heats` | `tests/phase.tcyr` `test_table` |
+| `src/phase.rs` `test_water_liquid_at_room_temp` | `tests/phase.tcyr` `test_phase_at` |
+| `src/phase.rs` `test_water_solid_below_freezing` | `tests/phase.tcyr` `test_phase_at` |
+| `src/phase.rs` `test_water_supercritical` | `tests/phase.tcyr` `test_phase_at` |
+| `src/phase.rs` `test_water_triple_point` | `tests/phase.tcyr` `test_table` |
+| `src/phase.rs` `test_water_vapor_pressure_never_exceeds_critical` | `tests/phase.tcyr` `test_curves` |
 | `src/state.rs` `test_adiabatic_invalid_gamma` | `tests/state.tcyr` `test_adiabatic` |
 | `src/state.rs` `test_adiabatic_roundtrip` | `tests/state.tcyr` `test_adiabatic` |
 | `src/state.rs` `test_adiabatic_temperature` | `tests/state.tcyr` `test_adiabatic` |
@@ -212,3 +256,4 @@
 | `tests/integration.rs` `van_der_waals_vs_ideal_gas` | `tests/integration.tcyr` `van_der_waals_vs_ideal_gas` |
 | `tests/integration.rs` `view_factor_reciprocity` | `tests/integration.tcyr` `view_factor_reciprocity` |
 | `tests/integration.rs` `virial_approaches_ideal_at_low_density` | `tests/integration.tcyr` `virial_approaches_ideal_at_low_density` |
+| `tests/integration.rs` `water_boiling_point_consistency` | `tests/integration.tcyr` `water_boiling_point_consistency` |

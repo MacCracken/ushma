@@ -82,6 +82,7 @@ modules = [
     "src/state.cyr",
     "src/entropy.cyr",
     "src/phase_data.cyr",
+    "src/phase.cyr",
     "src/chem_data.cyr",
     "src/steam_data.cyr",
 ]
@@ -106,6 +107,7 @@ modules = [
     "src/state.cyr",
     "src/entropy.cyr",
     "src/phase_data.cyr",
+    "src/phase.cyr",
     "src/chem_data.cyr",
     "src/steam_data.cyr",
 ]

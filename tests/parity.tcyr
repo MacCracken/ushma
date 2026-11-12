@@ -32,6 +32,7 @@ include "src/state_data.cyr"
 include "src/state.cyr"
 include "src/entropy.cyr"
 include "src/phase_data.cyr"
+include "src/phase.cyr"
 include "src/chem_data.cyr"
 
 alloc_init();
@@ -660,6 +661,208 @@ fn _par_state(fp, fl): i64 {
     return _par_state2(fp, fl);
 }
 
+# ── phase ───────────────────────────────────────────────────────────────────────────
+
+# A UsSubstance from input tokens k … k + 10 (s:name, then the ten f64 in declaration order): 1, or 0.
+fn _par_sub_in(k, s: *UsSubstance): i64 {
+    if (_par_in_n < k + 11) { return 0; }
+    var nw[8];
+    var name = _par_in_text(k, &nw);
+    if (name == 0) { return 0; }
+    var a: f64 = _par_in(k + 1);
+    var b: f64 = _par_in(k + 2);
+    var c: f64 = _par_in(k + 3);
+    var d: f64 = _par_in(k + 4);
+    var e: f64 = _par_in(k + 5);
+    var f: f64 = _par_in(k + 6);
+    var g: f64 = _par_in(k + 7);
+    var h: f64 = _par_in(k + 8);
+    var m: f64 = _par_in(k + 9);
+    var q: f64 = _par_in(k + 10);
+    s.name = name;
+    s.name_len = load64(&nw);
+    s.triple_point_t = a;
+    s.triple_point_p = b;
+    s.critical_t = c;
+    s.critical_p = d;
+    s.critical_density = e;
+    s.latent_heat_fusion = f;
+    s.latent_heat_vaporization = g;
+    s.melting_point = h;
+    s.boiling_point = m;
+    s.molar_mass = q;
+    return 1;
+}
+
+# Appends the substance *s as its eleven golden tokens.
+fn _par_got_sub(s: *UsSubstance) {
+    _par_got_text(s.name, s.name_len);
+    var a: f64 = s.triple_point_t;
+    var b: f64 = s.triple_point_p;
+    var c: f64 = s.critical_t;
+    var d: f64 = s.critical_p;
+    var e: f64 = s.critical_density;
+    var f: f64 = s.latent_heat_fusion;
+    var g: f64 = s.latent_heat_vaporization;
+    var h: f64 = s.melting_point;
+    var m: f64 = s.boiling_point;
+    var q: f64 = s.molar_mass;
+    _par_got_f(a);
+    _par_got_f(b);
+    _par_got_f(c);
+    _par_got_f(d);
+    _par_got_f(e);
+    _par_got_f(f);
+    _par_got_f(g);
+    _par_got_f(h);
+    _par_got_f(m);
+    _par_got_f(q);
+    return 0;
+}
+
+# A phase's golden text ("Phase.Liquid"), or 0.
+fn _par_phase_text(ph): i64 {
+    if (ph == US_PHASE_SOLID) { return "Phase.Solid"; }
+    if (ph == US_PHASE_LIQUID) { return "Phase.Liquid"; }
+    if (ph == US_PHASE_GAS) { return "Phase.Gas"; }
+    if (ph == US_PHASE_SUPERCRITICAL_FLUID) { return "Phase.SupercriticalFluid"; }
+    return 0;
+}
+
+# The phase input token 0 names (`e:Phase.Liquid`), or -1.
+fn _par_in_phase(): i64 {
+    if (_par_in_n != 1 || load64(_par_in_k) != 101) { return 0 - 1; }
+    var k = 0;
+    while (k < US_PHASE_COUNT) {
+        if (_par_eq(load64(_par_in_v), load64(_par_in_l), _par_phase_text(k)) == 1) { return k; }
+        k = k + 1;
+    }
+    return 0 - 1;
+}
+
+# Appends a Result whose Ok payload is a phase.
+fn _par_got_phase_res(t, v) {
+    if (is_ok(t) == 1) { _par_got_e(_par_phase_text(v)); } else { _par_got_err(v); }
+}
+
+# The phase module's JSON rows: 1 when handled, 0 for none, -1 for unusable inputs.
+fn _par_phase_json(fp, fl): i64 {
+    if (_par_mat_sb == 0) {
+        _par_mat_sb = str_builder_new();
+        _par_mat_arena = arena_allocator_growable(65536);
+    }
+    if (_par_eq(fp, fl, "phase::Phase::to_json") == 1) {
+        var ph = _par_in_phase();
+        if (ph < 0) { return 0 - 1; }
+        store64(_par_mat_sb + 8, 0);
+        us_phase_to_json(_par_mat_sb, ph);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    var dn[8];
+    if (_par_eq(fp, fl, "phase::Phase::from_json") == 1) {
+        var doc = _par_in_text(0, &dn);
+        if (doc == 0) { return 0 - 1; }
+        reset_via(_par_mat_arena);
+        var t, v = us_phase_from_json_a(_par_mat_arena, doc, load64(&dn));
+        _par_got_phase_res(t, v);
+        return 1;
+    }
+    var s: UsSubstance;
+    if (_par_eq(fp, fl, "phase::SubstanceData::from_json") == 1) {
+        var doc2 = _par_in_text(0, &dn);
+        if (doc2 == 0) { return 0 - 1; }
+        var n = load64(&dn);
+        reset_via(_par_mat_arena);
+        var t2, v2 = us_substance_from_json_a(_par_mat_arena, doc2, n, &s);
+        if (is_err_result(t2) == 1) {
+            _par_got_err(v2);
+            if (_par_bayan_mapped_refusal(doc2, n) == 1) { _par_adr5 = 1; }
+            return 1;
+        }
+        if (_par_has_int_neg_zero(doc2, n) == 1) { _par_adr5 = 1; }
+        _par_got_sub(&s);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "phase::SubstanceData::to_json") == 1) {
+        if (_par_in_n != 11 || _par_sub_in(0, &s) == 0) { return 0 - 1; }
+        store64(_par_mat_sb + 8, 0);
+        us_substance_to_json(_par_mat_sb, &s);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    return 0;
+}
+
+# One phase row: 1 when handled, 0 for a function with no counterpart yet, -1 for unusable inputs.
+fn _par_phase(fp, fl): i64 {
+    var j = _par_phase_json(fp, fl);
+    if (j != 0) { return j; }
+    var s: UsSubstance;
+    if (_par_eq(fp, fl, "phase::heat_for_phase_change") == 1) {
+        if (_par_sub_in(4, &s) == 0) { return 0 - 1; }
+        var a: f64 = _par_in(0);
+        var b: f64 = _par_in(1);
+        var c: f64 = _par_in(2);
+        var d: f64 = _par_in(3);
+        var t, v = us_heat_for_phase_change(a, b, c, d, &s);
+        _par_got_res(t, v);
+        return 1;
+    }
+    var x: f64 = _par_in(0);
+    var y: f64 = _par_in(1);
+    var z: f64 = _par_in(2);
+    var w: f64 = _par_in(3);
+    if (_par_eq(fp, fl, "phase::clausius_clapeyron_slope") == 1) {
+        var t1, v1 = us_clausius_clapeyron_slope(x, y, z);
+        _par_got_res(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "phase::clausius_clapeyron_pressure") == 1) {
+        var t2, v2 = us_clausius_clapeyron_pressure(x, y, z, w);
+        _par_got_res(t2, v2);
+        return 1;
+    }
+    if (_par_sub_in(0, &s) == 0) { return 0 - 1; }
+    var p11: f64 = _par_in(11);
+    var p12: f64 = _par_in(12);
+    if (_par_eq(fp, fl, "phase::SubstanceData::sublimes_at_atmospheric") == 1) {
+        _par_got_i(us_substance_sublimes_at_atmospheric(&s));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "phase::SubstanceData::latent_heat_sublimation") == 1) {
+        var l: f64 = us_substance_latent_heat_sublimation(&s);
+        _par_got_f(l);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "phase::SubstanceData::vapor_pressure") == 1) {
+        var t3, v3 = us_substance_vapor_pressure(&s, p11);
+        _par_got_res(t3, v3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "phase::SubstanceData::sublimation_pressure") == 1) {
+        var t4, v4 = us_substance_sublimation_pressure(&s, p11);
+        _par_got_res(t4, v4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "phase::SubstanceData::phase_at") == 1) {
+        var t5, v5 = us_substance_phase_at(&s, p11, p12);
+        _par_got_phase_res(t5, v5);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "phase::heat_of_fusion") == 1) {
+        var hf: f64 = us_heat_of_fusion(&s, p11);
+        _par_got_f(hf);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "phase::heat_of_vaporization") == 1) {
+        var hv: f64 = us_heat_of_vaporization(&s, p11);
+        _par_got_f(hv);
+        return 1;
+    }
+    return 0;
+}
+
 # ── entropy ─────────────────────────────────────────────────────────────────────────
 
 # One entropy row: 1 when handled, 0 for a function with no counterpart yet.
@@ -927,6 +1130,7 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
     _par_adr5 = 0;
     if (_par_eq(mp, ml, "material") == 1 && _par_in_n != 0) { return _par_material(fp, fl); }
     if (_par_eq(mp, ml, "state") == 1 && _par_in_n != 0) { return _par_state(fp, fl); }
+    if (_par_eq(mp, ml, "phase") == 1 && _par_in_n != 0) { return _par_phase(fp, fl); }
     if (_par_in_n != 0) { return 0; }   # a preset row has no inputs; anything else is a module function
     if (_par_eq(mp, ml, "material") == 1) {
         return _par_table(fp, fl, "material", "ALL_MATERIALS", _par_tab_material, US_MATERIAL_COUNT,
@@ -1034,10 +1238,11 @@ fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "f64::powf") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::atan") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::tanh") == 1) { return 0; }
-    # Every class-C transfer, state and entropy function computes on the _us_cr_* primitives.
+    # Every class-C transfer, state, entropy and phase function computes on the _us_cr_* primitives.
     if (fl > 10 && _par_eq(fp, 10, "transfer::") == 1) { return 0; }
     if (fl > 7 && _par_eq(fp, 7, "state::") == 1) { return 0; }
     if (fl > 9 && _par_eq(fp, 9, "entropy::") == 1) { return 0; }
+    if (fl > 7 && _par_eq(fp, 7, "phase::") == 1) { return 0; }
     return 0 - 1;
 }
 

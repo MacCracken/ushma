@@ -76,3 +76,14 @@ The rest of the gap is the harness floor (4 ns a call) and, in the seven instrum
 **M2's review.** Every check is the inlined branch-free form from M1d, no state or entropy function allocates (Kay's
 rules and mixing read the caller's lists; the JSON readers work on the caller's arena), and the gap to Rust is the
 correctly rounded ln and pow (ADR 0004), the harness floor and the spans. Nothing in M2 measured worth changing.
+
+## M3
+
+| Benchmark | Rust 1.4.0 (ns) | Cyrius (ns) | Notes |
+|---|---|---|---|
+| phase/clausius_clapeyron_slope | 3.27 | 19 | three checks, L / (T·Δv) |
+| phase/clausius_clapeyron_pressure | 10.62 | 92 | four checks, a correctly rounded exp, the finite check |
+| phase/phase_lookup | 22.57 | 205 | water at 300 K, 1 atm: the vapor curve's correctly rounded ln and exp, and the span with its substance field |
+| phase/heat_of_fusion | 1.08 | 9 | m·L_fus |
+| phase/heat_of_vaporization | 0.99 | 9 | m·L_vap |
+| phase/heat_for_phase_change | 11.79 | 49 | four checks, the crossings, the span with its substance field |

@@ -18,6 +18,8 @@ include "src/transfer.cyr"
 include "src/state_data.cyr"
 include "src/state.cyr"
 include "src/entropy.cyr"
+include "src/phase_data.cyr"
+include "src/phase.cyr"
 
 # Keeps results observable, so no call can be dropped.
 var _bn_sink = 0;
@@ -255,6 +257,42 @@ fn b_ig_ds(x): i64 {
     return v;
 }
 
+# clausius_clapeyron_slope(2.26e6, 373.15, 1.672).
+fn b_cc_slope(x): i64 {
+    var t, v = us_clausius_clapeyron_slope(2260000.0, 373.15, 1.672);
+    return v;
+}
+
+# clausius_clapeyron_pressure(101325, 373.15, 383.15, 40714).
+fn b_cc_pressure(x): i64 {
+    var t, v = us_clausius_clapeyron_pressure(101325.0, 373.15, 383.15, 40714.0);
+    return v;
+}
+
+# WATER_PHASE.phase_at(300, 101325).
+fn b_phase_at(w): i64 {
+    var t, v = us_substance_phase_at(w, 300.0, 101325.0);
+    return v;
+}
+
+# heat_of_fusion(WATER_PHASE, 1).
+fn b_fusion(w): i64 {
+    var q: f64 = us_heat_of_fusion(w, 1.0);
+    return q;
+}
+
+# heat_of_vaporization(WATER_PHASE, 1).
+fn b_vaporization(w): i64 {
+    var q: f64 = us_heat_of_vaporization(w, 1.0);
+    return q;
+}
+
+# heat_for_phase_change(1, 2500, 263, 383, WATER_PHASE).
+fn b_phase_change(w): i64 {
+    var t, v = us_heat_for_phase_change(1.0, 2500.0, 263.0, 383.0, w);
+    return v;
+}
+
 # Fills the two resistance lists the benchmarks use.
 fn bn_lists() {
     _bn_series = alloc(40);
@@ -340,6 +378,14 @@ fn main(): i64 {
     bn_run("entropy/gibbs", &b_gibbs, 0, 1000000);
     bn_run("entropy/mixing", &b_mixing, 0, 1000000);
     bn_run("entropy/ideal_gas_ds", &b_ig_ds, 0, 1000000);
+    var water: UsSubstance;
+    var tw, vw = us_substance_preset(US_SUBSTANCE_WATER_PHASE, &water);
+    bn_run("phase/clausius_clapeyron_slope", &b_cc_slope, 0, 1000000);
+    bn_run("phase/clausius_clapeyron_pressure", &b_cc_pressure, 0, 1000000);
+    bn_run("phase/phase_lookup", &b_phase_at, &water, 1000000);
+    bn_run("phase/heat_of_fusion", &b_fusion, &water, 1000000);
+    bn_run("phase/heat_of_vaporization", &b_vaporization, &water, 1000000);
+    bn_run("phase/heat_for_phase_change", &b_phase_change, &water, 1000000);
     return 0;
 }
 

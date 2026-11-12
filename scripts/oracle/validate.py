@@ -1137,6 +1137,128 @@ def m_mixing(a, p):
     return F(-n * GAS_R * s)
 
 
+ATM = 101325.0  # state::ATM
+F64_EPS = 2.220446049250313e-16
+
+
+class Sub:
+    """A SubstanceData from a row's eleven tokens (the name, then the ten f64 in declaration order)."""
+
+    def __init__(self, a):
+        (self.tpt, self.tpp, self.ct, self.cp, self.cd, self.lf, self.lv, self.mp, self.bp, self.mm) = a[1:11]
+
+    def sublimes(self):
+        return self.tpp > ATM
+
+
+def _log_interp(t, t1, p1, t2, p2, p):
+    span = fdiv(1.0, t2) - fdiv(1.0, t1)
+    if abs(span) < F64_EPS:
+        return p1
+    frac = fdiv(fdiv(1.0, t) - fdiv(1.0, t1), span)
+    return p1 * p.exp(frac * p.log(fdiv(p2, p1)))
+
+
+def _cc_pressure(pr, tr, tt, lm, p):
+    if not fgt(pr, 0.0):
+        return "InvalidPressure", None
+    if not fgt(tr, 0.0) or not fgt(tt, 0.0):
+        return "InvalidTemperature", None
+    if not fgt(lm, 0.0):
+        return "InvalidParameter", None
+    ex = -fdiv(lm, GAS_R) * (fdiv(1.0, tt) - fdiv(1.0, tr))
+    v = pr * p.exp(ex)
+    return ("InvalidParameter", None) if not math.isfinite(v) else (None, v)
+
+
+def _vapor(x, t, p):
+    if not (math.isfinite(t) and t >= x.tpt) or t > x.ct:
+        return "UndefinedPhaseTransition", None
+    if x.bp > x.tpt and x.bp < x.ct:
+        if t <= x.bp:
+            return None, _log_interp(t, x.tpt, x.tpp, x.bp, ATM, p)
+        return None, _log_interp(t, x.bp, ATM, x.ct, x.cp, p)
+    return None, _log_interp(t, x.tpt, x.tpp, x.ct, x.cp, p)
+
+
+def _sublimation(x, t, p):
+    if not fgt(t, 0.0) or t > x.tpt:
+        return "UndefinedPhaseTransition", None
+    if x.sublimes() and x.bp < x.tpt:
+        return None, _log_interp(t, x.tpt, x.tpp, x.bp, ATM, p)
+    return _cc_pressure(x.tpp, x.tpt, t, (x.lf + x.lv) * x.mm, p)
+
+
+def _lh_sub(x, p):
+    d = fdiv(1.0, x.bp) - fdiv(1.0, x.tpt)
+    if x.sublimes() and x.bp < x.tpt and fgt(d, 0.0) and x.mm > 0.0:
+        return fdiv(fdiv(GAS_R * p.log(fdiv(x.tpp, ATM)), d), x.mm)
+    return x.lf + x.lv
+
+
+def _res(r):
+    e, v = r
+    return E(e) if e else F(v)
+
+
+def m_phase_at(a, p):
+    x = Sub(a)
+    t, pr = a[11], a[12]
+    if not fgt(t, 0.0):
+        return E("InvalidTemperature")
+    if not fgt(pr, 0.0):
+        return E("InvalidPressure")
+    if t > x.ct and pr > x.cp:
+        return ["e:Phase.SupercriticalFluid"]
+    if t < x.tpt:
+        e, ps = _sublimation(x, t, p)
+        if e:
+            return E(e)
+        return ["e:Phase.Solid" if pr >= ps else "e:Phase.Gas"]
+    if t <= x.ct:
+        e, ps = _vapor(x, t, p)
+        if e:
+            return E(e)
+        if pr >= ps:
+            return ["e:Phase.Solid" if t <= x.mp else "e:Phase.Liquid"]
+        return ["e:Phase.Gas"]
+    return ["e:Phase.Gas"]
+
+
+def m_heat_phase(a, p):
+    mass, cp, ts, te = a[:4]
+    x = Sub(a[4:])
+    if not fgt(mass, 0.0):
+        return E("InvalidParameter")
+    if not fgt(cp, 0.0):
+        return E("InvalidSpecificHeat")
+    if not fgt(ts, 0.0) or not fgt(te, 0.0):
+        return E("InvalidTemperature")
+    lo, hi, sign = (ts, te, 1.0) if te >= ts else (te, ts, -1.0)
+    q = 0.0
+    q += mass * cp * (hi - lo)
+    if x.sublimes():
+        if lo < x.bp and hi >= x.bp:
+            q += mass * _lh_sub(x, p)
+    else:
+        if lo < x.mp and hi >= x.mp:
+            q += mass * x.lf
+        if lo < x.bp and hi >= x.bp:
+            q += mass * x.lv
+    return F(sign * q)
+
+
+def m_cc_slope(a, p):
+    lh, temp, dv = a
+    if not fgt(temp, 0.0):
+        return E("InvalidTemperature")
+    if not fge(abs(dv), TINY):
+        return E("DivisionByZero")
+    if not fgt(lh, 0.0):
+        return E("InvalidParameter")
+    return F(fdiv(lh, temp * dv))
+
+
 def unmodelled(fn, ins):
     """Rows of a modelled module that other checks own: the table presets (no inputs; check_tables) and the JSON
     documents (serde_json's text and verdicts, which the harness compares byte for byte; ADR 0005)."""
@@ -1144,6 +1266,18 @@ def unmodelled(fn, ins):
 
 
 MODELS = {
+    "phase": {
+        "phase::SubstanceData::sublimes_at_atmospheric": lambda a, p: [f"i:{int(Sub(a).sublimes())}"],
+        "phase::SubstanceData::latent_heat_sublimation": lambda a, p: F(_lh_sub(Sub(a), p)),
+        "phase::SubstanceData::vapor_pressure": lambda a, p: _res(_vapor(Sub(a), a[11], p)),
+        "phase::SubstanceData::sublimation_pressure": lambda a, p: _res(_sublimation(Sub(a), a[11], p)),
+        "phase::SubstanceData::phase_at": m_phase_at,
+        "phase::heat_of_fusion": lambda a, p: F(a[11] * Sub(a).lf),
+        "phase::heat_of_vaporization": lambda a, p: F(a[11] * Sub(a).lv),
+        "phase::heat_for_phase_change": m_heat_phase,
+        "phase::clausius_clapeyron_slope": m_cc_slope,
+        "phase::clausius_clapeyron_pressure": lambda a, p: _res(_cc_pressure(*a, p)),
+    },
     "entropy": {
         "entropy::ideal_gas_entropy_change": m_ig_ds,
         "entropy::isothermal_entropy_change": m_iso_ds,
@@ -1224,6 +1358,9 @@ def model_args(ins):
             n = int(ins[i][2:])
             out.append([tok_f(t) for t in ins[i + 1 : i + 1 + n]])
             i += 1 + n
+        elif ins[i].startswith(("s:", "e:")):
+            out.append(ins[i])  # a name (a substance's) or an enum value, as its token
+            i += 1
         else:
             out.append(tok_f(ins[i]))
             i += 1

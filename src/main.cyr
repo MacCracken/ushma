@@ -18,6 +18,7 @@ include "src/state_data.cyr"
 include "src/state.cyr"
 include "src/entropy.cyr"
 include "src/phase_data.cyr"
+include "src/phase.cyr"
 include "src/chem_data.cyr"
 include "src/steam_data.cyr"
 

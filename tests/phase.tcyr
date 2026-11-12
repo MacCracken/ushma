@@ -1,0 +1,423 @@
+# phase tests.
+#
+# Rust 1.4.0's 44 phase.rs tests, one for one, each also checking the refusal's code. Then a reference test of the
+# spans: phase_at and heat_for_phase_change open a DEBUG span under Rust's span name, carrying the substance's name as
+# Rust's span field does, and close it on every path.
+
+include "src/constants.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+include "src/json.cyr"
+include "src/phase_data.cyr"
+include "src/phase.cyr"
+
+var _nan: f64 = 0.0;
+
+# |a − b| as an f64.
+fn absdiff(a: f64, b: f64): f64 {
+    var d: f64 = a - b;
+    if (d < 0.0) { d = 0.0 - d; }
+    return d;
+}
+
+# |a/b − 1| as an f64.
+fn reldiff(a: f64, b: f64): f64 {
+    var r: f64 = a / b - 1.0;
+    if (r < 0.0) { r = 0.0 - r; }
+    return r;
+}
+
+# The Ok value of a Result (asserting it is Ok).
+fn okv(t, v, name): i64 {
+    assert_eq(is_ok(t), 1, name);
+    return v;
+}
+
+# Asserts a Result is Err(code).
+fn errc(t, v, code, name) {
+    assert_eq(is_err_result(t), 1, name);
+    if (is_err_result(t) == 1) { assert_streq(us_error_name(v), us_error_name(code), name); }
+    return 0;
+}
+
+# Asserts the phase at (T, P) of *s is `want`.
+fn phase_is(s: *UsSubstance, t: f64, p: f64, want, name) {
+    var tr, vr = us_substance_phase_at(s, t, p);
+    assert_eq(is_ok(tr), 1, name);
+    if (is_ok(tr) == 1) { assert_streq(us_phase_name(vr), us_phase_name(want), name); }
+    return 0;
+}
+
+# The ring's raw bytes contain the C string `s`: 1 or 0.
+fn ring_has(s): i64 {
+    var cap = 8192;
+    var buf = alloc(cap);
+    var n = sakshi_ring_read_raw(buf, cap);
+    var sl = strlen(s);
+    var k = 0;
+    while (k + sl <= n) {
+        if (memeq(buf + k, s, sl) == 1) { return 1; }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# The Phase codes and names, the substance table, and the NIST reference values.
+# rust src/phase.rs: test_phase_enum_traits, test_all_substances_count, test_water_triple_point
+# rust src/phase.rs: test_water_critical_point, test_water_latent_heats, test_nitrogen_boiling_point
+# rust src/phase.rs: test_co2_critical_point, test_ammonia_boiling_point, test_mercury_melting_point
+# rust src/phase.rs: test_all_substances_have_valid_data
+fn test_table() {
+    test_group("phases and substances");
+    assert_eq(US_PHASE_LIQUID, 1, "Liquid is Rust's second variant");
+    assert(US_PHASE_LIQUID != US_PHASE_GAS, "Liquid is not Gas");
+    assert_streq(us_phase_name(US_PHASE_LIQUID), "Liquid", "the Debug name");
+    assert_eq(us_phase_name(US_PHASE_COUNT), 0, "no name past the last phase");
+    assert_eq(US_SUBSTANCE_COUNT, 8, "8 reference substances");
+    var w: UsSubstance;
+    var t, v = us_substance_preset(US_SUBSTANCE_WATER_PHASE, &w);
+    var tpt: f64 = w.triple_point_t;
+    var tpp: f64 = w.triple_point_p;
+    var ct: f64 = w.critical_t;
+    var cp: f64 = w.critical_p;
+    var lf: f64 = w.latent_heat_fusion;
+    var lv: f64 = w.latent_heat_vaporization;
+    var dd1: f64 = absdiff(tpt, 273.16);
+    assert(dd1 < 0.01, "water's triple point T");
+    var dd2: f64 = absdiff(tpp, 611.657);
+    assert(dd2 < 1.0, "water's triple point P");
+    var dd3: f64 = absdiff(ct, 647.096);
+    assert(dd3 < 0.01, "water's critical T");
+    var dd4: f64 = absdiff(cp, 22064000.0);
+    assert(dd4 < 1000.0, "water's critical P");
+    var dd5: f64 = absdiff(lf, 334000.0);
+    assert(dd5 < 1000.0, "water's fusion: 334 kJ/kg");
+    var dd6: f64 = absdiff(lv, 2260000.0);
+    assert(dd6 < 10000.0, "water's vaporization: 2260 kJ/kg");
+    var s: UsSubstance;
+    var t2, v2 = us_substance_preset(US_SUBSTANCE_NITROGEN, &s);
+    var nbp: f64 = s.boiling_point;
+    var dd7: f64 = absdiff(nbp, 77.36);
+    assert(dd7 < 0.1, "nitrogen boils at 77.36 K");
+    var t3, v3 = us_substance_preset(US_SUBSTANCE_CARBON_DIOXIDE, &s);
+    var cct: f64 = s.critical_t;
+    var ccp: f64 = s.critical_p;
+    var dd8: f64 = absdiff(cct, 304.13);
+    assert(dd8 < 0.1, "CO2's critical T");
+    var dd9: f64 = absdiff(ccp, 7375000.0);
+    assert(dd9 < 10000.0, "CO2's critical P");
+    var t4, v4 = us_substance_preset(US_SUBSTANCE_AMMONIA, &s);
+    var abp: f64 = s.boiling_point;
+    var dd10: f64 = absdiff(abp, 239.82);
+    assert(dd10 < 0.1, "ammonia boils at 239.82 K");
+    var t5, v5 = us_substance_preset(US_SUBSTANCE_MERCURY, &s);
+    var hmp: f64 = s.melting_point;
+    var dd11: f64 = absdiff(hmp, 234.32);
+    assert(dd11 < 0.1, "mercury melts at 234.32 K");
+    var ok = 1;
+    var i = 0;
+    while (i < US_SUBSTANCE_COUNT) {
+        var ti, vi = us_substance_preset(i, &s);
+        var a: f64 = s.triple_point_t;
+        var b: f64 = s.triple_point_p;
+        var c: f64 = s.critical_t;
+        var d: f64 = s.critical_p;
+        var f: f64 = s.latent_heat_fusion;
+        var g: f64 = s.latent_heat_vaporization;
+        var m: f64 = s.molar_mass;
+        if (a <= 0.0 || b < 0.0 || c <= a || d <= 0.0 || f <= 0.0 || g <= 0.0 || m <= 0.0) { ok = 0; }
+        i = i + 1;
+    }
+    assert_eq(ok, 1, "every substance: positive data, Tc above the triple point");
+    var t6, v6 = us_substance_preset(US_SUBSTANCE_COUNT, &s);
+    errc(t6, v6, US_ERR_INVALID_PARAMETER, "past the last substance");
+}
+
+# JSON round trips of a substance and a phase.
+# rust src/phase.rs: test_substance_serde_roundtrip, test_phase_serde_roundtrip
+fn test_json() {
+    test_group("JSON");
+    var w: UsSubstance;
+    var t, v = us_substance_preset(US_SUBSTANCE_WATER_PHASE, &w);
+    var sb = str_builder_new();
+    us_substance_to_json(sb, &w);
+    var back: UsSubstance;
+    var t2, v2 = us_substance_from_json(load64(sb), load64(sb + 8), &back);
+    assert_eq(is_ok(t2), 1, "water's document reads back");
+    assert_streq(back.name, "Water", "its name");
+    var bct: f64 = back.critical_t;
+    var dd12: f64 = absdiff(bct, 647.096);
+    assert(dd12 < 0.001, "its critical temperature");
+    var sb2 = str_builder_new();
+    us_phase_to_json(sb2, US_PHASE_SUPERCRITICAL_FLUID);
+    var t3, v3 = us_phase_from_json(load64(sb2), load64(sb2 + 8));
+    assert_eq(is_ok(t3), 1, "a phase's document reads back");
+    assert_eq(v3, US_PHASE_SUPERCRITICAL_FLUID, "as SupercriticalFluid");
+    var t4, v4 = us_phase_from_json("\"Plasma\"", 8);
+    errc(t4, v4, US_ERR_DESERIALIZE, "an unknown phase");
+}
+
+# Latent heats and the heat for a phase change, the sublimer's path among them.
+# rust src/phase.rs: test_heat_of_fusion_water, test_heat_of_vaporization_water, test_heat_of_fusion_scales_with_mass
+# rust src/phase.rs: test_heat_for_phase_change_ice_to_steam, test_heat_for_phase_change_no_transition
+# rust src/phase.rs: test_heat_for_phase_change_cooling, test_heat_for_phase_change_invalid
+# rust src/phase.rs: test_co2_heat_for_phase_change_uses_sublimation, test_phase_functions_reject_nan
+fn test_latent_heats() {
+    test_group("latent heats");
+    var w: UsSubstance;
+    var tw, vw = us_substance_preset(US_SUBSTANCE_WATER_PHASE, &w);
+    var qf: f64 = us_heat_of_fusion(&w, 1.0);
+    var dd13: f64 = absdiff(qf, 334000.0);
+    assert(dd13 < 1000.0, "1 kg of ice: 334 kJ");
+    var qv: f64 = us_heat_of_vaporization(&w, 1.0);
+    var dd14: f64 = absdiff(qv, 2260000.0);
+    assert(dd14 < 10000.0, "1 kg of water: 2260 kJ");
+    var q2: f64 = us_heat_of_fusion(&w, 2.0);
+    var twice: f64 = 2.0 * qf;
+    var dd15: f64 = absdiff(q2, twice);
+    assert(dd15 < 0.0000000001, "fusion scales with mass");
+    var t, v = us_heat_for_phase_change(1.0, 2500.0, 263.0, 383.0, &w);
+    var qs: f64 = okv(t, v, "ice to steam is Ok");
+    assert(qs > 2500000.0, "includes both latent heats");
+    var dd16: f64 = absdiff(qs, 2894000.0);
+    assert(dd16 < 10000.0, "about 2,894 kJ");
+    var t2, v2 = us_heat_for_phase_change(1.0, 4186.0, 280.0, 350.0, &w);
+    var qn: f64 = okv(t2, v2, "no transition is Ok");
+    var dd17: f64 = absdiff(qn, 293020.0);
+    assert(dd17 < 1.0, "sensible only: 293,020 J");
+    var t3, v3 = us_heat_for_phase_change(1.0, 2500.0, 383.0, 263.0, &w);
+    var qc: f64 = okv(t3, v3, "cooling is Ok");
+    var sum: f64 = qs + qc;
+    var dd18: f64 = absdiff(sum, 0.0);
+    assert(dd18 < 0.0000000001, "cooling is heating's negative");
+    var t4, v4 = us_heat_for_phase_change(0.0, 4186.0, 280.0, 350.0, &w);
+    errc(t4, v4, US_ERR_INVALID_PARAMETER, "zero mass");
+    var t5, v5 = us_heat_for_phase_change(1.0, 4186.0, 0.0, 350.0, &w);
+    errc(t5, v5, US_ERR_INVALID_TEMPERATURE, "T_start = 0");
+    var t6, v6 = us_heat_for_phase_change(1.0, 4186.0, 280.0, 0.0, &w);
+    errc(t6, v6, US_ERR_INVALID_TEMPERATURE, "T_end = 0");
+    var t7, v7 = us_heat_for_phase_change(1.0, 0.0, 280.0, 350.0, &w);
+    errc(t7, v7, US_ERR_INVALID_SPECIFIC_HEAT, "zero c_p");
+    var t8, v8 = us_heat_for_phase_change(1.0, -100.0, 280.0, 350.0, &w);
+    errc(t8, v8, US_ERR_INVALID_SPECIFIC_HEAT, "negative c_p");
+    var t9, v9 = us_heat_for_phase_change(1.0, 4186.0, _nan, 350.0, &w);
+    errc(t9, v9, US_ERR_INVALID_TEMPERATURE, "NaN T_start");
+    var c: UsSubstance;
+    var tc, vc = us_substance_preset(US_SUBSTANCE_CARBON_DIOXIDE, &c);
+    assert_eq(us_substance_sublimes_at_atmospheric(&c), 1, "CO2 sublimes at 1 atm");
+    assert_eq(us_substance_sublimes_at_atmospheric(&w), 0, "water does not");
+    var ta, va = us_heat_for_phase_change(1.0, 800.0, 200.0, 220.0, &c);
+    var qa: f64 = okv(ta, va, "CO2 vapour is Ok");
+    var dd19: f64 = absdiff(qa, 16000.0);
+    assert(dd19 < 0.000000001, "200 -> 220 K: sensible only");
+    var tb, vb = us_heat_for_phase_change(1.0, 800.0, 190.0, 300.0, &c);
+    var qb: f64 = okv(tb, vb, "CO2 across sublimation is Ok");
+    var ls: f64 = us_substance_latent_heat_sublimation(&c);
+    var dd20: f64 = absdiff(ls, 571000.0);
+    assert(dd20 < 40000.0, "L_sub near the measured 571 kJ/kg");
+    var want: f64 = 800.0 * 110.0 + ls;
+    var dd21: f64 = absdiff(qb, want);
+    assert(dd21 < 0.000001, "190 -> 300 K: one sublimation");
+}
+
+# Clausius–Clapeyron: the slope and the integrated pressure, their refusals and the overflow.
+# rust src/phase.rs: test_clausius_clapeyron_slope_water, test_clausius_clapeyron_slope_invalid
+# rust src/phase.rs: test_clausius_clapeyron_pressure_water, test_clausius_clapeyron_pressure_roundtrip
+# rust src/phase.rs: test_clausius_clapeyron_pressure_invalid, test_clausius_clapeyron_pressure_overflow_is_error
+# rust src/phase.rs: test_phase_functions_reject_nan
+fn test_clausius_clapeyron() {
+    test_group("Clausius-Clapeyron");
+    var t, v = us_clausius_clapeyron_slope(2260000.0, 373.15, 1.672);
+    var sl: f64 = okv(t, v, "water's slope is Ok");
+    var dd22: f64 = reldiff(sl, 3570.0);
+    assert(dd22 < 0.02, "dP/dT within 2% of 3570 Pa/K");
+    var t2, v2 = us_clausius_clapeyron_slope(2260000.0, 0.0, 1.672);
+    errc(t2, v2, US_ERR_INVALID_TEMPERATURE, "slope, T = 0");
+    var t3, v3 = us_clausius_clapeyron_slope(2260000.0, 373.15, 0.0);
+    errc(t3, v3, US_ERR_DIVISION_BY_ZERO, "slope, dv = 0");
+    var t4, v4 = us_clausius_clapeyron_slope(-100.0, 373.15, 1.672);
+    errc(t4, v4, US_ERR_INVALID_PARAMETER, "slope, negative L");
+    var lm: f64 = 2260000.0 * 0.018015;
+    var t5, v5 = us_clausius_clapeyron_pressure(101325.0, 373.15, 383.15, lm);
+    var p: f64 = okv(t5, v5, "110 C is Ok");
+    var dd23: f64 = reldiff(p, 143400.0);
+    assert(dd23 < 0.05, "within 5% of 143.4 kPa");
+    var t6, v6 = us_clausius_clapeyron_pressure(101325.0, 373.15, 393.15, lm);
+    var p2: f64 = okv(t6, v6, "out is Ok");
+    var t7, v7 = us_clausius_clapeyron_pressure(p2, 393.15, 373.15, lm);
+    var pb: f64 = okv(t7, v7, "back is Ok");
+    var dd24: f64 = reldiff(pb, 101325.0);
+    assert(dd24 < 0.0000000001, "the round trip");
+    var t8, v8 = us_clausius_clapeyron_pressure(0.0, 373.15, 383.15, 40000.0);
+    errc(t8, v8, US_ERR_INVALID_PRESSURE, "P_ref = 0");
+    var t9, v9 = us_clausius_clapeyron_pressure(101325.0, 0.0, 383.15, 40000.0);
+    errc(t9, v9, US_ERR_INVALID_TEMPERATURE, "T_ref = 0");
+    var ta, va = us_clausius_clapeyron_pressure(101325.0, 373.15, 0.0, 40000.0);
+    errc(ta, va, US_ERR_INVALID_TEMPERATURE, "T_target = 0");
+    var tb, vb = us_clausius_clapeyron_pressure(101325.0, 373.15, 383.15, -1.0);
+    errc(tb, vb, US_ERR_INVALID_PARAMETER, "negative L");
+    var tc, vc = us_clausius_clapeyron_pressure(100000.0, 0.0000000001, 300.0, 40000.0);
+    errc(tc, vc, US_ERR_INVALID_PARAMETER, "an overflowing exponent");
+    var td, vd = us_clausius_clapeyron_pressure(_nan, 373.15, 380.0, 40000.0);
+    errc(td, vd, US_ERR_INVALID_PRESSURE, "NaN P_ref");
+    var te, ve = us_clausius_clapeyron_slope(_nan, 373.15, 1.67);
+    errc(te, ve, US_ERR_INVALID_PARAMETER, "NaN L");
+}
+
+# The phase at (T, P): water, CO₂ and nitrogen across their regions, and the refusals.
+# rust src/phase.rs: test_water_liquid_at_room_temp, test_water_gas_above_boiling, test_water_solid_below_freezing
+# rust src/phase.rs: test_water_supercritical, test_water_high_temp_low_pressure_is_gas, test_co2_supercritical
+# rust src/phase.rs: test_nitrogen_gas_at_room_temp, test_nitrogen_liquid_at_cryogenic, test_phase_at_invalid_inputs
+# rust src/phase.rs: test_water_high_pressure_liquid, test_compressed_liquid_above_critical_pressure
+# rust src/phase.rs: test_co2_phase_regions, test_water_below_triple_point_low_pressure_is_vapor
+# rust src/phase.rs: test_phase_functions_reject_nan
+fn test_phase_at() {
+    test_group("phase at (T, P)");
+    var w: UsSubstance;
+    var c: UsSubstance;
+    var n: UsSubstance;
+    var t1, v1 = us_substance_preset(US_SUBSTANCE_WATER_PHASE, &w);
+    var t2, v2 = us_substance_preset(US_SUBSTANCE_CARBON_DIOXIDE, &c);
+    var t3, v3 = us_substance_preset(US_SUBSTANCE_NITROGEN, &n);
+    phase_is(&w, 300.0, 101325.0, US_PHASE_LIQUID, "water at 300 K: liquid");
+    phase_is(&w, 400.0, 101325.0, US_PHASE_GAS, "water at 400 K: gas");
+    phase_is(&w, 200.0, 101325.0, US_PHASE_SOLID, "water at 200 K: solid");
+    phase_is(&w, 700.0, 25000000.0, US_PHASE_SUPERCRITICAL_FLUID, "water at 700 K, 25 MPa: supercritical");
+    phase_is(&w, 700.0, 101325.0, US_PHASE_GAS, "water above Tc at 1 atm: gas");
+    phase_is(&c, 310.0, 8000000.0, US_PHASE_SUPERCRITICAL_FLUID, "CO2 at 310 K, 8 MPa: supercritical");
+    phase_is(&n, 300.0, 101325.0, US_PHASE_GAS, "nitrogen at 300 K: gas");
+    phase_is(&n, 70.0, 101325.0, US_PHASE_LIQUID, "nitrogen at 70 K: liquid");
+    phase_is(&w, 350.0, 10000000.0, US_PHASE_LIQUID, "water at 350 K, 10 MPa: liquid");
+    phase_is(&w, 640.0, 23000000.0, US_PHASE_LIQUID, "compressed liquid above Pc, below Tc");
+    phase_is(&c, 300.0, 3000000.0, US_PHASE_GAS, "CO2 at 300 K, 3 MPa: gas");
+    phase_is(&c, 250.0, 1000000.0, US_PHASE_GAS, "CO2 at 250 K, 1 MPa: gas");
+    phase_is(&c, 250.0, 2500000.0, US_PHASE_LIQUID, "CO2 at 250 K, 2.5 MPa: liquid");
+    phase_is(&c, 200.0, 101325.0, US_PHASE_GAS, "CO2 at 200 K, 1 atm: vapour (dry ice sublimes at 194.65 K)");
+    phase_is(&c, 180.0, 101325.0, US_PHASE_SOLID, "CO2 at 180 K: solid");
+    phase_is(&c, 320.0, 8000000.0, US_PHASE_SUPERCRITICAL_FLUID, "CO2 at 320 K, 8 MPa: supercritical");
+    phase_is(&w, 250.0, 10.0, US_PHASE_GAS, "water at 250 K, 10 Pa: vapour");
+    phase_is(&w, 250.0, 101325.0, US_PHASE_SOLID, "water at 250 K, 1 atm: solid");
+    var ts, vs = us_substance_sublimation_pressure(&w, 250.0);
+    var psub: f64 = okv(ts, vs, "ice's sublimation pressure is Ok");
+    assert(psub > 60.0 && psub < 100.0, "about 76 Pa at 250 K");
+    var t4, v4 = us_substance_phase_at(&w, 0.0, 101325.0);
+    errc(t4, v4, US_ERR_INVALID_TEMPERATURE, "T = 0");
+    var t5, v5 = us_substance_phase_at(&w, 300.0, 0.0);
+    errc(t5, v5, US_ERR_INVALID_PRESSURE, "P = 0");
+    var t6, v6 = us_substance_phase_at(&w, -10.0, 101325.0);
+    errc(t6, v6, US_ERR_INVALID_TEMPERATURE, "negative T");
+    var t7, v7 = us_substance_phase_at(&w, _nan, 100000.0);
+    errc(t7, v7, US_ERR_INVALID_TEMPERATURE, "NaN T");
+    var t8, v8 = us_substance_phase_at(&w, 300.0, _nan);
+    errc(t8, v8, US_ERR_INVALID_PRESSURE, "NaN P");
+}
+
+# The vapor and sublimation curves meet their anchors and the reference values.
+# rust src/phase.rs: test_vapor_pressure_meets_anchor_points, test_water_vapor_pressure_never_exceeds_critical
+# rust src/phase.rs: test_co2_vapor_pressure, test_co2_sublimation_curve
+fn test_curves() {
+    test_group("vapor and sublimation curves");
+    var w: UsSubstance;
+    var c: UsSubstance;
+    var t1, v1 = us_substance_preset(US_SUBSTANCE_WATER_PHASE, &w);
+    var t2, v2 = us_substance_preset(US_SUBSTANCE_CARBON_DIOXIDE, &c);
+    var t, v = us_substance_vapor_pressure(&w, 373.15);
+    var pb: f64 = okv(t, v, "at the boiling point is Ok");
+    var dd25: f64 = reldiff(pb, US_ATM);
+    assert(dd25 < 0.000000000001, "1 atm at the boiling point");
+    var ct: f64 = w.critical_t;
+    var cp: f64 = w.critical_p;
+    var tpt: f64 = w.triple_point_t;
+    var tpp: f64 = w.triple_point_p;
+    var t3, v3 = us_substance_vapor_pressure(&w, ct);
+    var pc: f64 = okv(t3, v3, "at Tc is Ok");
+    var dd26: f64 = reldiff(pc, cp);
+    assert(dd26 < 0.000000000001, "Pc at Tc");
+    var t4, v4 = us_substance_vapor_pressure(&w, tpt);
+    var pt: f64 = okv(t4, v4, "at the triple point is Ok");
+    var dd27: f64 = reldiff(pt, tpp);
+    assert(dd27 < 0.000000000001, "the triple-point pressure");
+    var t5, v5 = us_substance_vapor_pressure(&w, 200.0);
+    errc(t5, v5, US_ERR_UNDEFINED_PHASE_TRANSITION, "below the triple point");
+    var t6, v6 = us_substance_vapor_pressure(&w, 700.0);
+    errc(t6, v6, US_ERR_UNDEFINED_PHASE_TRANSITION, "above Tc");
+    var t7, v7 = us_substance_vapor_pressure(&w, _nan);
+    errc(t7, v7, US_ERR_UNDEFINED_PHASE_TRANSITION, "NaN");
+    var t8, v8 = us_substance_vapor_pressure(&w, 640.0);
+    var p640: f64 = okv(t8, v8, "640 K is Ok");
+    var dd28: f64 = reldiff(p640, 20266000.0);
+    assert(dd28 < 0.02, "640 K: within 2% of IF97's 20.27 MPa, below Pc");
+    var t9, v9 = us_substance_vapor_pressure(&c, 250.0);
+    var c250: f64 = okv(t9, v9, "CO2 at 250 K is Ok");
+    var dd29: f64 = reldiff(c250, 1785000.0);
+    assert(dd29 < 0.02, "CO2: 1.785 MPa at 250 K");
+    var ta, va = us_substance_vapor_pressure(&c, 300.0);
+    var c300: f64 = okv(ta, va, "CO2 at 300 K is Ok");
+    var dd30: f64 = reldiff(c300, 6713000.0);
+    assert(dd30 < 0.02, "CO2: 6.713 MPa at 300 K");
+    var tb, vb = us_substance_sublimation_pressure(&c, 194.65);
+    var s1: f64 = okv(tb, vb, "CO2's sublimation point is Ok");
+    var dd31: f64 = reldiff(s1, US_ATM);
+    assert(dd31 < 0.000000000001, "1 atm at 194.65 K");
+    var tc, vc = us_substance_sublimation_pressure(&c, 200.0);
+    var s2: f64 = okv(tc, vc, "CO2 at 200 K is Ok");
+    var dd32: f64 = reldiff(s2, 160600.0);
+    assert(dd32 < 0.05, "about 160.6 kPa at 200 K");
+    var td, vd = us_substance_sublimation_pressure(&c, 250.0);
+    errc(td, vd, US_ERR_UNDEFINED_PHASE_TRANSITION, "above the triple point");
+}
+
+# The span named `name` opened and closed: depth back to 0, `events` events in the ring.
+fn span_seen(name, events, label) {
+    assert_eq(sakshi_span_depth(), 0, label);
+    assert_eq(sakshi_ring_event_count(), events, label);
+    assert_eq(ring_has(name), 1, label);
+    assert_eq(ring_has("substance"), 1, label);
+    sakshi_ring_clear();
+    return 0;
+}
+
+# phase_at and heat_for_phase_change open a DEBUG span under Rust's span name with the substance as its field (one
+# event inside it), and close it on Ok and on Err; at INFO they record nothing.
+fn test_spans() {
+    test_group("spans");
+    var w: UsSubstance;
+    var t0, v0 = us_substance_preset(US_SUBSTANCE_WATER_PHASE, &w);
+    sakshi_output_buffer();
+    sakshi_set_level(SK_DEBUG);
+    sakshi_ring_clear();
+    var t, v = us_substance_phase_at(&w, 300.0, 101325.0);
+    span_seen("phase_at", 3, "phase_at");
+    var t1, v1 = us_substance_phase_at(&w, 0.0, 101325.0);
+    span_seen("phase_at", 4, "phase_at, refused");
+    var t2, v2 = us_heat_for_phase_change(1.0, 2500.0, 263.0, 383.0, &w);
+    span_seen("heat_for_phase_change", 3, "heat_for_phase_change");
+    var t3, v3 = us_heat_for_phase_change(0.0, 2500.0, 263.0, 383.0, &w);
+    span_seen("heat_for_phase_change", 4, "heat_for_phase_change, refused");
+    sakshi_set_level(SK_INFO);
+    sakshi_ring_clear();
+    var t4, v4 = us_substance_phase_at(&w, 300.0, 101325.0);
+    assert_eq(sakshi_ring_event_count(), 0, "no span event at INFO");
+}
+
+# Runs every group and returns the failure count.
+fn main() {
+    alloc_init();
+    _nan = 0.0 / 0.0;
+    test_table();
+    test_json();
+    test_latent_heats();
+    test_clausius_clapeyron();
+    test_phase_at();
+    test_curves();
+    test_spans();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

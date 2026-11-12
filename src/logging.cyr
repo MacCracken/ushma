@@ -82,6 +82,17 @@ fn _us_span_enter(name, len) {
     return 0;
 }
 
+# Opens a DEBUG span named `name` (`len` bytes) carrying one field, `key` = the `vlen` bytes at `val`, when DEBUG is
+# on. sakshi's spans take no fields, so the field is a DEBUG event (`<name>`, key=value) just inside the span: Rust's
+# `#[instrument(fields(substance = %name))]`.
+fn _us_span_enter_kv(name, len, key, val, vlen) {
+    if (sakshi_get_level() >= SK_DEBUG) {
+        sakshi_span_enter(name, len);
+        sakshi_log_kv(SK_DEBUG, name, len, key, strlen(key), val, vlen);
+    }
+    return 0;
+}
+
 # Closes the span `_us_span_enter` opened, when DEBUG is on.
 fn _us_span_exit() {
     if (sakshi_get_level() >= SK_DEBUG) { sakshi_span_exit(); }

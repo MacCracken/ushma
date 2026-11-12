@@ -12,9 +12,12 @@
 # The smallest magnitude a divisor may have (Rust's 1e-30, written positionally).
 var _US_TINY: f64 = 0.000000000000000000000000000001;
 
-# 1 when x is finite and strictly greater than `bound` (a finite bound), else 0. `x > bound` is false for NaN and −∞,
-# `x < +∞` for NaN and +∞, so one branch-free expression is the whole test, and #inline takes it: three checks cost
-# 6 ns instead of 21 (M1d's review, docs/benchmarks-rust-v-cyrius.md).
+# −∞, a compile-time constant (_US_INF is +∞, src/mathx.cyr).
+const _US_NEG_INF = 0.0 - 1.0 / 0.0;
+
+# 1 when x is finite and strictly greater than `bound`, else 0, for any bound: `x > bound` is false for NaN and −∞,
+# `x < +∞` for NaN and +∞. One branch-free expression, so #inline takes it: three checks cost 6 ns instead of 21 (M1d's
+# review, docs/benchmarks-rust-v-cyrius.md).
 #must_use
 #pure
 #inline
@@ -22,12 +25,22 @@ fn _us_finite_gt(x: f64, bound: f64): i64 {
     return (x > bound) & (x < _US_INF);
 }
 
-# 1 when x is finite and greater than or equal to `bound` (a finite bound), else 0, as _us_finite_gt.
+# 1 when x is finite and greater than or equal to `bound`, else 0, for a bound above −∞ (every literal bound: 0, 1,
+# 1e-30). For x = bound = −∞ it would answer 1, so a bound that comes from the caller's data uses _us_finite_ge_any.
 #must_use
 #pure
 #inline
 fn _us_finite_ge(x: f64, bound: f64): i64 {
     return (x >= bound) & (x < _US_INF);
+}
+
+# _us_finite_ge for any bound, −∞ included (a substance's own triple-point temperature): one comparison more, about
+# 1 ns.
+#must_use
+#pure
+#inline
+fn _us_finite_ge_any(x: f64, bound: f64): i64 {
+    return (x >= bound) & (x < _US_INF) & (x > _US_NEG_INF);
 }
 
 # A str_builder over a caller's stack buffer: header `hdr` (24 bytes: buf, len, cap) on `buf` of `cap` bytes. It grows

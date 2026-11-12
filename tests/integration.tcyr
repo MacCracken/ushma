@@ -1,5 +1,6 @@
 # Rust 1.4.0's integration tests (rust-old/tests/integration.rs), cross-module, each ported at the milestone of the
-# last module it calls: M1's six on transfer and material, then M2's eight on state and entropy.
+# last module it calls: M1's six on transfer and material, M2's eight on state and entropy, then M3's on phase and
+# steam.
 
 include "src/constants.cyr"
 include "src/error.cyr"
@@ -13,6 +14,8 @@ include "src/material_data.cyr"
 include "src/material.cyr"
 include "src/transfer.cyr"
 include "src/state_data.cyr"
+include "src/phase_data.cyr"
+include "src/phase.cyr"
 include "src/state.cyr"
 include "src/entropy.cyr"
 
@@ -274,6 +277,20 @@ fn entropy_increase_irreversible_heat_transfer() {
     assert_eq(us_is_spontaneous(total), 1, "spontaneous");
 }
 
+# material's Water and phase's Water agree on the boiling point.
+# rust tests/integration.rs: water_boiling_point_consistency
+fn water_boiling_point_consistency() {
+    test_group("water's boiling point, two tables");
+    var m: UsMaterial;
+    var tm, vm = us_material_preset(US_MATERIAL_WATER, &m);
+    var s: UsSubstance;
+    var ts, vs = us_substance_preset(US_SUBSTANCE_WATER_PHASE, &s);
+    var bm: f64 = m.boiling_point;
+    var bs: f64 = s.boiling_point;
+    var d: f64 = absdiff(bm, bs);
+    assert(d < 0.01, "within 0.01 K");
+}
+
 # Runs every test and returns the failure count.
 fn main() {
     alloc_init();
@@ -291,6 +308,7 @@ fn main() {
     mixture_z_factor_kays_rule();
     carnot_engine_efficiency();
     entropy_increase_irreversible_heat_transfer();
+    water_boiling_point_consistency();
     return assert_summary();
 }
 

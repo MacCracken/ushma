@@ -510,3 +510,27 @@ accepted (ADR 4: 36)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
     fractions and sums across the 1e-10 tolerance among them.
   - **Surface parity:** entropy 9 of 9. **Tests:** all 23 of entropy's and the 2 entropy integration tests; every
     test due at M2 is ported (ledger: 180 of 479).
+
+## 6. M3 (2026-11-12 on)
+
+After M3a the harness's summary is `9 modules, 0 failing | rows: 101696 ok, 0 failed, 0 measured, 0 pending, 51
+accepted (ADR 4: 36)`.
+
+- **phase** (M3a): 27,333 rows (class A 232, B 2,389, C 24,712; 6,054 refusals).
+  - **The substances:** the 8 presets and 106 edge substances: each of Water's and CO₂'s ten properties at 0, −1,
+    NaN, ±∞, a boiling point above the critical point or below the triple point, a sublimer whose boiling point is
+    above or at its triple point, and a triple point at and above 1 atm.
+  - **The curves** (vapor and sublimation pressure, the sublimation latent heat): each substance at temperatures
+    across every join, the triple, melting, boiling and critical points ± 1 ulp, and past both ends. 0 ulp against
+    MPFR; glibc misrounds none of these rows.
+  - **`phase_at`:** 10,797 points. At every join temperature each preset is asked at the pressure Rust's own curve
+    gives there and 1 ulp either side, so each boundary decision (solid or gas, liquid or gas, supercritical) is
+    tested on the row where it flips. Every row matches.
+  - **The heats:** `heat_for_phase_change` runs every substance over ranges that start, end and cross on the
+    melting and boiling points ± 1 ulp, both ways.
+  - **JSON:** `Phase` as serde writes it (a string) and reads it (a string, or `{"Variant":null}`): 26 rows.
+    `SubstanceData`: 15 `to_json` and 68 `from_json` documents, 5 accepted under ADR 5's mapped divergences.
+  - **A predicate found in porting:** `vapor_pressure` checks T against the substance's own triple point, which a
+    caller can set to −∞. The fast `_us_finite_ge` answers 1 for x = bound = −∞ where Rust's `finite_ge` answers
+    false, so a data-dependent bound uses `_us_finite_ge_any`, exact for every bound.
+  - **Surface parity:** phase 29 of 29, its enum members included.

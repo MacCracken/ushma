@@ -14,6 +14,7 @@ For each Rust module whose milestone has come (`PORTED`), it lists rust-old/src/
 - `pub const X: T`, T a preset type         -> `const US_<T>_X =` (`US_X` when X already starts `<T>_`) and
                                                `fn us_<t>_preset(`
 - `UshmaError::Variant`                     -> `US_ERR_<SNAKE>` in `enum UsError`
+- `T::Variant`, another public enum         -> `US_<t>_<SNAKE>` in `enum <TYPES[T]>` (`US_PHASE_SOLID` in `UsPhase`)
 
 Where the rules give no single name, MAPPED lists the Cyrius names that carry the item, and they are checked too:
 there are no exemptions. Every file under rust-old/src is PORTED, SCHEDULED (its milestone not yet come; counted) or
@@ -27,10 +28,10 @@ from pathlib import Path
 root = Path(sys.argv[1]).resolve()
 
 # The modules whose milestone has come.
-PORTED = ["error", "validate", "logging", "material", "transfer", "state", "entropy"]
+PORTED = ["error", "validate", "logging", "material", "transfer", "state", "entropy", "phase"]
 # The rest, with their milestone (port plan §3.1).
 SCHEDULED = {
-    "phase": "M3", "steam": "M3", "cycle": "M4", "chem": "M5", "stat": "M5",
+    "steam": "M3", "cycle": "M4", "chem": "M5", "stat": "M5",
     "numerical": "M6", "bridge": "M7", "integration/soorat": "M7", "ai": "M7",
 }
 WIRING = {
@@ -44,11 +45,14 @@ TYPES = {
     "ThermalMaterial": ("UsMaterial", "material"),
     "UshmaError": ("UsError", "error"),
     "GasData": ("UsGas", "gas"),
+    "SubstanceData": ("UsSubstance", "substance"),
+    "Phase": ("UsPhase", "phase"),
 }
 # Rust item -> the Cyrius names that carry it ("fn x", "const X", "enum X", "struct X"), where the rules give none.
 MAPPED = {
     "material::const ALL_MATERIALS": ["const US_MATERIAL_COUNT", "fn us_material_preset"],
     "state::const ALL_GASES": ["const US_GAS_COUNT", "fn us_gas_preset"],
+    "phase::const ALL_SUBSTANCES": ["const US_SUBSTANCE_COUNT", "fn us_substance_preset"],
     "error::type Result": ["fn is_ok", "fn is_err_result"],
     "error::UshmaError: Display": ["fn us_error_message", "fn us_error_name"],
 }
@@ -111,6 +115,11 @@ def rust_items(module):
         body = body[: body.index("\n}")]
         for v in re.findall(r"^\s{4}([A-Z]\w+)", body, re.M):
             items.append((f"UshmaError::{v}", "variant", "UshmaError", v))
+    for em in re.finditer(r"^pub enum (\w+) \{\n(.*?)^\}", src, re.M | re.S):
+        if em.group(1) == "UshmaError":
+            continue
+        for v in re.findall(r"^\s{4}([A-Z]\w+)", em.group(2), re.M):
+            items.append((f"{em.group(1)}::{v}", "member", em.group(1), v))
     return items
 
 
@@ -147,13 +156,17 @@ def counterpart(module, kind, ty, name):
         return [f"const US_{name if name.startswith(pre) else pre + name}", f"fn us_{t[1]}_preset"]
     if kind == "variant":
         return [f"const US_ERR_{snake(name).upper()}"]
+    if kind == "member" and t:
+        return [f"{t[0]} US_{t[1].upper()}_{snake(name).upper()}"]
     return None
 
 
-def variant_defined(spec):
-    """An error code is a member of `enum UsError`."""
-    name = spec.split(" ", 1)[1]
-    m = re.search(r"^enum UsError \{(.*?)^\}", cyr, re.M | re.S)
+def variant_defined(spec, enum="UsError"):
+    """An error code is a member of `enum UsError`; an enum value (`UsPhase US_PHASE_SOLID`) of its enum."""
+    head, name = spec.split(" ", 1)
+    if head != "const":
+        enum = head
+    m = re.search(rf"^enum {enum} \{{(.*?)^\}}", cyr, re.M | re.S)
     return m is not None and re.search(rf"\b{name}\s*=", m.group(1)) is not None
 
 
@@ -173,7 +186,7 @@ for module in PORTED:
             missing += 1
             print(f"MISSING  {key}: no rule gives its Cyrius name and MAPPED has no entry")
             continue
-        absent = [n for n in names if not (variant_defined(n) if kind == "variant" else
+        absent = [n for n in names if not (variant_defined(n) if kind in ("variant", "member") else
                                           defined(n) or (key in MAPPED and defined(n, stdlib)))]
         if absent:
             missing += 1
