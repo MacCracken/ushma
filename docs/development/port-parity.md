@@ -424,8 +424,8 @@ x86_64, PE and aarch64.
 
 ## 4. M1 (2026-11-11)
 
-The harness's summary after M1b, identical on x86_64 ELF, `--bounds`, PE (wine) and aarch64 (qemu):
-`7 modules, 0 failing | rows: 44711 ok, 0 failed, 0 measured, 0 pending, 31 accepted (ADR 4: 26)`.
+The harness's summary after M1c, identical on x86_64 ELF, `--bounds`, PE (wine) and aarch64 (qemu):
+`8 modules, 0 failing | rows: 51924 ok, 0 failed, 0 measured, 0 pending, 35 accepted (ADR 4: 30)`.
 
 - **fmtf** (M1a): 26,088 rows, every one ok. The vendored printer writes Rust's `{}` and serde_json's text for 13,044
   doubles. `validate.py` checks each row independently (read-back, shortest digits, closest, form).
@@ -441,3 +441,11 @@ The harness's summary after M1b, identical on x86_64 ELF, `--bounds`, PE (wine) 
 
     The harness accepts such a row only when bayan's own error is one of the three mapped refusals, or the document
     holds an integer `-0`.
+- **transfer, part 1** (M1c): 7,217 rows over 18 functions.
+  - **Class B** (conduction to boundary layers): every row bit-identical, the 233 refusals included (each the same
+    Rust variant).
+  - **Class C** (lumped capacitance, Dittus–Boelter, Churchill–Chu, the thermal boundary layer): 0 ulp against the
+    corrected oracle. glibc 2.44's `pow` misrounds inside 4 rows, 2 in Dittus–Boelter and 2 in Churchill–Chu
+    (`transfer.cr.tsv`, each call listed). The port matches MPFR there, and the oracle's own results are 1–2 ulp off.
+  - **`validate.py`'s models** recompute every transfer row in Rust's order. With glibc's primitives all 7,217 match;
+    with MPFR's, they write the corrections.

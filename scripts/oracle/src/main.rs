@@ -30,6 +30,7 @@ mod m_constants;
 mod m_fmtf;
 mod m_material;
 mod m_math;
+mod m_transfer;
 mod rustsrc;
 mod t_constants;
 mod t_private;
@@ -45,7 +46,12 @@ use std::process::ExitCode;
 /// Every golden emitter, in file-name order: `constants`, `math`, and the four modules the
 /// public tables seed (`chem`, `material`, `phase`, `state`; M0 part 2b).
 fn golden_modules() -> Result<Vec<tsv::Module>, String> {
-    let mut v = vec![m_constants::emit(), m_fmtf::emit(), m_math::emit()];
+    let mut v = vec![
+        m_constants::emit(),
+        m_fmtf::emit(),
+        m_math::emit(),
+        m_transfer::emit(),
+    ];
     let mut tables = t_tables::golden()?;
     for m in &mut tables {
         if m.name == "material" {

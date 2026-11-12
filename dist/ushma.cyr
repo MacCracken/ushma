@@ -4562,6 +4562,314 @@ fn us_material_from_json(buf, n, out: *UsMaterial): Result {
     return us_material_from_json_a(default_alloc(), buf, n, out);
 }
 
+# --- transfer.cyr ---
+
+# transfer.cyr — heat transfer: conduction, convection, radiation, resistance networks, dimensionless numbers,
+# boundary layers (Rust 1.4.0 `transfer`). All SI: watts, meters, kelvins, seconds.
+#
+# Each function computes in the order Rust 1.4.0 writes, so its arithmetic is bit-identical (class B), and its
+# transcendentals (exp, pow) are correctly rounded (ADR 0004, class C). A correlation's exponents (Dittus–Boelter's
+# 0.8 and 0.4, Churchill–Chu's 1/6, 9/16 and 8/27, Pohlhausen's 1/3) are the doubles Rust writes (ADR 0002 row 9).
+# A refusal returns Err(US_ERR_*) and reports its value at DEBUG (src/validate.cyr). conduction and radiation open a
+# DEBUG span, as Rust instruments them.
+
+# The smallest magnitude a divisor may have (Rust's 1e-30).
+var _US_TINY: f64 = 0.000000000000000000000000000001;
+
+# Fourier's law: q = k·A·(T_hot − T_cold) / L (W). Err(US_ERR_INVALID_CONDUCTIVITY) when k is negative or not finite,
+# Err(US_ERR_DIVISION_BY_ZERO) when |L| < 1e-30 or L is not finite.
+#must_use
+fn us_conduction(conductivity: f64, area: f64, t_hot: f64, t_cold: f64, thickness: f64): Result {
+    _us_span_enter("us_conduction", 13);
+    if (_us_finite_ge(conductivity, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_CONDUCTIVITY, "us_conduction", "conductivity", conductivity));
+    }
+    var al: f64 = f64_abs(thickness);
+    if (_us_finite_ge(al, _US_TINY) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_conduction", "thickness", thickness));
+    }
+    var q: f64 = conductivity * area * (t_hot - t_cold) / thickness;
+    _us_span_exit();
+    return Ok(q);
+}
+
+# Newton's law of cooling: q = h·A·(T_surface − T_fluid) (W).
+#must_use
+#pure
+fn us_convection(h: f64, area: f64, t_surface: f64, t_fluid: f64): f64 {
+    var q: f64 = h * area * (t_surface - t_fluid);
+    return q;
+}
+
+# The Stefan–Boltzmann law: q = ε·σ·A·(T_s⁴ − T_surr⁴) (W). Err(US_ERR_INVALID_PARAMETER) when ε is outside [0, 1]
+# (or NaN), Err(US_ERR_INVALID_TEMPERATURE) when a temperature is negative or not finite.
+#must_use
+fn us_radiation(emissivity: f64, area: f64, t_surface: f64, t_surrounding: f64): Result {
+    _us_span_enter("us_radiation", 12);
+    if (emissivity >= 0.0 && emissivity <= 1.0) {
+        if (_us_finite_ge(t_surface, 0.0) == 0) {
+            _us_span_exit();
+            return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_radiation", "t_surface", t_surface));
+        }
+        if (_us_finite_ge(t_surrounding, 0.0) == 0) {
+            _us_span_exit();
+            return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_radiation", "t_surrounding", t_surrounding));
+        }
+        var ts4: f64 = _us_powi(t_surface, 4);
+        var tr4: f64 = _us_powi(t_surrounding, 4);
+        var q: f64 = emissivity * US_STEFAN_BOLTZMANN * area * (ts4 - tr4);
+        _us_span_exit();
+        return Ok(q);
+    }
+    _us_span_exit();
+    return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_radiation", "emissivity", emissivity));
+}
+
+# Conduction resistance R = L / (k·A) (K/W). Err(US_ERR_INVALID_CONDUCTIVITY) unless k > 0;
+# Err(US_ERR_INVALID_PARAMETER) unless A > 0 and L ≥ 0; Err(US_ERR_DIVISION_BY_ZERO) when |k·A| < 1e-30.
+#must_use
+fn us_thermal_resistance_conduction(conductivity: f64, area: f64, thickness: f64): Result {
+    if (_us_finite_gt(conductivity, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_CONDUCTIVITY, "us_thermal_resistance_conduction", "conductivity",
+            conductivity));
+    }
+    if (_us_finite_gt(area, 0.0) == 0 || _us_finite_ge(thickness, 0.0) == 0) {
+        return Err(_us_fail_ff(US_ERR_INVALID_PARAMETER, "us_thermal_resistance_conduction", "geometry", "area",
+            area, "thickness", thickness));
+    }
+    var denom: f64 = conductivity * area;
+    var ad: f64 = f64_abs(denom);
+    if (_us_finite_ge(ad, _US_TINY) == 0) {
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_thermal_resistance_conduction", "k*A", denom));
+    }
+    var r: f64 = thickness / denom;
+    return Ok(r);
+}
+
+# Convection resistance R = 1 / (h·A) (K/W). Err(US_ERR_INVALID_PARAMETER) unless h ≥ 0 and A ≥ 0;
+# Err(US_ERR_DIVISION_BY_ZERO) when |h·A| < 1e-30.
+#must_use
+fn us_thermal_resistance_convection(h: f64, area: f64): Result {
+    if (_us_finite_ge(h, 0.0) == 0 || _us_finite_ge(area, 0.0) == 0) {
+        return Err(_us_fail_ff(US_ERR_INVALID_PARAMETER, "us_thermal_resistance_convection", "inputs", "h", h,
+            "area", area));
+    }
+    var denom: f64 = h * area;
+    var ad: f64 = f64_abs(denom);
+    if (_us_finite_ge(ad, _US_TINY) == 0) {
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_thermal_resistance_convection", "h*A", denom));
+    }
+    var r: f64 = 1.0 / denom;
+    return Ok(r);
+}
+
+# Series resistance: R₁ + R₂ + … of the `n` f64 at `rs` (K/W), summed left to right from −0.0 as Rust's `sum` does
+# (so an empty list is −0.0).
+#must_use
+fn us_thermal_resistance_series(rs, n): f64 {
+    var s: f64 = 0.0 - 0.0;
+    var k = 0;
+    while (k < n) {
+        var r: f64 = load64(rs + (8 * k));
+        s = s + r;
+        k = k + 1;
+    }
+    return s;
+}
+
+# Parallel resistance: 1 / (1/R₁ + 1/R₂ + …) of the `n` f64 at `rs` (K/W). Err(US_ERR_INVALID_PARAMETER) when any R is
+# not positive and finite (the first such is reported), Err(US_ERR_DIVISION_BY_ZERO) when the sum of reciprocals is
+# below 1e-30 in magnitude (an empty list).
+#must_use
+fn us_thermal_resistance_parallel(rs, n): Result {
+    var k = 0;
+    while (k < n) {
+        var r: f64 = load64(rs + (8 * k));
+        if (_us_finite_gt(r, 0.0) == 0) {
+            return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_thermal_resistance_parallel", "resistance", r));
+        }
+        k = k + 1;
+    }
+    var s: f64 = 0.0 - 0.0;
+    k = 0;
+    while (k < n) {
+        var r2: f64 = load64(rs + (8 * k));
+        var inv: f64 = 1.0 / r2;
+        s = s + inv;
+        k = k + 1;
+    }
+    var as: f64 = f64_abs(s);
+    if (_us_finite_ge(as, _US_TINY) == 0) {
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_thermal_resistance_parallel", "sum", s));
+    }
+    var rt: f64 = 1.0 / s;
+    return Ok(rt);
+}
+
+# Heat stored in a body: Q = m·c·ΔT (J).
+#must_use
+#pure
+fn us_heat_stored(mass: f64, specific_heat: f64, delta_t: f64): f64 {
+    var q: f64 = mass * specific_heat * delta_t;
+    return q;
+}
+
+# Thermal diffusivity α = k / (ρ·c_p) (m²/s). Err(US_ERR_INVALID_CONDUCTIVITY), Err(US_ERR_INVALID_PARAMETER) (the
+# density) or Err(US_ERR_INVALID_SPECIFIC_HEAT) for a negative or non-finite input, Err(US_ERR_DIVISION_BY_ZERO) when
+# |ρ·c_p| < 1e-30.
+#must_use
+fn us_thermal_diffusivity(conductivity: f64, density: f64, specific_heat: f64): Result {
+    if (_us_finite_ge(conductivity, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_CONDUCTIVITY, "us_thermal_diffusivity", "conductivity", conductivity));
+    }
+    if (_us_finite_ge(density, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_thermal_diffusivity", "density", density));
+    }
+    if (_us_finite_ge(specific_heat, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_SPECIFIC_HEAT, "us_thermal_diffusivity", "specific_heat",
+            specific_heat));
+    }
+    var denom: f64 = density * specific_heat;
+    var ad: f64 = f64_abs(denom);
+    if (_us_finite_ge(ad, _US_TINY) == 0) {
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_thermal_diffusivity", "rho*cp", denom));
+    }
+    var a: f64 = conductivity / denom;
+    return Ok(a);
+}
+
+# Biot number Bi = h·L / k. Err(US_ERR_INVALID_PARAMETER) unless h ≥ 0 and L ≥ 0, Err(US_ERR_DIVISION_BY_ZERO) unless
+# k ≥ 1e-30.
+#must_use
+fn us_biot_number(h: f64, characteristic_length: f64, conductivity: f64): Result {
+    if (_us_finite_ge(h, 0.0) == 0 || _us_finite_ge(characteristic_length, 0.0) == 0) {
+        return Err(_us_fail_ff(US_ERR_INVALID_PARAMETER, "us_biot_number", "inputs", "h", h, "length",
+            characteristic_length));
+    }
+    if (_us_finite_ge(conductivity, _US_TINY) == 0) {
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_biot_number", "conductivity", conductivity));
+    }
+    var bi: f64 = h * characteristic_length / conductivity;
+    return Ok(bi);
+}
+
+# Lumped-capacitance cooling: T(t) = T_env + (T₀ − T_env)·e^(−t/τ) (K), valid for Bi < 0.1.
+#must_use
+fn us_lumped_capacitance(t_initial: f64, t_environment: f64, time: f64, time_constant: f64): f64 {
+    var arg: f64 = (0.0 - time) / time_constant;
+    var e: f64 = _us_cr_exp(arg);
+    var t: f64 = t_environment + (t_initial - t_environment) * e;
+    return t;
+}
+
+# Reynolds number Re = V·L / ν. Err(US_ERR_INVALID_PARAMETER) unless ν > 0.
+#must_use
+fn us_reynolds_number(velocity: f64, length: f64, kinematic_viscosity: f64): Result {
+    if (_us_finite_gt(kinematic_viscosity, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_reynolds_number", "kinematic_viscosity",
+            kinematic_viscosity));
+    }
+    var re: f64 = velocity * length / kinematic_viscosity;
+    return Ok(re);
+}
+
+# Prandtl number Pr = ν / α. Err(US_ERR_INVALID_PARAMETER) unless ν > 0, Err(US_ERR_DIVISION_BY_ZERO) unless α > 0.
+#must_use
+fn us_prandtl_number(kinematic_viscosity: f64, thermal_diffusivity: f64): Result {
+    if (_us_finite_gt(kinematic_viscosity, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_prandtl_number", "kinematic_viscosity",
+            kinematic_viscosity));
+    }
+    if (_us_finite_gt(thermal_diffusivity, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_prandtl_number", "thermal_diffusivity",
+            thermal_diffusivity));
+    }
+    var pr: f64 = kinematic_viscosity / thermal_diffusivity;
+    return Ok(pr);
+}
+
+# Nusselt number (definition) Nu = h·L / k. Err(US_ERR_DIVISION_BY_ZERO) unless k ≥ 1e-30.
+#must_use
+fn us_nusselt_number(h: f64, length: f64, conductivity: f64): Result {
+    if (_us_finite_ge(conductivity, _US_TINY) == 0) {
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_nusselt_number", "conductivity", conductivity));
+    }
+    var nu: f64 = h * length / conductivity;
+    return Ok(nu);
+}
+
+# Dittus–Boelter: Nu = 0.023·Re^0.8·Pr^0.4 (turbulent flow in smooth tubes, heating). Err(US_ERR_INVALID_PARAMETER)
+# unless Re > 0 and Pr > 0.
+#must_use
+fn us_nusselt_dittus_boelter(re: f64, pr: f64): Result {
+    if (_us_finite_gt(re, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_nusselt_dittus_boelter", "reynolds", re));
+    }
+    if (_us_finite_gt(pr, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_nusselt_dittus_boelter", "prandtl", pr));
+    }
+    var a: f64 = _us_cr_pow(re, 0.8);
+    var b: f64 = _us_cr_pow(pr, 0.4);
+    var nu: f64 = 0.023 * a * b;
+    return Ok(nu);
+}
+
+# Churchill–Chu natural convection on a vertical plate, any Ra:
+# Nu = {0.825 + 0.387·Ra^(1/6) / [1 + (0.492/Pr)^(9/16)]^(8/27)}². Err(US_ERR_INVALID_PARAMETER) unless Ra ≥ 0 and
+# Pr > 0.
+#must_use
+fn us_nusselt_natural_vertical(ra: f64, pr: f64): Result {
+    if (_us_finite_ge(ra, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_nusselt_natural_vertical", "rayleigh", ra));
+    }
+    if (_us_finite_gt(pr, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_nusselt_natural_vertical", "prandtl", pr));
+    }
+    var e916: f64 = 9.0 / 16.0;
+    var em827: f64 = (0.0 - 8.0) / 27.0;
+    var e16: f64 = 1.0 / 6.0;
+    var ratio: f64 = 0.492 / pr;
+    var p1: f64 = _us_cr_pow(ratio, e916);
+    var psi: f64 = _us_cr_pow(1.0 + p1, em827);
+    var r16: f64 = _us_cr_pow(ra, e16);
+    var inner: f64 = 0.825 + 0.387 * r16 * psi;
+    var nu: f64 = _us_powi(inner, 2);
+    return Ok(nu);
+}
+
+# Laminar (Blasius) boundary-layer thickness δ = 5·x / √Re_x (m), for Re_x below about 5×10⁵.
+# Err(US_ERR_INVALID_PARAMETER) unless x > 0 and Re_x > 0.
+#must_use
+fn us_boundary_layer_thickness(x: f64, re_x: f64): Result {
+    if (_us_finite_gt(x, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_boundary_layer_thickness", "x", x));
+    }
+    if (_us_finite_gt(re_x, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_boundary_layer_thickness", "re_x", re_x));
+    }
+    var sr: f64 = f64_sqrt(re_x);
+    var d: f64 = 5.0 * x / sr;
+    return Ok(d);
+}
+
+# Thermal boundary-layer thickness δ_t = δ / Pr^(1/3) (m). Err(US_ERR_INVALID_PARAMETER) unless Pr > 0, then
+# us_boundary_layer_thickness's refusals.
+#must_use
+fn us_thermal_boundary_layer(x: f64, re_x: f64, pr: f64): Result {
+    if (_us_finite_gt(pr, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_thermal_boundary_layer", "prandtl", pr));
+    }
+    var t, v = us_boundary_layer_thickness(x, re_x);
+    if (is_err_result(t) == 1) { return Err(v); }
+    var delta: f64 = v;
+    var e13: f64 = 1.0 / 3.0;
+    var p: f64 = _us_cr_pow(pr, e13);
+    var dt: f64 = delta / p;
+    return Ok(dt);
+}
+
 # --- state_data.cyr ---
 
 # ushma — gas data: critical constants and acentric factors of 8 gases

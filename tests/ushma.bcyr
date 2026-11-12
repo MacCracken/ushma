@@ -14,6 +14,7 @@ include "src/logging.cyr"
 include "src/json.cyr"
 include "src/material_data.cyr"
 include "src/material.cyr"
+include "src/transfer.cyr"
 
 # Keeps results observable, so no call can be dropped.
 var _bn_sink = 0;
@@ -66,6 +67,99 @@ fn b_from_json(m: *UsMaterial): i64 {
     return t;
 }
 
+# transfer, with Rust's benchmark arguments (rust-old/benches/benchmarks.rs).
+var _bn_series = 0;
+var _bn_parallel = 0;
+
+# conduction(401, 0.01, 373.15, 293.15, 0.1).
+fn b_conduction(x): i64 {
+    var t, v = us_conduction(401.0, 0.01, 373.15, 293.15, 0.1);
+    return v;
+}
+
+# convection(25, 1, 373.15, 293.15).
+fn b_convection(x): i64 {
+    var q: f64 = us_convection(25.0, 1.0, 373.15, 293.15);
+    return q;
+}
+
+# radiation(0.9, 1, 473.15, 293.15).
+fn b_radiation(x): i64 {
+    var t, v = us_radiation(0.9, 1.0, 473.15, 293.15);
+    return v;
+}
+
+# series of [0.5, 1, 2, 0.3, 1.5].
+fn b_series(x): i64 {
+    var r: f64 = us_thermal_resistance_series(_bn_series, 5);
+    return r;
+}
+
+# parallel of [2, 3, 6].
+fn b_parallel(x): i64 {
+    var t, v = us_thermal_resistance_parallel(_bn_parallel, 3);
+    return v;
+}
+
+# heat_stored(1, 4186, 10).
+fn b_heat_stored(x): i64 {
+    var q: f64 = us_heat_stored(1.0, 4186.0, 10.0);
+    return q;
+}
+
+# thermal_diffusivity(401, 8960, 385).
+fn b_tr_diffusivity(x): i64 {
+    var t, v = us_thermal_diffusivity(401.0, 8960.0, 385.0);
+    return v;
+}
+
+# biot_number(25, 0.01, 401).
+fn b_biot(x): i64 {
+    var t, v = us_biot_number(25.0, 0.01, 401.0);
+    return v;
+}
+
+# lumped_capacitance(373.15, 293.15, 60, 100).
+fn b_lumped(x): i64 {
+    var r: f64 = us_lumped_capacitance(373.15, 293.15, 60.0, 100.0);
+    return r;
+}
+
+# reynolds_number(1, 0.1, 1e-6).
+fn b_reynolds(x): i64 {
+    var t, v = us_reynolds_number(1.0, 0.1, 0.000001);
+    return v;
+}
+
+# nusselt_dittus_boelter(50000, 0.7).
+fn b_nusselt_db(x): i64 {
+    var t, v = us_nusselt_dittus_boelter(50000.0, 0.7);
+    return v;
+}
+
+# Fills the two resistance lists the benchmarks use.
+fn bn_lists() {
+    _bn_series = alloc(40);
+    _bn_parallel = alloc(24);
+    var a: f64 = 0.5;
+    var b: f64 = 1.0;
+    var c: f64 = 2.0;
+    var d: f64 = 0.3;
+    var e: f64 = 1.5;
+    store64(_bn_series, a);
+    store64(_bn_series + 8, b);
+    store64(_bn_series + 16, c);
+    store64(_bn_series + 24, d);
+    store64(_bn_series + 32, e);
+    var p: f64 = 2.0;
+    var q: f64 = 3.0;
+    var r: f64 = 6.0;
+    store64(_bn_parallel, p);
+    store64(_bn_parallel + 8, q);
+    store64(_bn_parallel + 16, r);
+    return 0;
+}
+
 # The level test a span costs with DEBUG off (sakshi at INFO).
 fn b_span(m): i64 {
     _us_span_enter("us_bench", 8);
@@ -91,6 +185,18 @@ fn main(): i64 {
     bn_run("material/to_json (Cyrius only)", &b_to_json, &m, 100000);
     bn_run("material/from_json (Cyrius only)", &b_from_json, &m, 100000);
     bn_run("span, DEBUG off (Cyrius only)", &b_span, 0, 1000000);
+    bn_lists();
+    bn_run("transfer/conduction", &b_conduction, 0, 1000000);
+    bn_run("transfer/convection", &b_convection, 0, 1000000);
+    bn_run("transfer/radiation", &b_radiation, 0, 1000000);
+    bn_run("transfer/resistance_series", &b_series, 0, 1000000);
+    bn_run("transfer/resistance_parallel", &b_parallel, 0, 1000000);
+    bn_run("transfer/heat_stored", &b_heat_stored, 0, 1000000);
+    bn_run("transfer/diffusivity", &b_tr_diffusivity, 0, 1000000);
+    bn_run("transfer/biot_number", &b_biot, 0, 1000000);
+    bn_run("transfer/lumped_capacitance", &b_lumped, 0, 1000000);
+    bn_run("transfer/reynolds", &b_reynolds, 0, 1000000);
+    bn_run("transfer/nusselt_db", &b_nusselt_db, 0, 1000000);
     return 0;
 }
 

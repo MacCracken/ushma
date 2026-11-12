@@ -11,18 +11,50 @@ use crate::grids::Rng;
 use crate::tsv::{Class, Module, f, s};
 
 fn doubles() -> Vec<f64> {
-    let mut xs = vec![0.0, -0.0, f64::MAX, f64::MIN, f64::MIN_POSITIVE, f64::EPSILON, f64::NAN, f64::INFINITY];
-    xs.extend([f64::NEG_INFINITY, f64::from_bits(1), f64::from_bits(0x000F_FFFF_FFFF_FFFF)]);
+    let mut xs = vec![
+        0.0,
+        -0.0,
+        f64::MAX,
+        f64::MIN,
+        f64::MIN_POSITIVE,
+        f64::EPSILON,
+        f64::NAN,
+        f64::INFINITY,
+    ];
+    xs.extend([
+        f64::NEG_INFINITY,
+        f64::from_bits(1),
+        f64::from_bits(0x000F_FFFF_FFFF_FFFF),
+    ]);
     for k in -1074..=1023 {
         xs.push(2f64.powi(k));
     }
     for e in -323..=308 {
         let p: f64 = format!("1e{e}").parse().expect("power of ten");
-        xs.extend([p, f64::from_bits(p.to_bits() + 1), f64::from_bits(p.to_bits() - 1)]);
+        xs.extend([
+            p,
+            f64::from_bits(p.to_bits() + 1),
+            f64::from_bits(p.to_bits() - 1),
+        ]);
     }
-    for t in ["1e15", "1e16", "1e17", "9007199254740992", "9007199254740993", "1e-5", "1e-6", "1e-7", "0.0001"] {
+    for t in [
+        "1e15",
+        "1e16",
+        "1e17",
+        "9007199254740992",
+        "9007199254740993",
+        "1e-5",
+        "1e-6",
+        "1e-7",
+        "0.0001",
+    ] {
         let x: f64 = t.parse().expect("threshold");
-        xs.extend([x, f64::from_bits(x.to_bits() + 1), f64::from_bits(x.to_bits() - 1), -x]);
+        xs.extend([
+            x,
+            f64::from_bits(x.to_bits() + 1),
+            f64::from_bits(x.to_bits() - 1),
+            -x,
+        ]);
     }
     for i in 0..=1000 {
         xs.push(f64::from(i));

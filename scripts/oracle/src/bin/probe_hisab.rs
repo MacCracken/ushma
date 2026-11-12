@@ -144,7 +144,8 @@ fn run() -> Result<(), String> {
         let a = if k % 3 == 0 { 0.0 } else { 10.0 * rng.unit() };
         let b = a + 50.0 * rng.unit() + 1e-3;
         let n = [200, 200, 200, 2, 4, 10, 7, 1000][rng.below(8)];
-        let r = hisab::calc::integral_simpson(integrand, a, b, n).map_err(|e| format!("simpson: {e}"))?;
+        let r = hisab::calc::integral_simpson(integrand, a, b, n)
+            .map_err(|e| format!("simpson: {e}"))?;
         let _ = writeln!(s, "simpson {} {} {n} {}", hex(a), hex(b), hex(r));
     }
     std::fs::write(format!("{out}/simpson.txt"), &s).map_err(|e| e.to_string())?;
@@ -174,15 +175,19 @@ fn run() -> Result<(), String> {
         };
         let mut tn = ushma::numerical::ThermalNetwork::new(net.n);
         for &(a, b, r) in &net.res {
-            tn.add_resistance(a, b, r).map_err(|e| format!("add_resistance: {e}"))?;
+            tn.add_resistance(a, b, r)
+                .map_err(|e| format!("add_resistance: {e}"))?;
         }
         for &(node, t) in &net.fixed {
-            tn.set_fixed_temperature(node, t).map_err(|e| format!("set_fixed: {e}"))?;
+            tn.set_fixed_temperature(node, t)
+                .map_err(|e| format!("set_fixed: {e}"))?;
         }
         let api = tn.solve().map_err(|e| format!("solve: {e}"))?;
         for (fi, &ni) in free.iter().enumerate() {
             if api[ni].to_bits() != x[fi].to_bits() {
-                return Err(format!("network {rows}: the mirrored system's solution differs from solve()"));
+                return Err(format!(
+                    "network {rows}: the mirrored system's solution differs from solve()"
+                ));
             }
         }
         mirrored += 1;

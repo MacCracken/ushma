@@ -443,22 +443,36 @@ CALL = re.compile(r"(\w+)\((f:[0-9a-f]{16}(?:, f:[0-9a-f]{16})?)\) glibc f:([0-9
 
 
 def check_corrections(root, tables, rep, write):
-    """tests/golden/math.cr.tsv against the MPFR recomputation; each listed call against MPFR and glibc."""
+    """Every module's corrected oracle (math, and each modelled module): its `.cr.tsv` against the MPFR
+    recomputation, each listed call against MPFR and glibc. Returns the corrected rows per function."""
     gold = root / "tests/golden"
-    golden_text = (gold / "math.tsv").read_text()
+    mods = ["math"] + [m for m in MODELS if f"{m}.tsv" in tables]
+    for stale in sorted(gold.glob("*" + CR_SUFFIX)):
+        if stale.name[: -len(CR_SUFFIX)] not in mods:
+            rep.fail(stale.name, "no such modelled module")
+    per = {}
+    for mod in mods:
+        rows = tables.get(f"{mod}.tsv", [])
+        want = corrections(rows) if mod == "math" else model_corrections(mod, rows)
+        for fn, k in check_module_corrections(root, mod, rows, want, rep, write).items():
+            per[fn] = per.get(fn, 0) + k
+    return per
+
+
+def check_module_corrections(root, mod, rows, want, rep, write):
+    """tests/golden/<mod>.cr.tsv against `want`; each listed call against MPFR and glibc."""
+    gold = root / "tests/golden"
+    golden_text = (gold / f"{mod}.tsv").read_text()
     exact = recorded_platform(golden_text) == running_platform()
-    want = corrections(tables.get("math.tsv", []))
-    path = gold / f"math{CR_SUFFIX}"
+    path = gold / f"{mod}{CR_SUFFIX}"
     if write:
         if not exact:
             rep.fail("--write-corrections", f"this machine ({running_platform()}) is not the corpus's libm platform "
                      f"({recorded_platform(golden_text)}); nothing written")
         else:
-            path.write_text(cr_text("math", golden_text, want))
-            print(f"wrote tests/golden/math{CR_SUFFIX}: {len(want)} rows")
-    for stale in sorted(gold.glob("*" + CR_SUFFIX)):
-        if stale.name != f"math{CR_SUFFIX}":
-            rep.fail(stale.name, "no module but math has corrections")
+            if want or path.exists():
+                path.write_text(cr_text(mod, golden_text, want))
+                print(f"wrote tests/golden/{mod}{CR_SUFFIX}: {len(want)} rows")
     if not path.exists():
         if want:
             rep.fail(path.name, f"missing; {len(want)} rows need a correction (run with --write-corrections)")
@@ -468,7 +482,7 @@ def check_corrections(root, tables, rep, write):
     if lines[-1] != "":
         rep.fail(path.name, "no final newline")
     body = [ln for ln in lines[5:] if ln and not ln.startswith("#")]
-    golden_keys = {(fn, toks_text(ins)): toks_text(outs) for n, fn, cls, ins, outs in tables.get("math.tsv", [])}
+    golden_keys = {(fn, toks_text(ins)): toks_text(outs) for n, fn, cls, ins, outs in rows}
     got = []
     for k, line in enumerate(body, 6):
         cols = line.split("\t")
@@ -491,7 +505,9 @@ def check_corrections(root, tables, rep, write):
             name = m.group(1)
             args = [from_bits(int(a[2:], 16)) for a in m.group(2).split(", ")]
             g, c = from_bits(int(m.group(3), 16)), from_bits(int(m.group(4), 16))
-            ok = same(c, mpfr_call(name, args)) and not same(g, c) and outs == fbits(c)
+            ok = same(c, mpfr_call(name, args)) and not same(g, c)
+            if mod == "math":
+                ok = ok and outs == fbits(c)
             if exact:
                 lib = {v[0]: v[1] for v in CR_FN.values()}[name]
                 try:
@@ -504,12 +520,287 @@ def check_corrections(root, tables, rep, write):
                 rep.fail(f"{path.name}:{k}", f"{call}: not MPFR's correctly rounded value, or glibc's isn't different")
     if got != [w[:3] for w in want]:
         rep.fail(path.name, f"{len(got)} rows, the MPFR recomputation gives {len(want)} (or a different set/order)")
-    if exact and text != cr_text("math", golden_text, want):
+    if exact and text != cr_text(mod, golden_text, want):
         rep.fail(path.name, "differs from the corrected oracle (regenerate with --write-corrections)")
     per = {}
     for fn, *_ in want:
         per[fn] = per.get(fn, 0) + 1
     return per
+
+
+# ── module functions, modelled (M1c onward) ──
+# Each model recomputes one ushma 1.4.0 function from its inputs in Rust's operation order, in binary64 (Python
+# floats), with its transcendentals from a Prim: glibc's (ctypes libm, C's own special cases) to reproduce the golden
+# row exactly, or MPFR's correctly rounded to give the corrected oracle (ADR 0004). A model's result is its output
+# tokens.
+
+import ctypes as _ct
+
+_LIBM = _ct.CDLL("libm.so.6")
+for _n in ("exp", "pow"):
+    getattr(_LIBM, _n).restype = _ct.c_double
+_LIBM.exp.argtypes = [_ct.c_double]
+_LIBM.pow.argtypes = [_ct.c_double, _ct.c_double]
+
+
+class Prim:
+    """exp / pow from glibc (cr=False) or MPFR (cr=True); with cr=True, records each call glibc misrounds."""
+
+    def __init__(self, cr):
+        self.cr = cr
+        self.calls = []
+
+    def _one(self, name, args, g, c):
+        if not self.cr:
+            return g
+        if not same(g, c):
+            self.calls.append(f"{name}({', '.join(fbits(a) for a in args)}) glibc {fbits(g)} correctly rounded {fbits(c)}")
+        return c
+
+    def exp(self, x):
+        return self._one("exp", [x], _LIBM.exp(x), MPFR.exp(x))
+
+    def pow(self, x, y):
+        return self._one("pow", [x, y], _LIBM.pow(x, y), MPFR.pow(x, y))
+
+
+def fdiv(a, b):
+    """IEEE a / b (Python raises on a zero divisor)."""
+    if b == 0.0:
+        if a == 0.0 or math.isnan(a):
+            return math.nan
+        return math.copysign(math.inf, a) * math.copysign(1.0, b)
+    return a / b
+
+
+def fsqrt(x):
+    return math.nan if x < 0 or math.isnan(x) else math.sqrt(x)
+
+
+def fge(x, b):
+    return math.isfinite(x) and x >= b
+
+
+def fgt(x, b):
+    return math.isfinite(x) and x > b
+
+
+def F(x):
+    return [fbits(x)]
+
+
+def E(name):
+    return [f"E:{name}"]
+
+
+TINY = 1e-30
+
+
+def m_conduction(a, p):
+    k, area, th, tc, l = a
+    if not fge(k, 0.0):
+        return E("InvalidConductivity")
+    if not fge(abs(l), TINY):
+        return E("DivisionByZero")
+    return F(fdiv(k * area * (th - tc), l))
+
+
+def m_radiation(a, p):
+    e, area, ts, tr = a
+    if not (0.0 <= e <= 1.0):
+        return E("InvalidParameter")
+    if not fge(ts, 0.0) or not fge(tr, 0.0):
+        return E("InvalidTemperature")
+    return F(e * 5.670374419e-8 * area * (powidf2(ts, 4) - powidf2(tr, 4)))
+
+
+def m_r_cond(a, p):
+    k, area, l = a
+    if not fgt(k, 0.0):
+        return E("InvalidConductivity")
+    if not fgt(area, 0.0) or not fge(l, 0.0):
+        return E("InvalidParameter")
+    d = k * area
+    if not fge(abs(d), TINY):
+        return E("DivisionByZero")
+    return F(fdiv(l, d))
+
+
+def m_r_conv(a, p):
+    h, area = a
+    if not fge(h, 0.0) or not fge(area, 0.0):
+        return E("InvalidParameter")
+    d = h * area
+    if not fge(abs(d), TINY):
+        return E("DivisionByZero")
+    return F(fdiv(1.0, d))
+
+
+def m_series(a, p):
+    s = -0.0
+    for r in a:
+        s = s + r
+    return F(s)
+
+
+def m_parallel(a, p):
+    for r in a:
+        if not fgt(r, 0.0):
+            return E("InvalidParameter")
+    s = -0.0
+    for r in a:
+        s = s + fdiv(1.0, r)
+    if not fge(abs(s), TINY):
+        return E("DivisionByZero")
+    return F(fdiv(1.0, s))
+
+
+def m_diffusivity(a, p):
+    k, rho, cp = a
+    if not fge(k, 0.0):
+        return E("InvalidConductivity")
+    if not fge(rho, 0.0):
+        return E("InvalidParameter")
+    if not fge(cp, 0.0):
+        return E("InvalidSpecificHeat")
+    d = rho * cp
+    if not fge(abs(d), TINY):
+        return E("DivisionByZero")
+    return F(fdiv(k, d))
+
+
+def m_biot(a, p):
+    h, l, k = a
+    if not fge(h, 0.0) or not fge(l, 0.0):
+        return E("InvalidParameter")
+    if not fge(k, TINY):
+        return E("DivisionByZero")
+    return F(fdiv(h * l, k))
+
+
+def m_reynolds(a, p):
+    v, l, nu = a
+    if not fgt(nu, 0.0):
+        return E("InvalidParameter")
+    return F(fdiv(v * l, nu))
+
+
+def m_prandtl(a, p):
+    nu, al = a
+    if not fgt(nu, 0.0):
+        return E("InvalidParameter")
+    if not fgt(al, 0.0):
+        return E("DivisionByZero")
+    return F(fdiv(nu, al))
+
+
+def m_nusselt(a, p):
+    h, l, k = a
+    if not fge(k, TINY):
+        return E("DivisionByZero")
+    return F(fdiv(h * l, k))
+
+
+def m_dittus(a, p):
+    re_, pr = a
+    if not fgt(re_, 0.0) or not fgt(pr, 0.0):
+        return E("InvalidParameter")
+    return F(0.023 * p.pow(re_, 0.8) * p.pow(pr, 0.4))
+
+
+def m_natural(a, p):
+    ra, pr = a
+    if not fge(ra, 0.0) or not fgt(pr, 0.0):
+        return E("InvalidParameter")
+    psi = p.pow(1.0 + p.pow(fdiv(0.492, pr), 9.0 / 16.0), -8.0 / 27.0)
+    return F(powidf2(0.825 + 0.387 * p.pow(ra, 1.0 / 6.0) * psi, 2))
+
+
+def _blasius(x, re_):
+    if not fgt(x, 0.0) or not fgt(re_, 0.0):
+        return None
+    return fdiv(5.0 * x, fsqrt(re_))
+
+
+def m_blasius(a, p):
+    d = _blasius(*a)
+    return E("InvalidParameter") if d is None else F(d)
+
+
+def m_thermal_bl(a, p):
+    x, re_, pr = a
+    if not fgt(pr, 0.0):
+        return E("InvalidParameter")
+    d = _blasius(x, re_)
+    if d is None:
+        return E("InvalidParameter")
+    return F(fdiv(d, p.pow(pr, 1.0 / 3.0)))
+
+
+MODELS = {
+    "transfer": {
+        "transfer::conduction": m_conduction,
+        "transfer::convection": lambda a, p: F(a[0] * a[1] * (a[2] - a[3])),
+        "transfer::radiation": m_radiation,
+        "transfer::thermal_resistance_conduction": m_r_cond,
+        "transfer::thermal_resistance_convection": m_r_conv,
+        "transfer::thermal_resistance_series": m_series,
+        "transfer::thermal_resistance_parallel": m_parallel,
+        "transfer::heat_stored": lambda a, p: F(a[0] * a[1] * a[2]),
+        "transfer::thermal_diffusivity": m_diffusivity,
+        "transfer::biot_number": m_biot,
+        "transfer::lumped_capacitance": lambda a, p: F(a[1] + (a[0] - a[1]) * p.exp(fdiv(-a[2], a[3]))),
+        "transfer::reynolds_number": m_reynolds,
+        "transfer::prandtl_number": m_prandtl,
+        "transfer::nusselt_number": m_nusselt,
+        "transfer::nusselt_dittus_boelter": m_dittus,
+        "transfer::nusselt_natural_vertical": m_natural,
+        "transfer::boundary_layer_thickness": m_blasius,
+        "transfer::thermal_boundary_layer": m_thermal_bl,
+    },
+}
+
+
+def model_args(ins):
+    """A row's inputs as floats; a `v:n` sequence is its n elements."""
+    if ins and ins[0].startswith("v:"):
+        return [tok_f(t) for t in ins[1:]]
+    return [tok_f(t) for t in ins]
+
+
+def check_models(tables, rep, exact):
+    """Each modelled module's rows, recomputed with glibc's primitives: the outputs must be the golden row's, token for
+    token (NaN matching any NaN). Off the corpus's libm platform only rows with no transcendental are checked."""
+    for mod, models in MODELS.items():
+        for n, fn, cls, ins, outs in tables.get(f"{mod}.tsv", []):
+            model = models.get(fn)
+            if model is None:
+                rep.fail(f"{mod}.tsv:{n}", f"{fn} has no model")
+                continue
+            if cls == "C" and not exact:
+                continue
+            got = model(model_args(ins), Prim(False))
+            if len(got) == len(outs) and all(
+                g == w or (g.startswith("f:") and w.startswith("f:") and same(tok_f(g), tok_f(w))) for g, w in zip(got, outs)
+            ):
+                rep.ok()
+            else:
+                rep.fail(f"{mod}.tsv:{n}", f"{fn} {toks_text(ins)}: model {got}, golden {outs}")
+
+
+def model_corrections(mod, rows):
+    """A modelled module's class-C rows whose correctly rounded outputs differ from the oracle's."""
+    out = []
+    models = MODELS[mod]
+    for n, fn, cls, ins, outs in rows:
+        if cls != "C":
+            continue
+        p = Prim(True)
+        got = models[fn](model_args(ins), p)
+        if [*got] == [*outs] or not p.calls:
+            continue
+        out.append((fn, toks_text(ins), " ".join(got), "; ".join([f"oracle {toks_text(outs)}"] + p.calls)))
+    return out
 
 
 # ── fmtf: the f64 text, checked by its properties ──
@@ -625,13 +916,15 @@ def main():
     check_tables(root, tables, rep)
     counts = check_math(tables.get("math.tsv", []), rep)
     check_fmtf(tables.get("fmtf.tsv", []), rep)
+    exact = recorded_platform((golden_dir / "math.tsv").read_text()) == running_platform()
+    check_models(tables, rep, exact)
     per = check_corrections(root, tables, rep, "--write-corrections" in sys.argv[2:])
     total = sum(len(v) for v in tables.values())
     print(f"files: {len(files)}; rows: {total}; math classes: {dict(sorted(counts.items()))}")
-    print(f"ADR 0004 corrected oracle (MPFR {MPFR.VERSION}): math rows glibc misrounds: "
+    print(f"ADR 0004 corrected oracle (MPFR {MPFR.VERSION}): rows glibc misrounds: "
           f"{sum(per.values())} {dict(sorted(per.items()))}")
     print(f"independently recomputed: {rep.checked} (constants, src/constants.cyr, table presets, math classes A and B,"
-          " fmtf's text by its properties)")
+          " fmtf's text by its properties, modelled modules)")
     print(f"FAILURES: {rep.failures}")
     return 1 if rep.failures else 0
 

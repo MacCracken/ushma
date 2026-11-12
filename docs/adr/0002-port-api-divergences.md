@@ -26,10 +26,11 @@ that moves results noticeably goes to the maintainer first, and the decision is 
 | 6 | `POST /v1/agents/register`, reads `agent_id`. No daimon has ever served that path or sent that field | `POST /v1/agents`, reads `id`, as daimon 2.5.6 serves (prakash made the same correction in 2.5.1) | the oracle's path is mapped to `/v1/agents`; response handling is checked against a stub answering as daimon 2.5.6 |
 | 7 | reqwest's `timeout(30 s)` bounds the whole request | sandhi's `total_ms` alone doesn't bound a server that is silent before its first byte (probe 7), so the client sets `total_ms` **and** `read_ms`, 30 s each | stub rows: a silent server gives the timeout error |
 | 8 | reqwest sends exactly host, content-type, content-length, authorization and `accept: */*` | sandhi adds `User-Agent: sandhi/<v>`, `Accept-Encoding: identity`, `TE: trailers` and `Connection: close`. The port sets `Accept: */*` and writes the body in serde's key order (`capabilities` before `name`) | body bytes class A; the oracle's five headers by value, names case-insensitive; sandhi's four transport headers listed as extra |
+| 9 | correlation exponents written as Rust doubles: Dittus–Boelter's `powf(0.8)`, `powf(0.4)`; Churchill–Chu's `powf(1.0 / 6.0)`, `powf(9.0 / 16.0)`, `powf(-8.0 / 27.0)`; Pohlhausen's `powf(1.0 / 3.0)` | the same doubles, through the correctly rounded `_us_cr_pow`. Each is a fitted or approximate correlation's exponent, accurate to a few percent, so restoring the "exact" 1/6 or 1/3 would change results by under 1 ulp of a quantity known to ~10 %; the double Rust wrote is the definition. kimiya's #16 differs on purpose: there 2^(1/6) is a physical constant (the Lennard-Jones minimum) | class C against the corrected oracle: no mapped rows |
 
-Exact-constant misses in Rust's formulas (exponents written as rounded decimals, such as
-`powf(1.0/3.0)` and `powf(1.0/6.0)`) are fixed under ADR 0004 as each module ports, one row per
-family here.
+Exact-constant misses in Rust's formulas are reviewed as each module ports, one row per family here. An
+exponent that is a physical constant is restored to its exact value; a correlation's fitted exponent is kept as the
+double Rust wrote (row 9).
 
 ## Consequences
 

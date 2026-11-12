@@ -46,7 +46,16 @@ fn presets() -> Vec<ThermalMaterial> {
 }
 
 fn method_rows(m: &mut Module) {
-    let edges = [0.0, -0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e-300, 1e300];
+    let edges = [
+        0.0,
+        -0.0,
+        -1.0,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        1e-300,
+        1e300,
+    ];
     let mut ms = presets();
     for k in [401.0, 0.0263, 2200.0].iter().chain(edges.iter()) {
         for cp in [385.0, 4186.0].iter().chain(edges.iter()) {
@@ -60,23 +69,68 @@ fn method_rows(m: &mut Module) {
         let k = r.log_uniform(-3.0, 4.0);
         let cp = r.log_uniform(1.0, 4.5);
         let rho = r.log_uniform(-1.0, 4.5);
-        ms.push(mat("seeded", k, cp, rho, r.uniform(0.0, 4000.0), r.uniform(0.0, 6000.0)));
+        ms.push(mat(
+            "seeded",
+            k,
+            cp,
+            rho,
+            r.uniform(0.0, 4000.0),
+            r.uniform(0.0, 6000.0),
+        ));
     }
     for x in &ms {
         let ins = fields(x);
-        m.row("material::diffusivity", Class::B, &ins, &[f(x.diffusivity())]);
-        m.row("material::volumetric_heat_capacity", Class::B, &ins, &[f(x.volumetric_heat_capacity())]);
+        m.row(
+            "material::diffusivity",
+            Class::B,
+            &ins,
+            &[f(x.diffusivity())],
+        );
+        m.row(
+            "material::volumetric_heat_capacity",
+            Class::B,
+            &ins,
+            &[f(x.volumetric_heat_capacity())],
+        );
     }
 }
 
 fn json_values() -> Vec<ThermalMaterial> {
     let mut v = presets();
-    for name in ["", "a\"b\\c/d", "tab\tnew\nline\r", "ctl\u{1}\u{1f}\u{7f}", "\u{e9}\u{1f600} ok", "\u{0}nul"] {
+    for name in [
+        "",
+        "a\"b\\c/d",
+        "tab\tnew\nline\r",
+        "ctl\u{1}\u{1f}\u{7f}",
+        "\u{e9}\u{1f600} ok",
+        "\u{0}nul",
+    ] {
         v.push(mat(name, 1.0, 2.0, 3.0, 4.0, 5.0));
     }
-    v.push(mat("specials", f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.0, 0.0));
-    v.push(mat("extremes", f64::MAX, f64::MIN_POSITIVE, f64::from_bits(1), 1e16, 1e-5));
-    v.push(mat("forms", 1e15, 123_456_789_012_345_680.0, 0.000_012_5, 9.999_999_999_999_999e-6, 0.1 + 0.2));
+    v.push(mat(
+        "specials",
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        -0.0,
+        0.0,
+    ));
+    v.push(mat(
+        "extremes",
+        f64::MAX,
+        f64::MIN_POSITIVE,
+        f64::from_bits(1),
+        1e16,
+        1e-5,
+    ));
+    v.push(mat(
+        "forms",
+        1e15,
+        123_456_789_012_345_680.0,
+        0.000_012_5,
+        9.999_999_999_999_999e-6,
+        0.1 + 0.2,
+    ));
     v
 }
 
@@ -92,7 +146,12 @@ fn json_rows(m: &mut Module) {
     let mut docs = Vec::new();
     for x in json_values() {
         let doc = serde_json::to_string(&x).expect("serialize");
-        m.row("material::to_json", Class::A, &fields(&x), &[s(doc.clone())]);
+        m.row(
+            "material::to_json",
+            Class::A,
+            &fields(&x),
+            &[s(doc.clone())],
+        );
         docs.push(doc);
     }
     let copper = docs[0].clone();
@@ -120,7 +179,12 @@ fn json_rows(m: &mut Module) {
         docs.push(doc.to_string());
     }
     for doc in &docs {
-        m.row("material::from_json", Class::A, &[s(doc.clone())], &decoded(doc));
+        m.row(
+            "material::from_json",
+            Class::A,
+            &[s(doc.clone())],
+            &decoded(doc),
+        );
     }
 }
 

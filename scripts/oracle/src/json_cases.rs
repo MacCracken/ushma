@@ -67,7 +67,8 @@ impl Tok<'_> {
                             // U+FFFD here, as RFC 8259 readers commonly decode it.
                             let mut cp = self.hex4()?;
                             if (0xD800..0xDC00).contains(&cp) {
-                                let pair = self.b.get(self.i) == Some(&b'\\') && self.b.get(self.i + 1) == Some(&b'u');
+                                let pair = self.b.get(self.i) == Some(&b'\\')
+                                    && self.b.get(self.i + 1) == Some(&b'u');
                                 let lo = if pair {
                                     let save = self.i;
                                     self.i += 2;
@@ -187,7 +188,12 @@ impl Tok<'_> {
             }
             _ => {
                 let s = self.i;
-                while self.i < self.b.len() && matches!(self.b[self.i], b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9') {
+                while self.i < self.b.len()
+                    && matches!(
+                        self.b[self.i],
+                        b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9'
+                    )
+                {
                     self.i += 1;
                 }
                 let t = std::str::from_utf8(&self.b[s..self.i]).ok()?;
@@ -207,7 +213,11 @@ impl Tok<'_> {
 }
 
 pub fn stream(doc: &[u8]) -> Option<String> {
-    let mut t = Tok { b: doc, i: 0, out: Vec::new() };
+    let mut t = Tok {
+        b: doc,
+        i: 0,
+        out: Vec::new(),
+    };
     t.value()?;
     t.ws();
     if t.i != doc.len() {
@@ -226,7 +236,11 @@ pub fn members(doc: &str) -> Option<Vec<(String, String)>> {
     let mut i = 1;
     while i < b.len() - 1 {
         let ks = i;
-        let mut t = Tok { b, i, out: Vec::new() };
+        let mut t = Tok {
+            b,
+            i,
+            out: Vec::new(),
+        };
         t.string()?;
         let key = doc[ks..t.i].to_string();
         t.i += 1;
@@ -262,13 +276,25 @@ pub fn variants(base: &str) -> Vec<(String, Vec<u8>)> {
     add("bom", [&[0xEF, 0xBB, 0xBF][..], base.as_bytes()].concat());
     if let Some(m) = members(base) {
         let ins = |pre: &str| format!("{{{pre}{}", &base[1..]).into_bytes();
-        add("trailing_comma", format!("{},}}", &base[..base.len() - 1]).into_bytes());
+        add(
+            "trailing_comma",
+            format!("{},}}", &base[..base.len() - 1]).into_bytes(),
+        );
         add("dup_first", ins(&format!("{}:{},", m[0].0, m[0].1)));
-        add("unknown", ins("\"zz_unknown\":{\"a\":[1,2,{\"b\":null}],\"c\":\"x\"},"));
+        add(
+            "unknown",
+            ins("\"zz_unknown\":{\"a\":[1,2,{\"b\":null}],\"c\":\"x\"},"),
+        );
         add("unknown_dup", ins("\"zz\":1,\"zz\":2,"));
         add("unknown_nested_dup", ins("\"zz\":{\"a\":1,\"a\":2},"));
-        add("deep_100", ins(&format!("\"zz\":{}{},", "[".repeat(100), "]".repeat(100))));
-        add("deep_200", ins(&format!("\"zz\":{}{},", "[".repeat(200), "]".repeat(200))));
+        add(
+            "deep_100",
+            ins(&format!("\"zz\":{}{},", "[".repeat(100), "]".repeat(100))),
+        );
+        add(
+            "deep_200",
+            ins(&format!("\"zz\":{}{},", "[".repeat(200), "]".repeat(200))),
+        );
         add("missing_first", obj(&m[1..]).into_bytes());
         add("empty_obj", b"{}".to_vec());
         let mut r = m.clone();
@@ -276,7 +302,10 @@ pub fn variants(base: &str) -> Vec<(String, Vec<u8>)> {
         add("reorder", obj(&r).into_bytes());
         let vals: Vec<&str> = m.iter().map(|(_, x)| x.as_str()).collect();
         add("seq_form", format!("[{}]", vals.join(",")).into_bytes());
-        add("seq_short", format!("[{}]", vals[..vals.len() - 1].join(",")).into_bytes());
+        add(
+            "seq_short",
+            format!("[{}]", vals[..vals.len() - 1].join(",")).into_bytes(),
+        );
         add("seq_long", format!("[{},0]", vals.join(",")).into_bytes());
         let with = |i: usize, val: &str| {
             let mut c = m.clone();
@@ -302,7 +331,10 @@ pub fn variants(base: &str) -> Vec<(String, Vec<u8>)> {
                 ("f_inf", "Infinity"),
                 ("f_string", "\"1.5\""),
                 ("f_bool", "true"),
-                ("f_long", "3.14159265358979323846264338327950288419716939937510582097494459"),
+                (
+                    "f_long",
+                    "3.14159265358979323846264338327950288419716939937510582097494459",
+                ),
                 ("f_halfway", "9007199254740993"),
                 ("f_i64_over", "9223372036854775808"),
             ] {
@@ -324,7 +356,10 @@ pub fn variants(base: &str) -> Vec<(String, Vec<u8>)> {
         }
         if let Some(i) = m.iter().position(|(_, x)| x.starts_with('"')) {
             for (k, val) in [
-                ("s_escapes", "\"\\u00e9\\ud83d\\ude00\\n\\t\\\"\\\\\\/\\b\\f\\r\\u0000\""),
+                (
+                    "s_escapes",
+                    "\"\\u00e9\\ud83d\\ude00\\n\\t\\\"\\\\\\/\\b\\f\\r\\u0000\"",
+                ),
                 ("s_lone_high", "\"\\ud800\""),
                 ("s_lone_low", "\"\\udc00\""),
                 ("s_bad_escape", "\"\\x41\""),
@@ -357,9 +392,15 @@ pub fn variants(base: &str) -> Vec<(String, Vec<u8>)> {
         let name = &base[1..base.len() - 1];
         add("e_obj_null", format!("{{{base}:null}}").into_bytes());
         add("e_unknown", b"\"Nope\"".to_vec());
-        add("e_lower", format!("\"{}\"", name.to_lowercase()).into_bytes());
+        add(
+            "e_lower",
+            format!("\"{}\"", name.to_lowercase()).into_bytes(),
+        );
         add("e_int", b"0".to_vec());
-        add("e_obj_two", format!("{{{base}:null,\"Nope\":null}}").into_bytes());
+        add(
+            "e_obj_two",
+            format!("{{{base}:null,\"Nope\":null}}").into_bytes(),
+        );
         add("e_seq", format!("[{base}]").into_bytes());
     }
     v

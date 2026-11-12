@@ -1,0 +1,227 @@
+# transfer tests (M1c: conduction to boundary layers).
+#
+# Rust 1.4.0's transfer.rs tests for these 18 functions, ported one for one (32), plus the part-1 assertions of the
+# two shared ones (`test_transfer_validation_consistency`, `test_transfer_rejects_nan`; their part-2 assertions join
+# with M1d). Each also checks the refusal's code, which Rust's `is_err()` leaves open.
+
+include "src/constants.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+include "src/transfer.cyr"
+
+var _nan: f64 = 0.0;
+var _inf: f64 = 0.0;
+
+# |a − b| ≤ tol as 1 or 0.
+fn close(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    if (d < 0.0) { d = 0.0 - d; }
+    if (d <= tol) { return 1; }
+    return 0;
+}
+
+# The Ok value of a Result (asserting it is Ok).
+fn okv(t, v, name): i64 {
+    assert_eq(is_ok(t), 1, name);
+    return v;
+}
+
+# Asserts a Result is Err(code).
+fn errc(t, v, code, name) {
+    assert_eq(is_err_result(t), 1, name);
+    if (is_err_result(t) == 1) { assert_streq(us_error_name(v), us_error_name(code), name); }
+    return 0;
+}
+
+# Fourier conduction: flux, zero gradient, and its refusals (Rust's conduction tests).
+fn test_conduction() {
+    test_group("conduction");
+    var t, v = us_conduction(401.0, 0.01, 373.15, 293.15, 0.1);
+    var q: f64 = okv(t, v, "positive flux is Ok");
+    assert(q > 0.0, "positive flux");
+    var t2, v2 = us_conduction(401.0, 0.01, 300.0, 300.0, 0.1);
+    var q2: f64 = okv(t2, v2, "zero gradient is Ok");
+    assert_eq(close(q2, 0.0, 0.0000000001), 1, "zero gradient, zero flux");
+    var t3, v3 = us_conduction(-1.0, 1.0, 373.0, 293.0, 0.1);
+    errc(t3, v3, US_ERR_INVALID_CONDUCTIVITY, "negative conductivity");
+    var t4, v4 = us_conduction(401.0, 1.0, 373.0, 293.0, 0.0);
+    errc(t4, v4, US_ERR_DIVISION_BY_ZERO, "zero thickness");
+    var t5, v5 = us_conduction(_nan, 1.0, 373.0, 293.0, 0.1);
+    errc(t5, v5, US_ERR_INVALID_CONDUCTIVITY, "NaN conductivity");
+    var t6, v6 = us_conduction(_inf, 1.0, 373.0, 293.0, 0.1);
+    errc(t6, v6, US_ERR_INVALID_CONDUCTIVITY, "infinite conductivity");
+    var t7, v7 = us_conduction(401.0, 1.0, 373.0, 293.0, _nan);
+    errc(t7, v7, US_ERR_DIVISION_BY_ZERO, "NaN thickness");
+}
+
+# Newton cooling and Stefan–Boltzmann radiation, with radiation's emissivity and temperature refusals.
+fn test_convection_radiation() {
+    test_group("convection, radiation");
+    var q: f64 = us_convection(25.0, 1.0, 373.15, 293.15);
+    assert_eq(close(q, 2000.0, 1.0), 1, "h = 25, A = 1, dT = 80: 2000 W");
+    var t, v = us_radiation(1.0, 1.0, 373.15, 293.15);
+    var r: f64 = okv(t, v, "blackbody radiation is Ok");
+    assert(r > 0.0, "net radiation outward");
+    var t2, v2 = us_radiation(1.0, 1.0, -10.0, 293.15);
+    errc(t2, v2, US_ERR_INVALID_TEMPERATURE, "negative surface temperature");
+    var t3, v3 = us_radiation(-0.1, 1.0, 373.0, 293.0);
+    errc(t3, v3, US_ERR_INVALID_PARAMETER, "emissivity below 0");
+    var t4, v4 = us_radiation(1.1, 1.0, 373.0, 293.0);
+    errc(t4, v4, US_ERR_INVALID_PARAMETER, "emissivity above 1");
+    var t5, v5 = us_radiation(0.0, 1.0, 373.0, 293.0);
+    assert_eq(is_ok(t5), 1, "emissivity 0 is valid");
+    var t6, v6 = us_radiation(1.0, 1.0, 373.0, 293.0);
+    assert_eq(is_ok(t6), 1, "emissivity 1 is valid");
+    var t7, v7 = us_radiation(_nan, 1.0, 373.0, 293.0);
+    errc(t7, v7, US_ERR_INVALID_PARAMETER, "NaN emissivity");
+    var t8, v8 = us_radiation(0.9, 1.0, _nan, 293.0);
+    errc(t8, v8, US_ERR_INVALID_TEMPERATURE, "NaN surface temperature");
+}
+
+# Series and parallel resistance, and the conduction and convection resistances' refusals.
+fn test_resistances() {
+    test_group("thermal resistances");
+    var l[24];
+    var one: f64 = 1.0;
+    var two: f64 = 2.0;
+    var three: f64 = 3.0;
+    store64(&l, one);
+    store64(&l + 8, two);
+    store64(&l + 16, three);
+    var s: f64 = us_thermal_resistance_series(&l, 3);
+    assert_eq(close(s, 6.0, 0.0000000001), 1, "series 1 + 2 + 3");
+    store64(&l, two);
+    store64(&l + 8, two);
+    var t, v = us_thermal_resistance_parallel(&l, 2);
+    var p: f64 = okv(t, v, "parallel 2 || 2 is Ok");
+    assert_eq(close(p, 1.0, 0.0000000001), 1, "parallel 2 || 2 = 1");
+    var five: f64 = 5.0;
+    store64(&l, five);
+    var t2, v2 = us_thermal_resistance_parallel(&l, 1);
+    var p2: f64 = okv(t2, v2, "a single resistance is Ok");
+    assert_eq(close(p2, 5.0, 0.0000000001), 1, "parallel of one is itself");
+    var neg: f64 = -1.0;
+    store64(&l, two);
+    store64(&l + 8, neg);
+    var t3, v3 = us_thermal_resistance_parallel(&l, 2);
+    errc(t3, v3, US_ERR_INVALID_PARAMETER, "a negative parallel resistance");
+    store64(&l + 8, _nan);
+    var t4, v4 = us_thermal_resistance_parallel(&l, 2);
+    errc(t4, v4, US_ERR_INVALID_PARAMETER, "a NaN parallel resistance");
+    var t5, v5 = us_thermal_resistance_convection(0.0, 1.0);
+    errc(t5, v5, US_ERR_DIVISION_BY_ZERO, "h = 0");
+    var t6, v6 = us_thermal_resistance_convection(25.0, 0.0);
+    errc(t6, v6, US_ERR_DIVISION_BY_ZERO, "A = 0");
+    var t7, v7 = us_thermal_resistance_conduction(-1.0, -1.0, 0.1);
+    errc(t7, v7, US_ERR_INVALID_CONDUCTIVITY, "negative k and A");
+    var t8, v8 = us_thermal_resistance_conduction(_nan, 1.0, 0.1);
+    errc(t8, v8, US_ERR_INVALID_CONDUCTIVITY, "NaN k");
+}
+
+# Heat stored, diffusivity, the Biot number and lumped-capacitance cooling.
+fn test_storage_diffusivity_biot() {
+    test_group("heat stored, diffusivity, Biot, lumped capacitance");
+    var q: f64 = us_heat_stored(1.0, 4186.0, 10.0);
+    assert_eq(close(q, 41860.0, 1.0), 1, "1 kg of water, 10 K: 41860 J");
+    var q2: f64 = us_heat_stored(1.0, 4186.0, -10.0);
+    assert(q2 < 0.0, "cooling stores negative heat");
+    var t, v = us_thermal_diffusivity(401.0, 8960.0, 385.0);
+    var a: f64 = okv(t, v, "copper diffusivity is Ok");
+    var rel: f64 = (a - 0.000116) / 0.000116;
+    assert_eq(close(rel, 0.0, 0.01), 1, "copper ~ 1.16e-4 m^2/s");
+    var t2, v2 = us_thermal_diffusivity(401.0, 0.0, 385.0);
+    errc(t2, v2, US_ERR_DIVISION_BY_ZERO, "zero density");
+    var t3, v3 = us_thermal_diffusivity(-401.0, 8960.0, 385.0);
+    errc(t3, v3, US_ERR_INVALID_CONDUCTIVITY, "negative conductivity");
+    var t4, v4 = us_biot_number(25.0, 0.01, 401.0);
+    var bi: f64 = okv(t4, v4, "Biot is Ok");
+    assert(bi < 0.1, "lumped capacitance valid for copper");
+    var t5, v5 = us_biot_number(25.0, 0.01, 0.0);
+    errc(t5, v5, US_ERR_DIVISION_BY_ZERO, "zero conductivity");
+    var t6, v6 = us_biot_number(25.0, 0.01, -401.0);
+    errc(t6, v6, US_ERR_DIVISION_BY_ZERO, "negative conductivity");
+    var t0: f64 = us_lumped_capacitance(373.15, 293.15, 0.0, 100.0);
+    assert_eq(close(t0, 373.15, 0.0000000001), 1, "at t = 0 the initial temperature");
+    var ti: f64 = us_lumped_capacitance(373.15, 293.15, 10000.0, 100.0);
+    assert_eq(close(ti, 293.15, 1.0), 1, "long after, the environment's");
+}
+
+# Reynolds, Prandtl and Nusselt numbers, Dittus–Boelter and Churchill–Chu.
+fn test_dimensionless() {
+    test_group("dimensionless numbers");
+    var t, v = us_reynolds_number(1.0, 0.1, 0.000001);
+    var re: f64 = okv(t, v, "Reynolds is Ok");
+    assert_eq(close(re, 100000.0, 1.0), 1, "water in a 0.1 m pipe: Re = 1e5");
+    var t2, v2 = us_reynolds_number(1.0, 0.1, 0.0);
+    errc(t2, v2, US_ERR_INVALID_PARAMETER, "zero viscosity");
+    var t3, v3 = us_reynolds_number(1.0, 0.1, -0.000001);
+    errc(t3, v3, US_ERR_INVALID_PARAMETER, "negative viscosity");
+    var t4, v4 = us_reynolds_number(1.0, 0.1, _nan);
+    errc(t4, v4, US_ERR_INVALID_PARAMETER, "NaN viscosity");
+    var t5, v5 = us_prandtl_number(0.000016, 0.000022);
+    var pr: f64 = okv(t5, v5, "Prandtl is Ok");
+    assert_eq(close(pr, 0.727, 0.01), 1, "air: Pr ~ 0.73");
+    var t6, v6 = us_prandtl_number(-0.000001, 0.00000014);
+    errc(t6, v6, US_ERR_INVALID_PARAMETER, "negative viscosity");
+    var t7, v7 = us_nusselt_number(25.0, 0.1, 0.6);
+    var nu: f64 = okv(t7, v7, "Nusselt is Ok");
+    var want: f64 = 25.0 * 0.1 / 0.6;
+    assert_eq(close(nu, want, 0.0000000001), 1, "Nu = hL/k");
+    var t8, v8 = us_nusselt_number(25.0, 0.01, -0.6);
+    errc(t8, v8, US_ERR_DIVISION_BY_ZERO, "negative conductivity");
+    var t9, v9 = us_nusselt_dittus_boelter(50000.0, 0.7);
+    var db: f64 = okv(t9, v9, "Dittus-Boelter is Ok");
+    assert(db > 100.0 && db < 150.0, "Re = 5e4, Pr = 0.7: Nu ~ 120");
+    var ta, va = us_nusselt_dittus_boelter(0.0, 0.7);
+    errc(ta, va, US_ERR_INVALID_PARAMETER, "Re = 0");
+    var tb, vb = us_nusselt_dittus_boelter(50000.0, 0.0);
+    errc(tb, vb, US_ERR_INVALID_PARAMETER, "Pr = 0");
+    var tc, vc = us_nusselt_dittus_boelter(_nan, 0.7);
+    errc(tc, vc, US_ERR_INVALID_PARAMETER, "NaN Re");
+    var td, vd = us_nusselt_natural_vertical(1000000000.0, 0.7);
+    var nn: f64 = okv(td, vd, "Churchill-Chu is Ok");
+    assert(nn > 50.0, "Ra = 1e9: significant convection");
+    var te, ve = us_nusselt_natural_vertical(0.0, 0.7);
+    var n0: f64 = okv(te, ve, "Ra = 0 is Ok");
+    var c2: f64 = 0.825 * 0.825;
+    assert_eq(close(n0, c2, 0.01), 1, "Ra = 0: Nu = 0.825^2, pure conduction");
+}
+
+# The Blasius and thermal boundary-layer thicknesses.
+fn test_boundary_layers() {
+    test_group("boundary layers");
+    var t, v = us_boundary_layer_thickness(0.5, 100000.0);
+    var d: f64 = okv(t, v, "Blasius is Ok");
+    assert_eq(close(d, 0.00791, 0.001), 1, "x = 0.5 m, Re = 1e5: 7.9 mm");
+    var t2, v2 = us_thermal_boundary_layer(0.5, 100000.0, 0.7);
+    var dt: f64 = okv(t2, v2, "thermal layer is Ok");
+    assert(dt > d, "Pr < 1: the thermal layer is thicker");
+    var t3, v3 = us_boundary_layer_thickness(0.0, 100000.0);
+    errc(t3, v3, US_ERR_INVALID_PARAMETER, "x = 0");
+    var t4, v4 = us_boundary_layer_thickness(0.5, 0.0);
+    errc(t4, v4, US_ERR_INVALID_PARAMETER, "Re = 0");
+    var t5, v5 = us_thermal_boundary_layer(0.5, 100000.0, 0.0);
+    errc(t5, v5, US_ERR_INVALID_PARAMETER, "Pr = 0");
+}
+
+# Runs every group and returns the failure count.
+fn main() {
+    alloc_init();
+    _nan = 0.0 / 0.0;
+    _inf = 1.0 / 0.0;
+    test_conduction();
+    test_convection_radiation();
+    test_resistances();
+    test_storage_diffusivity_biot();
+    test_dimensionless();
+    test_boundary_layers();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

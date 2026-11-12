@@ -27,6 +27,7 @@ include "src/logging.cyr"
 include "src/json.cyr"
 include "src/material_data.cyr"
 include "src/material.cyr"
+include "src/transfer.cyr"
 include "src/state_data.cyr"
 include "src/phase_data.cyr"
 include "src/chem_data.cyr"
@@ -460,6 +461,119 @@ fn _par_material(fp, fl): i64 {
     return 0;
 }
 
+# ── transfer ────────────────────────────────────────────────────────────────────────
+
+# Appends a Result: the f64 payload of Ok, or `E:Variant` for Err.
+fn _par_got_res(t, v) {
+    if (is_ok(t) == 1) { _par_got_f(v); } else { _par_got_err(v); }
+}
+
+var _par_list = 0;
+
+# One transfer row: 1 when handled, 0 for a function with no counterpart yet.
+fn _par_transfer(fp, fl): i64 {
+    var a: f64 = _par_in(0);
+    var b: f64 = _par_in(1);
+    var c: f64 = _par_in(2);
+    var d: f64 = _par_in(3);
+    var e: f64 = _par_in(4);
+    if (_par_eq(fp, fl, "transfer::conduction") == 1) {
+        var t, v = us_conduction(a, b, c, d, e);
+        _par_got_res(t, v);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::convection") == 1) {
+        var q: f64 = us_convection(a, b, c, d);
+        _par_got_f(q);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::radiation") == 1) {
+        var t1, v1 = us_radiation(a, b, c, d);
+        _par_got_res(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::thermal_resistance_conduction") == 1) {
+        var t2, v2 = us_thermal_resistance_conduction(a, b, c);
+        _par_got_res(t2, v2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::thermal_resistance_convection") == 1) {
+        var t3, v3 = us_thermal_resistance_convection(a, b);
+        _par_got_res(t3, v3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::thermal_resistance_series") == 1) {
+        if (_par_list == 0) { _par_list = alloc(8 * 64); }
+        var n = _par_in_f64s(0, _par_list);
+        var rs: f64 = us_thermal_resistance_series(_par_list, n);
+        _par_got_f(rs);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::thermal_resistance_parallel") == 1) {
+        if (_par_list == 0) { _par_list = alloc(8 * 64); }
+        var n2 = _par_in_f64s(0, _par_list);
+        var t4, v4 = us_thermal_resistance_parallel(_par_list, n2);
+        _par_got_res(t4, v4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::heat_stored") == 1) {
+        var hs: f64 = us_heat_stored(a, b, c);
+        _par_got_f(hs);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::thermal_diffusivity") == 1) {
+        var t5, v5 = us_thermal_diffusivity(a, b, c);
+        _par_got_res(t5, v5);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::biot_number") == 1) {
+        var t6, v6 = us_biot_number(a, b, c);
+        _par_got_res(t6, v6);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::lumped_capacitance") == 1) {
+        var lc: f64 = us_lumped_capacitance(a, b, c, d);
+        _par_got_f(lc);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::reynolds_number") == 1) {
+        var t7, v7 = us_reynolds_number(a, b, c);
+        _par_got_res(t7, v7);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::prandtl_number") == 1) {
+        var t8, v8 = us_prandtl_number(a, b);
+        _par_got_res(t8, v8);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::nusselt_number") == 1) {
+        var t9, v9 = us_nusselt_number(a, b, c);
+        _par_got_res(t9, v9);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::nusselt_dittus_boelter") == 1) {
+        var ta, va = us_nusselt_dittus_boelter(a, b);
+        _par_got_res(ta, va);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::nusselt_natural_vertical") == 1) {
+        var tb, vb = us_nusselt_natural_vertical(a, b);
+        _par_got_res(tb, vb);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::boundary_layer_thickness") == 1) {
+        var tc, vc = us_boundary_layer_thickness(a, b);
+        _par_got_res(tc, vc);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::thermal_boundary_layer") == 1) {
+        var td, vd = us_thermal_boundary_layer(a, b, c);
+        _par_got_res(td, vd);
+        return 1;
+    }
+    return 0;
+}
+
 # ── routing and hooks ───────────────────────────────────────────────────────────────
 
 # Routes a row to its module's dispatcher. 0 (pending) for a module or function with none yet: the module rows of
@@ -469,6 +583,7 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "constants") == 1) { return _par_constants(fp, fl); }
     if (_par_eq(mp, ml, "math") == 1) { return _par_math(fp, fl); }
     if (_par_eq(mp, ml, "fmtf") == 1) { return _par_fmtf(fp, fl); }
+    if (_par_eq(mp, ml, "transfer") == 1) { return _par_transfer(fp, fl); }
     _par_adr5 = 0;
     if (_par_eq(mp, ml, "material") == 1 && _par_in_n != 0) { return _par_material(fp, fl); }
     if (_par_in_n != 0) { return 0; }   # a preset row has no inputs; anything else is a module function
@@ -578,6 +693,10 @@ fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "f64::powf") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::atan") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::tanh") == 1) { return 0; }
+    if (_par_eq(fp, fl, "transfer::lumped_capacitance") == 1) { return 0; }
+    if (_par_eq(fp, fl, "transfer::nusselt_dittus_boelter") == 1) { return 0; }
+    if (_par_eq(fp, fl, "transfer::nusselt_natural_vertical") == 1) { return 0; }
+    if (_par_eq(fp, fl, "transfer::thermal_boundary_layer") == 1) { return 0; }
     return 0 - 1;
 }
 
