@@ -42,6 +42,26 @@ ADRs 0001–0005.
 - **scripts/oracle** — serde_json is built with `float_roundtrip`: its default float parse reads 35,970 of 160,320 of its own shortest texts back 1–2 ulp off (probe 11). Writing is unchanged, and the golden corpus is unaffected
 
 ### Added
+- **M6a, boundary conditions and the 1D grid** (port plan §6): `src/numerical.cyr`'s first part.
+  - **Types:** `UsBoundary` holds the condition kinds (`US_BOUNDARY_FIXED`, `_INSULATED`, `_CONVECTIVE`), and `UsBoundaryCondition` holds a condition's value, filled by `us_boundary_fixed` / `_insulated` / `_convective` (ADR 0002 row 15). `UsSide` holds the four sides. `UsGrid1D` is the 1D transient grid.
+  - **Functions:** `us_grid1d_new` / `_new_a`, `us_grid1d_fourier_number`, `us_grid1d_max_stable_dt`, `us_grid1d_step_explicit`, `us_grid1d_step_crank_nicolson` and `us_grid1d_step_adaptive`, with accessors for the nodes (`us_grid1d_len`, `_node`, `_set_node`) and the two conditions (`us_grid1d_left`, `_right`). All three types have JSON.
+  - **Behaviour:** Rust's operation order, with unary minus as `_us_neg`. Every step checks the grid as Rust's `check` does, so a grid edited by hand or read from JSON is refused, not trusted. The explicit and Crank–Nicolson steps open spans under Rust's names.
+  - **Memory:** the grid keeps its Crank–Nicolson scratch, sized on the first step, so no step allocates after it (3,000 steps, 0 heap bytes; ADR 0002 row 2). A refused allocation is `Err(US_ERR_OUT_OF_MEMORY)`.
+  - **Golden rows:** `tests/golden/numerical.tsv` (new, 1,190 rows: B 1,073, A 117; 336 refusals). A step's row runs from the oracle's own state to the next, so every step is checked bit for bit:
+    - `new` over node counts, lengths, diffusivities, initial temperatures and every condition at its edges;
+    - the three steps on seven setups (fixed, insulated and convective ends, Biot numbers from 0 to 10, 3 to 50 nodes), along trajectories;
+    - fractions and multiples of the stable step, and dt at the edges;
+    - the explicit stability limit (bisected) ± 2 ulps, the adaptive exact multiples ± 1 ulp, and its 10⁶ sub-step cap (bisected) ± 2 ulps;
+    - Crank–Nicolson's pivots at dt = 1e300 (`DivisionByZero`);
+    - malformed grids;
+    - the three types' JSON.
+    - Every row passes, 5 JSON rows under ADR 5.
+  - **`validate.py`** models all six from their raw tokens and reproduces their 1,073 rows.
+  - **Tests:** `tests/numerical.tcyr` (83 assertions) ports 15 of Rust's 27 numerical tests, every one due at M6a. Reference tests cover the spans, the struct layout, the scratch's reuse, refused allocations and the documents. The fuzz harness reads `BoundaryCondition`, `Side` and `ThermalGrid1D` documents (964 read and round-tripped).
+  - **Benches:** Rust's three 1D benchmarks, recorded against Rust's.
+  - **The review:** each loop loads every node once now, rolling the old values forward, and Crank–Nicolson's boundary rows sit outside the interior loop. Every row is unchanged. `explicit_1d` went 822 → 591 ns, `crank_nicolson_1d` 2,665 → 2,104 and `adaptive_1d_4substeps` 1,739 → 1,295 (the minimum of the runs; the machine was loaded).
+  - **`_us_vec_size`** moved from `src/cycle.cyr` to `src/validate.cyr`, since the grids use it too.
+  - **`scripts/surface_parity.py`:** the three types are in TYPES, and `BoundaryCondition` maps to its kind enum and its value struct. numerical stays scheduled until M6c; probed as ported, it lacks only M6b's and M6c's 13 items (23 of 36)
 - **M5b, stat and the M5 gates** (port plan §6): `src/stat.cyr`, all 14 functions, so M5 is complete. They are the Boltzmann factor and population ratio, S = k·ln W, both equipartition forms, the three partition functions, the Maxwell–Boltzmann density and three speeds, and the Einstein and Debye heat capacities.
   - **Behaviour:** Rust's operation order, with unary minus as `_us_neg`. exp, expm1, ln and pow are correctly rounded: the vibrational partition function's −expm1(−x) keeps its precision where hν ≪ kT, as 1.4.0's does. `debye_cv` integrates on hisab's `calc_integral_simpson` (200 intervals, a plain integrand function; Rust's closure captures nothing) and allocates nothing (1,000 integrals, 0 heap bytes). Rust's `u32` symmetry number is an integer whose negatives are refused (ADR 0002 row 14).
   - **Golden rows:** `tests/golden/stat.tsv` (new, 4,170 rows: B 1,350, C 2,468, D 352; 219 refusals). Every function is seeded and run at the edges. Every switch runs either side:

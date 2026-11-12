@@ -6,6 +6,7 @@ entropy
 fmtf
 material
 math
+numerical
 phase
 stat
 state

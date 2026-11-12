@@ -169,3 +169,21 @@ term list. Nothing measured worth changing.
 integrand's arithmetic and call, and hisab's compensated step. That is ADR 0004's price, paid 201 times: the bits are
 the target, so the integrand keeps it. The run was on a loaded machine.
 
+## M6
+
+| Benchmark | Rust 1.4.0 (ns) | Cyrius (ns) | Notes |
+|---|---|---|---|
+| numerical/explicit_1d | 45.67 | 591 | 100 nodes, Fo = 0.4: the grid's checks, the stability test, 98 interior updates and two boundary updates, the span (822 before M6a's review) |
+| numerical/crank_nicolson_1d | 888.85 | 2,104 | 100 nodes, dt = 1 s: the Thomas sweep and back substitution in the grid's own scratch, no allocation (Rust allocates its two vectors per step; 2,665 before) |
+| numerical/adaptive_1d_4substeps | 114.92 | 1,295 | 51 nodes, one convective end, 4 explicit sub-steps (1,739 before) |
+
+**M6a's review.** The first explicit step cost about 8 ns per node, and Crank–Nicolson about 26:
+- **Explicit update:** each pass loaded its node and the next one, recomputing both addresses. It now rolls the old
+  values forward (`prev`, `cur`, `nxt`) and steps a pointer, so each node is loaded once: 822 → 591 ns.
+- **Crank–Nicolson:** the sweep tested for the two boundary rows on every pass and loaded both neighbours. The
+  boundary rows now sit outside the interior loop, the interior temperatures roll forward, and the back substitution
+  carries its last value: 2,665 → 2,104 ns. Moving the Thomas update into a helper called for every row measured
+  slower (2,886 ns), because the call costs more than the branch it removes, so the interior rows keep it inline.
+- **The result:** every one of the 844 step rows is unchanged. These are the minimum of the runs on the final code;
+  the machine was loaded by other sessions throughout.
+

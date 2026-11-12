@@ -57,6 +57,9 @@ TYPES = {
     "CycleComparisonEntry": ("UsCycleComparison", "cycle_comparison"),
     "DiagramPoint": ("UsDiagramPoint", "diagram_point"),
     "Species": ("UsSpecies", "species"),
+    "BoundaryCondition": ("UsBoundary", "boundary"),
+    "Side": ("UsSide", "side"),
+    "ThermalGrid1D": ("UsGrid1D", "grid1d"),
 }
 # Rust item -> the Cyrius names that carry it ("fn x", "const X", "enum X", "struct X"), where the rules give none.
 MAPPED = {
@@ -64,6 +67,7 @@ MAPPED = {
     "state::const ALL_GASES": ["const US_GAS_COUNT", "fn us_gas_preset"],
     "phase::const ALL_SUBSTANCES": ["const US_SUBSTANCE_COUNT", "fn us_substance_preset"],
     "chem::const ALL_SPECIES": ["const US_SPECIES_COUNT", "fn us_species_preset"],
+    "numerical::enum BoundaryCondition": ["enum UsBoundary", "struct UsBoundaryCondition"],
     "error::type Result": ["fn is_ok", "fn is_err_result"],
     "error::UshmaError: Display": ["fn us_error_message", "fn us_error_name"],
 }

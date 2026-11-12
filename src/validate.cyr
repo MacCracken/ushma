@@ -151,3 +151,21 @@ fn _us_fail_i(code, fname, what, n): i64 {
     }
     return code;
 }
+
+# --- Caller-owned storage ---
+
+# Sizes vec `v` to `n` words, growing it on allocator `a` (new words 0): 1, or 0 when a grow was refused (`v` is then
+# empty). A vec that holds n words or more already, as a reused result's do, is only truncated.
+fn _us_vec_size(a, v, n): i64 {
+    if (vec_len(v) >= n) {
+        vec_truncate(v, n);
+        return 1;
+    }
+    while (vec_len(v) < n) {
+        if (vec_push_a(a, v, 0) < 0) {
+            vec_truncate(v, 0);
+            return 0;
+        }
+    }
+    return 1;
+}

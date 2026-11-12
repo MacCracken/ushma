@@ -1872,8 +1872,194 @@ def m_debye(a, p):
     return F(9.0 * GAS_R * r3 * _simpson(integrand, 0.0, td, 200))
 
 
+def _bc(ins, at):
+    """A boundary condition from ins[at]: (kind, its values…) and the next index."""
+    kind = ins[at][len("e:BoundaryCondition.") :]
+    if kind == "Fixed":
+        return (kind, tok_f(ins[at + 1])), at + 2
+    if kind == "Insulated":
+        return (kind,), at + 1
+    return (kind, tok_f(ins[at + 1]), tok_f(ins[at + 2]), tok_f(ins[at + 3])), at + 4
+
+
+def _bc_toks(b):
+    return [f"e:BoundaryCondition.{b[0]}"] + [fbits(x) for x in b[1:]]
+
+
+def _g1(ins, at):
+    """A 1D grid from ins[at]: [nodes, dx, alpha, left, right] and the next index."""
+    n = int(ins[at][2:])
+    nodes = [tok_f(t) for t in ins[at + 1 : at + 1 + n]]
+    at += 1 + n
+    dx, alpha = tok_f(ins[at]), tok_f(ins[at + 1])
+    bl, at = _bc(ins, at + 2)
+    br, at = _bc(ins, at)
+    return [nodes, dx, alpha, bl, br], at
+
+
+def _g1_toks(g):
+    return [f"v:{len(g[0])}"] + [fbits(x) for x in g[0]] + [fbits(g[1]), fbits(g[2])] + _bc_toks(g[3]) + _bc_toks(g[4])
+
+
+def _bc_ok(b):
+    if b[0] == "Fixed":
+        return math.isfinite(b[1])
+    if b[0] == "Convective":
+        return fge(b[1], 0.0) and fgt(b[3], 0.0) and math.isfinite(b[2])
+    return True
+
+
+def _biot(b, spacing):
+    return fdiv(b[1] * spacing, b[3]) if b[0] == "Convective" else 0.0
+
+
+def _g1_ok(g):
+    return len(g[0]) >= 3 and fgt(g[1], 0.0) and fgt(g[2], 0.0) and _bc_ok(g[3]) and _bc_ok(g[4])
+
+
+def _fourier(g, dt):
+    return fdiv(g[2] * dt, g[1] * g[1])
+
+
+def _max_fourier(g):
+    return fdiv(0.5, 1.0 + rust_max(_biot(g[3], g[1]), _biot(g[4], g[1])))
+
+
+def _max_dt(g):
+    return fdiv(_max_fourier(g) * g[1] * g[1], g[2])
+
+
+def _explicit_boundary(b, tb, tin, fo, dx):
+    if b[0] == "Fixed":
+        return b[1]
+    if b[0] == "Insulated":
+        return tb + fo * (2.0 * tin - 2.0 * tb)
+    bi = _biot(b, dx)
+    return tb + fo * (2.0 * tin - 2.0 * (1.0 + bi) * tb + 2.0 * bi * b[2])
+
+
+def _explicit_update(g, fo):
+    t = g[0]
+    n = len(t)
+    old0, old1, oldm2, oldm1 = t[0], t[1], t[n - 2], t[n - 1]
+    prev = old0
+    for i in range(1, n - 1):
+        cur = t[i]
+        t[i] = cur + fo * (prev - 2.0 * cur + t[i + 1])
+        prev = cur
+    t[0] = _explicit_boundary(g[3], old0, old1, fo, g[1])
+    t[n - 1] = _explicit_boundary(g[4], oldm1, oldm2, fo, g[1])
+
+
+def m_g1_new(ins, p):
+    n = int(ins[0][2:])
+    length, alpha, t0 = tok_f(ins[1]), tok_f(ins[2]), tok_f(ins[3])
+    bl, at = _bc(ins, 4)
+    br, _ = _bc(ins, at)
+    if n < 3 or not fgt(length, 0.0) or not fgt(alpha, 0.0) or not math.isfinite(t0):
+        return E("InvalidParameter")
+    if not _bc_ok(bl) or not _bc_ok(br):
+        return E("InvalidParameter")
+    nodes = [t0] * n
+    if bl[0] == "Fixed":
+        nodes[0] = bl[1]
+    if br[0] == "Fixed":
+        nodes[n - 1] = br[1]
+    return _g1_toks([nodes, fdiv(length, float(n - 1)), alpha, bl, br])
+
+
+def m_g1_fourier(ins, p):
+    g, at = _g1(ins, 0)
+    return F(_fourier(g, tok_f(ins[at])))
+
+
+def m_g1_max_dt(ins, p):
+    g, _ = _g1(ins, 0)
+    return F(_max_dt(g))
+
+
+def m_g1_explicit(ins, p):
+    g, at = _g1(ins, 0)
+    dt = tok_f(ins[at])
+    if not _g1_ok(g) or not fgt(dt, 0.0):
+        return E("InvalidParameter")
+    fo = _fourier(g, dt)
+    if fo > _max_fourier(g) * (1.0 + 1e-12):
+        return E("InvalidParameter")
+    _explicit_update(g, fo)
+    return _g1_toks(g)
+
+
+def _cn_boundary(b, tb, tin, fo, dx):
+    if b[0] == "Fixed":
+        return 1.0, 0.0, b[1]
+    if b[0] == "Insulated":
+        return 1.0 + fo, -fo, (1.0 - fo) * tb + fo * tin
+    bi = _biot(b, dx)
+    return 1.0 + fo * (1.0 + bi), -fo, (1.0 - fo * (1.0 + bi)) * tb + fo * tin + 2.0 * fo * bi * b[2]
+
+
+def m_g1_cn(ins, p):
+    g, at = _g1(ins, 0)
+    dt = tok_f(ins[at])
+    if not _g1_ok(g) or not fgt(dt, 0.0):
+        return E("InvalidParameter")
+    fo = _fourier(g, dt)
+    t, n = g[0], len(g[0])
+    cs, ds = [0.0] * n, [0.0] * n
+    cp = dp = 0.0
+    for i in range(n):
+        if i == 0:
+            b, c, d = _cn_boundary(g[3], t[0], t[1], fo, g[1])
+            a = 0.0
+        elif i == n - 1:
+            b, a, d = _cn_boundary(g[4], t[n - 1], t[n - 2], fo, g[1])
+            c = 0.0
+        else:
+            half = 0.5 * fo
+            a, b, c, d = -half, 1.0 + fo, -half, half * t[i - 1] + (1.0 - fo) * t[i] + half * t[i + 1]
+        m = b - a * cp
+        if not fge(abs(m), 1e-30):
+            return E("DivisionByZero")
+        cp = fdiv(c, m)
+        dp = fdiv(d - a * dp, m)
+        cs[i], ds[i] = cp, dp
+    t[n - 1] = ds[n - 1]
+    for i in range(n - 2, -1, -1):
+        t[i] = ds[i] - cs[i] * t[i + 1]
+    return _g1_toks(g)
+
+
+def _fceil(x):
+    """IEEE ceil: ±∞ and NaN unchanged, a zero result keeps x's sign."""
+    if not math.isfinite(x):
+        return x
+    r = float(math.ceil(x))
+    return math.copysign(0.0, x) if r == 0.0 else r
+
+
+def m_g1_adaptive(ins, p):
+    g, at = _g1(ins, 0)
+    dt = tok_f(ins[at])
+    if not _g1_ok(g) or not fgt(dt, 0.0):
+        return E("InvalidParameter")
+    steps = rust_max(_fceil(fdiv(dt, _max_dt(g)) * (1.0 - 1e-12)), 1.0)
+    if not fge(steps, 1.0) or steps > 1e6:
+        return E("InvalidParameter")
+    fo = _fourier(g, fdiv(dt, steps))
+    for _ in range(int(steps)):
+        _explicit_update(g, fo)
+    return [fbits(dt)] + _g1_toks(g)
+
+
 # Functions whose rows hold whole cycle results or term lists: their models read the raw tokens.
 RAW_ARGS = {
+    "numerical::ThermalGrid1D::new",
+    "numerical::ThermalGrid1D::fourier_number",
+    "numerical::ThermalGrid1D::max_stable_dt",
+    "numerical::ThermalGrid1D::step_explicit",
+    "numerical::ThermalGrid1D::step_crank_nicolson",
+    "numerical::ThermalGrid1D::step_adaptive",
     "cycle::compare_cycles",
     "cycle::cycle_ts_diagram",
     "cycle::cycle_pv_diagram",
@@ -2007,6 +2193,14 @@ def unmodelled(fn, ins):
 
 
 MODELS = {
+    "numerical": {
+        "numerical::ThermalGrid1D::new": m_g1_new,
+        "numerical::ThermalGrid1D::fourier_number": m_g1_fourier,
+        "numerical::ThermalGrid1D::max_stable_dt": m_g1_max_dt,
+        "numerical::ThermalGrid1D::step_explicit": m_g1_explicit,
+        "numerical::ThermalGrid1D::step_crank_nicolson": m_g1_cn,
+        "numerical::ThermalGrid1D::step_adaptive": m_g1_adaptive,
+    },
     "stat": {
         "stat::boltzmann_probability": m_boltz_p,
         "stat::boltzmann_ratio": m_boltz_r,

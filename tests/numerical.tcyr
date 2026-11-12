@@ -1,0 +1,419 @@
+# numerical tests (M6a: boundary conditions and the 1D grid).
+#
+# Rust 1.4.0's numerical.rs tests for these, one for one (15 of its 27; the 2D grid and the network join with M6b and
+# M6c), each also checking the refusal's code. Then reference tests of the two spans, the grid's layout, a reused
+# Crank–Nicolson scratch (no allocation after the first step), and refused allocations.
+
+include "src/constants.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+include "src/json.cyr"
+include "src/numerical.cyr"
+
+# |a − b| as an f64.
+fn absdiff(a: f64, b: f64): f64 {
+    var d: f64 = a - b;
+    if (d < 0.0) { d = 0.0 - d; }
+    return d;
+}
+
+# Asserts a Result is Err(code).
+fn errc(t, v, code, name) {
+    assert_eq(is_err_result(t), 1, name);
+    if (is_err_result(t) == 1) { assert_streq(us_error_name(v), us_error_name(code), name); }
+    return 0;
+}
+
+# The ring's raw bytes contain the C string `s`: 1 or 0.
+fn ring_has(s): i64 {
+    var cap = 8192;
+    var buf = alloc(cap);
+    var n = sakshi_ring_read_raw(buf, cap);
+    var sl = strlen(s);
+    var k = 0;
+    while (k + sl <= n) {
+        if (memeq(buf + k, s, sl) == 1) { return 1; }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# Rust's test helper `convective(h, k, t_fluid)`, into *out.
+fn conv(out: *UsBoundaryCondition, h: f64, k: f64, t_fluid: f64) {
+    us_boundary_convective(out, h, t_fluid, k);
+    return 0;
+}
+
+# A 1D grid into *g, asserting it is Ok.
+fn grid(g: *UsGrid1D, n, length: f64, alpha: f64, t0: f64, bl: *UsBoundaryCondition, br: *UsBoundaryCondition) {
+    var t, v = us_grid1d_new(g, n, length, alpha, t0, bl, br);
+    assert_eq(is_ok(t), 1, "the grid is Ok");
+    return 0;
+}
+
+# Construction: the fixed ends set, the interior at T₀; fewer than 3 nodes, a zero length or diffusivity refused.
+# rust src/numerical.rs: test_grid1d_construction, test_grid1d_invalid
+fn test_construction() {
+    test_group("1D construction");
+    var fl: UsBoundaryCondition;
+    var fr: UsBoundaryCondition;
+    var ins: UsBoundaryCondition;
+    us_boundary_fixed(&fl, 400.0);
+    us_boundary_fixed(&fr, 300.0);
+    us_boundary_insulated(&ins);
+    var g: UsGrid1D;
+    grid(&g, 10, 1.0, 0.0001, 300.0, &fl, &fr);
+    assert_eq(us_grid1d_len(&g), 10, "ten nodes");
+    var a: f64 = us_grid1d_node(&g, 0);
+    var b: f64 = us_grid1d_node(&g, 9);
+    var c: f64 = us_grid1d_node(&g, 5);
+    assert(a == 400.0 && b == 300.0 && c == 300.0, "fixed ends 400 and 300 K, the interior 300 K");
+    var e1, f1 = us_grid1d_new(&g, 2, 1.0, 0.0001, 300.0, &ins, &ins);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "two nodes");
+    var e2, f2 = us_grid1d_new(&g, 10, 0.0, 0.0001, 300.0, &ins, &ins);
+    errc(e2, f2, US_ERR_INVALID_PARAMETER, "length 0");
+    var e3, f3 = us_grid1d_new(&g, 10, 1.0, 0.0, 300.0, &ins, &ins);
+    errc(e3, f3, US_ERR_INVALID_PARAMETER, "alpha 0");
+}
+
+# The explicit scheme: a uniform field stays uniform, a fixed pair converges to the linear profile, an unstable step
+# is refused, and a convective end's Biot number tightens the limit.
+# rust src/numerical.rs: test_explicit_uniform_stays_uniform, test_explicit_converges_to_linear
+# rust src/numerical.rs: test_explicit_stability_rejected, test_explicit_stability_accounts_for_biot
+fn test_explicit() {
+    test_group("explicit");
+    var f3: UsBoundaryCondition;
+    us_boundary_fixed(&f3, 300.0);
+    var g: UsGrid1D;
+    grid(&g, 20, 1.0, 0.0001, 300.0, &f3, &f3);
+    var k = 0;
+    while (k < 100) {
+        var tk, vk = us_grid1d_step_explicit(&g, 0.1);
+        k = k + 1;
+    }
+    var flat = 1;
+    k = 0;
+    while (k < 20) {
+        var t: f64 = us_grid1d_node(&g, k);
+        var d: f64 = absdiff(t, 300.0);
+        if (d >= 0.0000000001) { flat = 0; }
+        k = k + 1;
+    }
+    assert_eq(flat, 1, "100 steps of a uniform field: still uniform");
+    var fl: UsBoundaryCondition;
+    var fr: UsBoundaryCondition;
+    us_boundary_fixed(&fl, 400.0);
+    us_boundary_fixed(&fr, 300.0);
+    var h: UsGrid1D;
+    grid(&h, 21, 1.0, 0.0001, 350.0, &fl, &fr);
+    var dx: f64 = h.dx;
+    var al: f64 = h.alpha;
+    var dt: f64 = 0.4 * dx * dx / al;
+    k = 0;
+    while (k < 100000) {
+        var tj, vj = us_grid1d_step_explicit(&h, dt);
+        k = k + 1;
+    }
+    var mid: f64 = us_grid1d_node(&h, 10);
+    var dm: f64 = absdiff(mid, 350.0);
+    assert(dm < 1.0, "converged: the midpoint at 350 K");
+    var ins: UsBoundaryCondition;
+    us_boundary_insulated(&ins);
+    var u: UsGrid1D;
+    grid(&u, 10, 1.0, 0.0001, 300.0, &ins, &ins);
+    var e1, f1 = us_grid1d_step_explicit(&u, 100.0);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "Fo > 0.5: refused");
+    var cv: UsBoundaryCondition;
+    conv(&cv, 1000.0, 1.0, 300.0);
+    var b: UsGrid1D;
+    grid(&b, 11, 0.1, 0.00001, 400.0, &cv, &cv);
+    var e2, f2 = us_grid1d_step_explicit(&b, 4.0);
+    errc(e2, f2, US_ERR_INVALID_PARAMETER, "Fo = 0.4 with Bi = 10: refused");
+    var ds: f64 = us_grid1d_max_stable_dt(&b);
+    var fo: f64 = us_grid1d_fourier_number(&b, ds);
+    var df: f64 = absdiff(fo, 0.5 / 11.0);
+    assert(df < 0.000000000001, "the stable step's Fo is 0.5/11");
+    var ok = 1;
+    k = 0;
+    while (k < 200) {
+        var ti, vi = us_grid1d_step_explicit(&b, ds);
+        if (is_ok(ti) == 0) { ok = 0; }
+        k = k + 1;
+    }
+    k = 0;
+    while (k < 11) {
+        var tt: f64 = us_grid1d_node(&b, k);
+        if ((tt >= 300.0 && tt <= 400.0) == 0) { ok = 0; }
+        k = k + 1;
+    }
+    assert_eq(ok, 1, "200 stable steps stay within 300-400 K");
+}
+
+# Crank–Nicolson: converges to the linear profile at a large step, and an insulated bar conserves its energy and
+# equilibrates.
+# rust src/numerical.rs: test_crank_nicolson_converges_to_linear, test_crank_nicolson_insulated
+fn test_crank_nicolson() {
+    test_group("Crank-Nicolson");
+    var fl: UsBoundaryCondition;
+    var fr: UsBoundaryCondition;
+    us_boundary_fixed(&fl, 400.0);
+    us_boundary_fixed(&fr, 300.0);
+    var g: UsGrid1D;
+    grid(&g, 21, 1.0, 0.0001, 350.0, &fl, &fr);
+    var k = 0;
+    while (k < 10000) {
+        var tk, vk = us_grid1d_step_crank_nicolson(&g, 1.0);
+        k = k + 1;
+    }
+    var mid: f64 = us_grid1d_node(&g, 10);
+    var dm: f64 = absdiff(mid, 350.0);
+    assert(dm < 1.0, "converged: the midpoint at 350 K");
+    var ins: UsBoundaryCondition;
+    us_boundary_insulated(&ins);
+    var h: UsGrid1D;
+    grid(&h, 11, 1.0, 0.0001, 300.0, &ins, &ins);
+    us_grid1d_set_node(&h, 5, 500.0);
+    var before: f64 = 0.0;
+    k = 0;
+    while (k < 11) {
+        var t: f64 = us_grid1d_node(&h, k);
+        before = before + t;
+        k = k + 1;
+    }
+    k = 0;
+    while (k < 10000) {
+        var tj, vj = us_grid1d_step_crank_nicolson(&h, 0.1);
+        k = k + 1;
+    }
+    var after: f64 = 0.0;
+    k = 0;
+    while (k < 11) {
+        var t2: f64 = us_grid1d_node(&h, k);
+        after = after + t2;
+        k = k + 1;
+    }
+    var rel: f64 = absdiff(before, after) / before;
+    assert(rel < 0.01, "energy within 1 %");
+    var avg: f64 = after / 11.0;
+    var eq = 1;
+    k = 0;
+    while (k < 11) {
+        var t3: f64 = us_grid1d_node(&h, k);
+        var d3: f64 = absdiff(t3, avg);
+        if (d3 >= 1.0) { eq = 0; }
+        k = k + 1;
+    }
+    assert_eq(eq, 1, "equilibrated within 1 K of the mean");
+}
+
+# The adaptive step: a small step passes through, a large one subdivides, exact multiples of the stable step pass, the
+# sub-step cap and bad steps are refused.
+# rust src/numerical.rs: test_adaptive_small_dt_passes_through, test_adaptive_large_dt_subdivides
+# rust src/numerical.rs: test_step_adaptive_exact_multiple_of_stable_dt, test_step_adaptive_substep_cap_and_bad_dt
+fn test_adaptive() {
+    test_group("adaptive");
+    var fl: UsBoundaryCondition;
+    var fr: UsBoundaryCondition;
+    us_boundary_fixed(&fl, 400.0);
+    us_boundary_fixed(&fr, 300.0);
+    var g: UsGrid1D;
+    grid(&g, 10, 1.0, 0.0001, 300.0, &fl, &fr);
+    var dx: f64 = g.dx;
+    var al: f64 = g.alpha;
+    var small: f64 = 0.1 * dx * dx / al;
+    var t1, v1 = us_grid1d_step_adaptive(&g, small);
+    var a1: f64 = v1;
+    var d1: f64 = absdiff(a1, small);
+    assert(is_ok(t1) == 1 && d1 < 0.0000000001, "a small step: advanced by itself");
+    var large: f64 = 10.0 * dx * dx / al;
+    var t2, v2 = us_grid1d_step_adaptive(&g, large);
+    var a2: f64 = v2;
+    var d2: f64 = absdiff(a2, large);
+    assert(is_ok(t2) == 1 && d2 < 0.0000000001, "a large step: subdivided, the whole advanced");
+    var f3: UsBoundaryCondition;
+    us_boundary_fixed(&f3, 300.0);
+    var h: UsGrid1D;
+    grid(&h, 51, 0.1, 0.00001, 400.0, &f3, &f3);
+    var t3, v3 = us_grid1d_step_adaptive(&h, 1.0);
+    var a3: f64 = v3;
+    assert(is_ok(t3) == 1 && a3 == 1.0, "1 s: Ok, 1.0");
+    var ds: f64 = us_grid1d_max_stable_dt(&h);
+    var t4, v4 = us_grid1d_step_adaptive(&h, ds);
+    var t5, v5 = us_grid1d_step_adaptive(&h, 3.0 * ds);
+    assert(is_ok(t4) == 1 && is_ok(t5) == 1, "the stable step and 3x it: Ok (no round-off sub-step)");
+    var ins: UsBoundaryCondition;
+    us_boundary_insulated(&ins);
+    var c: UsGrid1D;
+    grid(&c, 3, 0.000002, 0.0001, 300.0, &ins, &ins);
+    var e1, f1 = us_grid1d_step_adaptive(&c, 3600.0);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "about 7e11 sub-steps: refused");
+    var nan: f64 = 0.0 / 0.0;
+    var inf: f64 = 1.0 / 0.0;
+    var e2, f2 = us_grid1d_step_adaptive(&c, nan);
+    errc(e2, f2, US_ERR_INVALID_PARAMETER, "adaptive, dt NaN");
+    var e3, f3b = us_grid1d_step_adaptive(&c, 0.0 - 1.0);
+    errc(e3, f3b, US_ERR_INVALID_PARAMETER, "adaptive, dt -1");
+    var e4, f4 = us_grid1d_step_explicit(&c, nan);
+    errc(e4, f4, US_ERR_INVALID_PARAMETER, "explicit, dt NaN");
+    var e5, f5 = us_grid1d_step_crank_nicolson(&c, 0.0 - 1.0);
+    errc(e5, f5, US_ERR_INVALID_PARAMETER, "Crank-Nicolson, dt -1");
+    var e6, f6 = us_grid1d_step_crank_nicolson(&c, inf);
+    errc(e6, f6, US_ERR_INVALID_PARAMETER, "Crank-Nicolson, dt infinite");
+}
+
+# A convective condition's JSON round trip; the explicit and Crank–Nicolson schemes agreeing at small steps; and a
+# grid edited into a bad state refused by every step, not trusted.
+# rust src/numerical.rs: test_boundary_condition_serde, test_explicit_matches_crank_nicolson_for_small_steps
+# rust src/numerical.rs: test_grid_1d_bad_state_is_error_not_panic
+fn test_state() {
+    test_group("serde, agreement, bad state");
+    var cv: UsBoundaryCondition;
+    us_boundary_convective(&cv, 25.0, 293.15, 401.0);
+    var sb = str_builder_new();
+    us_boundary_to_json(sb, &cv);
+    var back: UsBoundaryCondition;
+    var t, v = us_boundary_from_json(load64(sb), load64(sb + 8), &back);
+    var bh: f64 = back.h;
+    var dh: f64 = absdiff(bh, 25.0);
+    assert(is_ok(t) == 1 && back.kind == US_BOUNDARY_CONVECTIVE && dh < 0.0000000001, "Convective reads back");
+    var fl: UsBoundaryCondition;
+    var cr: UsBoundaryCondition;
+    us_boundary_fixed(&fl, 400.0);
+    conv(&cr, 50.0, 15.0, 290.0);
+    var ex: UsGrid1D;
+    var cn: UsGrid1D;
+    grid(&ex, 21, 0.2, 0.000004, 300.0, &fl, &cr);
+    grid(&cn, 21, 0.2, 0.000004, 300.0, &fl, &cr);
+    var dt: f64 = us_grid1d_max_stable_dt(&ex) * 0.5;
+    var k = 0;
+    while (k < 2000) {
+        var t1, v1 = us_grid1d_step_explicit(&ex, dt);
+        var t2, v2 = us_grid1d_step_crank_nicolson(&cn, dt);
+        k = k + 1;
+    }
+    var close = 1;
+    k = 0;
+    while (k < 21) {
+        var a: f64 = us_grid1d_node(&ex, k);
+        var b: f64 = us_grid1d_node(&cn, k);
+        var d: f64 = absdiff(a, b);
+        if (d >= 0.05) { close = 0; }
+        k = k + 1;
+    }
+    assert_eq(close, 1, "explicit and Crank-Nicolson within 0.05 K after 2000 small steps");
+    var ins: UsBoundaryCondition;
+    us_boundary_insulated(&ins);
+    var g: UsGrid1D;
+    grid(&g, 5, 1.0, 0.00001, 300.0, &ins, &ins);
+    vec_truncate(g.nodes, 1);
+    var e1, f1 = us_grid1d_step_explicit(&g, 1.0);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "one node: explicit refused");
+    var e2, f2 = us_grid1d_step_crank_nicolson(&g, 1.0);
+    errc(e2, f2, US_ERR_INVALID_PARAMETER, "one node: Crank-Nicolson refused");
+    var e3, f3 = us_grid1d_step_adaptive(&g, 1.0);
+    errc(e3, f3, US_ERR_INVALID_PARAMETER, "one node: adaptive refused");
+    vec_truncate(g.nodes, 0);
+    var e4, f4 = us_grid1d_step_explicit(&g, 1.0);
+    errc(e4, f4, US_ERR_INVALID_PARAMETER, "no nodes: refused");
+    var nan: f64 = 0.0 / 0.0;
+    var h: UsGrid1D;
+    var e5, f5 = us_grid1d_new(&h, 5, 1.0, 0.00001, nan, &ins, &ins);
+    errc(e5, f5, US_ERR_INVALID_PARAMETER, "T0 NaN");
+    var bad: UsBoundaryCondition;
+    conv(&bad, 10.0, 0.0, 300.0);
+    var e6, f6 = us_grid1d_new(&h, 5, 1.0, 0.00001, 300.0, &bad, &ins);
+    errc(e6, f6, US_ERR_INVALID_PARAMETER, "a convective k of 0");
+}
+
+# Reference: the spans, the boundary conditions' offsets in the struct, a Crank–Nicolson scratch reused (no heap after
+# the first step), a kind that is no UsBoundary code, a side's and a grid's documents, and refused allocations.
+fn test_reference() {
+    test_group("reference");
+    var fl: UsBoundaryCondition;
+    var fr: UsBoundaryCondition;
+    us_boundary_fixed(&fl, 400.0);
+    conv(&fr, 25.0, 50.0, 300.0);
+    var g: UsGrid1D;
+    grid(&g, 10, 1.0, 0.0001, 300.0, &fl, &fr);
+    assert(g.bc_left.kind == US_BOUNDARY_FIXED && g.bc_right.kind == US_BOUNDARY_CONVECTIVE, "the fields");
+    var lp: *UsBoundaryCondition = us_grid1d_left(&g);
+    var rp: *UsBoundaryCondition = us_grid1d_right(&g);
+    var lt: f64 = lp.t;
+    var rk: f64 = rp.k;
+    assert(lt == 400.0 && rk == 50.0, "the offsets reach the same conditions");
+    var t0, v0 = us_grid1d_step_crank_nicolson(&g, 10.0);
+    var before = alloc_used();
+    var k = 0;
+    while (k < 1000) {
+        var tk, vk = us_grid1d_step_crank_nicolson(&g, 10.0);
+        var tj, vj = us_grid1d_step_explicit(&g, 1.0);
+        var ti, vi = us_grid1d_step_adaptive(&g, 100.0);
+        k = k + 1;
+    }
+    assert_eq(alloc_used() - before, 0, "3,000 steps after the first: 0 heap bytes");
+    sakshi_output_buffer();
+    sakshi_set_level(SK_DEBUG);
+    sakshi_ring_clear();
+    var t1, v1 = us_grid1d_step_explicit(&g, 1.0);
+    assert_eq(ring_has("step_explicit"), 1, "step_explicit's span");
+    var t2, v2 = us_grid1d_step_crank_nicolson(&g, 1.0);
+    assert_eq(ring_has("step_crank_nicolson"), 1, "step_crank_nicolson's span");
+    var t3, v3 = us_grid1d_step_explicit(&g, 0.0 - 1.0);
+    assert_eq(sakshi_span_depth(), 0, "every span closed, a refused one too");
+    sakshi_set_level(SK_INFO);
+    sakshi_ring_clear();
+    rp.kind = 7;
+    var e1, f1 = us_grid1d_step_explicit(&g, 1.0);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "a boundary kind that is no UsBoundary code");
+    assert_eq(us_boundary_name(US_BOUNDARY_COUNT), 0, "no name past the last kind");
+    assert_streq(us_side_name(US_SIDE_BOTTOM), "Bottom", "a side's name");
+    var nan: f64 = us_grid1d_node(&g, 10);
+    assert(nan != nan, "no node 10: NaN");
+    assert_eq(us_grid1d_set_node(&g, 0 - 1, 1.0), 0, "no node -1 to set");
+    var sb = str_builder_new();
+    us_side_to_json(sb, US_SIDE_TOP);
+    var ts, vs = us_side_from_json(load64(sb), load64(sb + 8));
+    assert(is_ok(ts) == 1 && vs == US_SIDE_TOP, "a side's document reads back");
+    var sb2 = str_builder_new();
+    us_grid1d_to_json(sb2, &g);
+    var back: UsGrid1D;
+    var tb, vb = us_grid1d_from_json(load64(sb2), load64(sb2 + 8), &back);
+    var sb3 = str_builder_new();
+    us_grid1d_to_json(sb3, &back);
+    var n2 = load64(sb2 + 8);
+    assert(is_ok(tb) == 1 && us_grid1d_len(&back) == 10, "a grid's document reads back, its ten nodes");
+    assert(n2 == load64(sb3 + 8) && memeq(load64(sb2), load64(sb3), n2) == 1, "written again, the same bytes");
+    var ta = test_allocator();
+    var h: UsGrid1D;
+    test_allocator_fail_after(ta, 0);
+    var e2, f2 = us_grid1d_new_a(ta, &h, 10, 1.0, 0.0001, 300.0, &fl, &fl);
+    errc(e2, f2, US_ERR_OUT_OF_MEMORY, "the grid's vecs refused");
+    test_allocator_fail_after(ta, 0 - 1);
+    var t4, v4 = us_grid1d_new_a(ta, &h, 40, 1.0, 0.0001, 300.0, &fl, &fl);
+    test_allocator_fail_after(ta, test_allocator_alloc_count(ta));
+    var e3, f3 = us_grid1d_step_crank_nicolson(&h, 1.0);
+    errc(e3, f3, US_ERR_OUT_OF_MEMORY, "the Crank-Nicolson scratch's first grow refused");
+    test_allocator_fail_after(ta, 0 - 1);
+    var t5, v5 = us_grid1d_step_crank_nicolson(&h, 1.0);
+    assert_eq(is_ok(t5), 1, "allowed, it steps");
+}
+
+# Runs every group and returns the failure count.
+fn main() {
+    alloc_init();
+    test_construction();
+    test_explicit();
+    test_crank_nicolson();
+    test_adaptive();
+    test_state();
+    test_reference();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

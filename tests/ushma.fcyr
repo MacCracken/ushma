@@ -2,8 +2,8 @@
 #
 # The targets so far: USHMA_LOG parsing (`us_log_parse`), and the `ThermalMaterial`, `GasData`, `SubstanceData`,
 # `Phase`, `SaturatedEntry`, `WetSteamProperties`, `SuperheatedEntry`, `StatePoint`, `ProcessKind`, `CycleKind`,
-# `CycleResult`, `RefrigerationResult`, `DiagramPoint`, `CycleComparisonEntry` and `Species` decoders, which must
-# also round-trip: what one accepts re-encodes, reads
+# `CycleResult`, `RefrigerationResult`, `DiagramPoint`, `CycleComparisonEntry`, `Species`, `BoundaryCondition`,
+# `Side` and `ThermalGrid1D` decoders, which must also round-trip: what one accepts re-encodes, reads
 # back, and re-encodes to the same bytes. The other JSON decoders and the daimon response
 # handling join as they port. Each target must accept any bytes: return a defined result, never crash, never write
 # outside its buffers (the poisoning allocator and --bounds check that).
@@ -30,6 +30,7 @@ include "src/steam.cyr"
 include "src/cycle.cyr"
 include "src/chem_data.cyr"
 include "src/chem.cyr"
+include "src/numerical.cyr"
 
 var _fz_state = 0x2545F4914F6CDD1D;
 var _fz_bad = 0;
@@ -44,6 +45,7 @@ var _fz_f64_read = 0;
 var _fz_cycle_read = 0;
 var _fz_refr_read = 0;
 var _fz_cmp_read = 0;
+var _fz_num_read = 0;
 
 # xorshift64*: the next pseudo-random word.
 fn fz_next(): i64 {
@@ -175,9 +177,14 @@ fn fz_substance(data, len) {
     return 0;
 }
 
-# A unit-enum document (`kind` 1 a Phase, 2 a ProcessKind, 3 a CycleKind) decoded: Ok's tag, its value or code into
-# *out.
+# A unit-enum document (`kind` 1 a Phase, 2 a ProcessKind, 3 a CycleKind, 4 a Side) decoded: Ok's tag, its value or
+# code into *out.
 fn fz_enum_decode(kind, data, len, out): i64 {
+    if (kind == 4) {
+        var t4, v4 = us_side_from_json_a(_fz_arena, data, len);
+        store64(out, v4);
+        return is_ok(t4);
+    }
     if (kind == 1) {
         var t, v = us_phase_from_json_a(_fz_arena, data, len);
         store64(out, v);
@@ -198,6 +205,7 @@ fn fz_enum(kind, data, len) {
     var count = US_PHASE_COUNT;
     if (kind == 2) { count = US_PROCESS_COUNT; }
     if (kind == 3) { count = US_CYCLE_COUNT; }
+    if (kind == 4) { count = US_SIDE_COUNT; }
     var w[8];
     var w2[8];
     reset_via(_fz_arena);
@@ -215,6 +223,7 @@ fn fz_enum(kind, data, len) {
     if (kind == 1) { us_phase_to_json(_fz_sb, v); }
     if (kind == 2) { us_process_to_json(_fz_sb, v); }
     if (kind == 3) { us_cycle_to_json(_fz_sb, v); }
+    if (kind == 4) { us_side_to_json(_fz_sb, v); }
     if (fz_enum_decode(kind, load64(_fz_sb), load64(_fz_sb + 8), &w2) == 0 || load64(&w2) != v) {
         _fz_bad = _fz_bad + 1;
     }
@@ -425,6 +434,76 @@ fn fz_comparison(data, len) {
     return 0;
 }
 
+# 1 when every f64 of condition *bc is finite.
+fn fz_bc_finite(bc: *UsBoundaryCondition): i64 {
+    var b = bc;
+    var k = 1;
+    while (k < 5) {
+        var x: f64 = load64(b + (8 * k));
+        if (_us_is_finite(x) == 0) { return 0; }
+        k = k + 1;
+    }
+    return 1;
+}
+
+# The BoundaryCondition and ThermalGrid1D decoders on one input: a refusal is Deserialize; an accepted one has a kind
+# in range and round-trips.
+fn fz_numerical(data, len) {
+    var bc: UsBoundaryCondition;
+    reset_via(_fz_arena);
+    var t, v = us_boundary_from_json_a(_fz_arena, data, len, &bc);
+    if (is_ok(t) == 0) {
+        if (v != US_ERR_DESERIALIZE) { _fz_bad = _fz_bad + 1; }
+    } else {
+        _fz_num_read = _fz_num_read + 1;
+        if (bc.kind < 0 || bc.kind >= US_BOUNDARY_COUNT) { _fz_bad = _fz_bad + 1; }
+        store64(_fz_sb + 8, 0);
+        us_boundary_to_json(_fz_sb, &bc);
+        var b2: UsBoundaryCondition;
+        var t2, v2 = us_boundary_from_json_a(_fz_arena, load64(_fz_sb), load64(_fz_sb + 8), &b2);
+        if (is_ok(t2) == 0) {
+            if (fz_bc_finite(&bc) == 1) { _fz_bad = _fz_bad + 1; }
+        } else {
+            store64(_fz_sb2 + 8, 0);
+            us_boundary_to_json(_fz_sb2, &b2);
+            var n1 = load64(_fz_sb + 8);
+            if (n1 != load64(_fz_sb2 + 8) || memeq(load64(_fz_sb), load64(_fz_sb2), n1) == 0) { _fz_bad = _fz_bad + 1; }
+        }
+    }
+    var g: UsGrid1D;
+    reset_via(_fz_arena);
+    var t3, v3 = us_grid1d_from_json_a(_fz_arena, data, len, &g);
+    if (is_ok(t3) == 0) {
+        if (v3 != US_ERR_DESERIALIZE) { _fz_bad = _fz_bad + 1; }
+        return 0;
+    }
+    _fz_num_read = _fz_num_read + 1;
+    store64(_fz_sb + 8, 0);
+    us_grid1d_to_json(_fz_sb, &g);
+    var g2: UsGrid1D;
+    var t4, v4 = us_grid1d_from_json_a(_fz_arena, load64(_fz_sb), load64(_fz_sb + 8), &g2);
+    if (is_ok(t4) == 0) {
+        # A non-finite number writes as null, which reads back as no f64 (as fz_material).
+        var fin = fz_bc_finite(us_grid1d_left(&g)) & fz_bc_finite(us_grid1d_right(&g));
+        var dx: f64 = g.dx;
+        var al: f64 = g.alpha;
+        fin = fin & _us_is_finite(dx) & _us_is_finite(al);
+        var k = 0;
+        while (k < us_grid1d_len(&g)) {
+            var x: f64 = us_grid1d_node(&g, k);
+            fin = fin & _us_is_finite(x);
+            k = k + 1;
+        }
+        if (fin == 1) { _fz_bad = _fz_bad + 1; }
+        return 0;
+    }
+    store64(_fz_sb2 + 8, 0);
+    us_grid1d_to_json(_fz_sb2, &g2);
+    var m1 = load64(_fz_sb + 8);
+    if (m1 != load64(_fz_sb2 + 8) || memeq(load64(_fz_sb), load64(_fz_sb2), m1) == 0) { _fz_bad = _fz_bad + 1; }
+    return 0;
+}
+
 # A builder's text as a fresh C string.
 fn fz_text(sb): i64 {
     var n = load64(sb + 8);
@@ -445,6 +524,7 @@ fn fuzz_main(data, len) {
     fz_enum(1, data, len);
     fz_enum(2, data, len);
     fz_enum(3, data, len);
+    fz_enum(4, data, len);
     fz_f64(1, data, len);
     fz_f64(2, data, len);
     fz_f64(3, data, len);
@@ -453,6 +533,7 @@ fn fuzz_main(data, len) {
     fz_cycle(data, len);
     fz_refr(data, len);
     fz_comparison(data, len);
+    fz_numerical(data, len);
     return 0;
 }
 
@@ -509,7 +590,7 @@ fn main() {
     _fz_sb2 = str_builder_new();
     var cap = 2048;
     var buf = alloc(cap + 1);
-    var seeds = alloc(8 * 42);
+    var seeds = alloc(8 * 47);
     store64(seeds, "trace");
     store64(seeds + 8, "debug");
     store64(seeds + 16, "info");
@@ -576,6 +657,12 @@ fn main() {
     store64(seeds + 312, "[\"Refrigeration\",5,-1,1,5,1]");
     store64(seeds + 320, "{\"name\":\"CH4\",\"delta_hf\":-74810.0,\"delta_gf\":-50720.0,\"cp\":35.31}");
     store64(seeds + 328, "[\"H2O(g)\",-241820,-228570,33.58]");
+    store64(seeds + 336, "{\"Convective\":{\"h\":25.0,\"t_fluid\":300.0,\"k\":50.0}}");
+    store64(seeds + 344, "{\"Fixed\":400.0}");
+    store64(seeds + 352, "\"Left\"");
+    var g1 = "{\"nodes\":[400.0,300.0,300.0,300.0],\"dx\":0.333,\"alpha\":0.0001,";
+    store64(seeds + 360, fz_cat(g1, "\"bc_left\":{\"Fixed\":400.0},\"bc_right\":\"Insulated\"}"));
+    store64(seeds + 368, "[[1,2,3],0.5,0.0001,\"Insulated\",{\"Convective\":[1,2,3]}]");
     var i = 0;
     while (i < 50000) {
         var n = 0;
@@ -584,7 +671,7 @@ fn main() {
             var k = 0;
             while (k < n) { store8(buf + k, fz_below(256)); k = k + 1; }
         } else {
-            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(42)));
+            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(47)));
         }
         fuzz_main(buf, n);
         i = i + 1;
@@ -610,6 +697,8 @@ fn main() {
     fmt_int(_fz_refr_read);
     print(", comparisons read: ", 20);
     fmt_int(_fz_cmp_read);
+    print(", conditions and grids read: ", 29);
+    fmt_int(_fz_num_read);
     println(")");
     return 0;
 }

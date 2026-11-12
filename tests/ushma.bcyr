@@ -26,6 +26,7 @@ include "src/cycle.cyr"
 include "src/chem_data.cyr"
 include "src/chem.cyr"
 include "src/stat.cyr"
+include "src/numerical.cyr"
 
 # Keeps results observable, so no call can be dropped.
 var _bn_sink = 0;
@@ -498,6 +499,27 @@ fn b_debye_low(x): i64 {
     return v;
 }
 
+var _bn_g1 = 0;
+var _bn_g1_dt: f64 = 0.0;
+
+# One explicit step of the 100-node grid at Fo = 0.4.
+fn b_explicit(g: *UsGrid1D): i64 {
+    var t, v = us_grid1d_step_explicit(g, _bn_g1_dt);
+    return 0;
+}
+
+# One Crank–Nicolson step of the 100-node grid at dt = 1 s.
+fn b_cn(g: *UsGrid1D): i64 {
+    var t, v = us_grid1d_step_crank_nicolson(g, 1.0);
+    return 0;
+}
+
+# One adaptive step of the 51-node convective grid at 4× the stable step (4 explicit sub-steps).
+fn b_adaptive(g: *UsGrid1D): i64 {
+    var t, v = us_grid1d_step_adaptive(g, _bn_g1_dt);
+    return v;
+}
+
 # Fills the two resistance lists the benchmarks use.
 fn bn_lists() {
     _bn_series = alloc(40);
@@ -626,6 +648,26 @@ fn main(): i64 {
     bn_run("stat/einstein_cv", &b_einstein, 0, 1000000);
     bn_run("stat/debye_cv", &b_debye, 0, 100000);
     bn_run("stat/debye_cv_low_t", &b_debye_low, 0, 1000000);
+    var bcl: UsBoundaryCondition;
+    var bcr: UsBoundaryCondition;
+    us_boundary_fixed(&bcl, 400.0);
+    us_boundary_fixed(&bcr, 300.0);
+    var g1: UsGrid1D;
+    var tg1, vg1 = us_grid1d_new(&g1, 100, 1.0, 0.0001, 300.0, &bcl, &bcr);
+    var gdx: f64 = g1.dx;
+    var gal: f64 = g1.alpha;
+    _bn_g1_dt = 0.4 * gdx * gdx / gal;
+    bn_run("numerical/explicit_1d", &b_explicit, &g1, 100000);
+    var g2: UsGrid1D;
+    var tg2, vg2 = us_grid1d_new(&g2, 100, 1.0, 0.0001, 300.0, &bcl, &bcr);
+    bn_run("numerical/crank_nicolson_1d", &b_cn, &g2, 100000);
+    var bcc: UsBoundaryCondition;
+    us_boundary_convective(&bcc, 50.0, 290.0, 15.0);
+    var g3: UsGrid1D;
+    var tg3, vg3 = us_grid1d_new(&g3, 51, 0.1, 0.00001, 300.0, &bcl, &bcc);
+    var ms: f64 = us_grid1d_max_stable_dt(&g3);
+    _bn_g1_dt = 4.0 * ms;
+    bn_run("numerical/adaptive_1d_4substeps", &b_adaptive, &g3, 100000);
     return 0;
 }
 

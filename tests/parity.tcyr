@@ -39,6 +39,7 @@ include "src/steam.cyr"
 include "src/cycle.cyr"
 include "src/chem.cyr"
 include "src/stat.cyr"
+include "src/numerical.cyr"
 
 alloc_init();
 
@@ -467,6 +468,235 @@ fn _par_material(fp, fl): i64 {
         return 1;
     }
     return 0;
+}
+
+# ── numerical ───────────────────────────────────────────────────────────────────────
+
+# A boundary kind's golden text ("BoundaryCondition.Fixed"), or 0.
+fn _par_bc_text(k): i64 {
+    match k {
+        US_BOUNDARY_FIXED => { return "BoundaryCondition.Fixed"; }
+        US_BOUNDARY_INSULATED => { return "BoundaryCondition.Insulated"; }
+        US_BOUNDARY_CONVECTIVE => { return "BoundaryCondition.Convective"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# A side's golden text ("Side.Left"), or 0.
+fn _par_side_text(k): i64 {
+    match k {
+        US_SIDE_LEFT => { return "Side.Left"; }
+        US_SIDE_RIGHT => { return "Side.Right"; }
+        US_SIDE_TOP => { return "Side.Top"; }
+        US_SIDE_BOTTOM => { return "Side.Bottom"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# A boundary condition from input token `at` into *bc: the index after it, or -1.
+fn _par_bc_in(at, bc: *UsBoundaryCondition): i64 {
+    var kind = _par_in_enum(at, &_par_bc_text, US_BOUNDARY_COUNT);
+    if (kind == US_BOUNDARY_FIXED) {
+        var t: f64 = _par_in(at + 1);
+        us_boundary_fixed(bc, t);
+        return at + 2;
+    }
+    if (kind == US_BOUNDARY_INSULATED) {
+        us_boundary_insulated(bc);
+        return at + 1;
+    }
+    if (kind == US_BOUNDARY_CONVECTIVE) {
+        var h: f64 = _par_in(at + 1);
+        var tf: f64 = _par_in(at + 2);
+        var k: f64 = _par_in(at + 3);
+        us_boundary_convective(bc, h, tf, k);
+        return at + 4;
+    }
+    return 0 - 1;
+}
+
+# Appends *bc as its golden tokens.
+fn _par_got_bc(bc: *UsBoundaryCondition) {
+    _par_got_e(_par_bc_text(bc.kind));
+    if (bc.kind == US_BOUNDARY_FIXED) {
+        var t: f64 = bc.t;
+        _par_got_f(t);
+    }
+    if (bc.kind == US_BOUNDARY_CONVECTIVE) {
+        var h: f64 = bc.h;
+        var tf: f64 = bc.t_fluid;
+        var k: f64 = bc.k;
+        _par_got_f(h);
+        _par_got_f(tf);
+        _par_got_f(k);
+    }
+    return 0;
+}
+
+# A 1D grid from input token `at` (`v:n` and the nodes, Δx, α, two conditions) into *g, whose vecs exist: the index
+# after it, or -1.
+fn _par_g1_in(g: *UsGrid1D, at): i64 {
+    if (at >= _par_in_n || load64(_par_in_k + at * 8) != 118) { return 0 - 1; }
+    var n = _par_in(at);
+    vec_truncate(g.nodes, 0);
+    var k = 0;
+    while (k < n) {
+        vec_push(g.nodes, _par_in(at + 1 + k));
+        k = k + 1;
+    }
+    var i = at + 1 + n;
+    var dx: f64 = _par_in(i);
+    var al: f64 = _par_in(i + 1);
+    g.dx = dx;
+    g.alpha = al;
+    i = _par_bc_in(i + 2, us_grid1d_left(g));
+    if (i < 0) { return 0 - 1; }
+    return _par_bc_in(i, us_grid1d_right(g));
+}
+
+# Appends *g as its golden tokens.
+fn _par_got_g1(g: *UsGrid1D) {
+    var n = vec_len(g.nodes);
+    _par_got_seq(n);
+    var k = 0;
+    while (k < n) {
+        _par_got_f(vec_get(g.nodes, k));
+        k = k + 1;
+    }
+    var dx: f64 = g.dx;
+    var al: f64 = g.alpha;
+    _par_got_f(dx);
+    _par_got_f(al);
+    _par_got_bc(us_grid1d_left(g));
+    _par_got_bc(us_grid1d_right(g));
+    return 0;
+}
+
+var _par_g1 = 0;
+
+# One numerical row: 1 when handled, 0 for a function with no counterpart yet, -1 for unusable inputs.
+fn _par_numerical(fp, fl): i64 {
+    if (_par_g1 == 0) {
+        _par_g1 = alloc(sizeof(UsGrid1D));
+        var b: UsBoundaryCondition;
+        us_boundary_insulated(&b);
+        var tg, vg = us_grid1d_new(_par_g1, 3, 1.0, 1.0, 0.0, &b, &b);
+    }
+    if (_par_mat_sb == 0) {
+        _par_mat_sb = str_builder_new();
+        _par_mat_arena = arena_allocator_growable(65536);
+    }
+    var bc: UsBoundaryCondition;
+    if (_par_eq(fp, fl, "numerical::BoundaryCondition::to_json") == 1) {
+        if (_par_bc_in(0, &bc) != _par_in_n) { return 0 - 1; }
+        store64(_par_mat_sb + 8, 0);
+        us_boundary_to_json(_par_mat_sb, &bc);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "numerical::Side::to_json") == 1) {
+        var sd = _par_in_enum(0, &_par_side_text, US_SIDE_COUNT);
+        if (sd < 0) { return 0 - 1; }
+        store64(_par_mat_sb + 8, 0);
+        us_side_to_json(_par_mat_sb, sd);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "numerical::ThermalGrid1D::to_json") == 1) {
+        if (_par_g1_in(_par_g1, 0) != _par_in_n) { return 0 - 1; }
+        store64(_par_mat_sb + 8, 0);
+        us_grid1d_to_json(_par_mat_sb, _par_g1);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    var kind = 0;
+    if (_par_eq(fp, fl, "numerical::BoundaryCondition::from_json") == 1) { kind = 1; }
+    if (_par_eq(fp, fl, "numerical::Side::from_json") == 1) { kind = 2; }
+    if (_par_eq(fp, fl, "numerical::ThermalGrid1D::from_json") == 1) { kind = 3; }
+    if (kind != 0) {
+        var dn[8];
+        var doc = _par_in_text(0, &dn);
+        if (doc == 0) { return 0 - 1; }
+        var n = load64(&dn);
+        reset_via(_par_mat_arena);
+        var ok = 0;
+        if (kind == 1) {
+            var t1, v1 = us_boundary_from_json_a(_par_mat_arena, doc, n, &bc);
+            if (is_ok(t1) == 1) { _par_got_bc(&bc); } else { _par_got_err(v1); }
+            ok = is_ok(t1);
+        }
+        if (kind == 2) {
+            var t2, v2 = us_side_from_json_a(_par_mat_arena, doc, n);
+            if (is_ok(t2) == 1) { _par_got_e(_par_side_text(v2)); } else { _par_got_err(v2); }
+            ok = is_ok(t2);
+        }
+        if (kind == 3) {
+            var g3: UsGrid1D;
+            var t3, v3 = us_grid1d_from_json_a(_par_mat_arena, doc, n, &g3);
+            if (is_ok(t3) == 1) { _par_got_g1(&g3); } else { _par_got_err(v3); }
+            ok = is_ok(t3);
+        }
+        if (ok == 0 && _par_bayan_mapped_refusal(doc, n) == 1) { _par_adr5 = 1; }
+        if (ok == 1 && _par_has_int_neg_zero(doc, n) == 1) { _par_adr5 = 1; }
+        return 1;
+    }
+    if (_par_eq(fp, fl, "numerical::ThermalGrid1D::new") == 1) {
+        var bl: UsBoundaryCondition;
+        var br: UsBoundaryCondition;
+        var at = _par_bc_in(4, &bl);
+        if (at < 0 || _par_bc_in(at, &br) != _par_in_n) { return 0 - 1; }
+        var len: f64 = _par_in(1);
+        var al: f64 = _par_in(2);
+        var t0: f64 = _par_in(3);
+        var g: UsGrid1D;
+        var tn, vn = us_grid1d_new(&g, _par_in(0), len, al, t0, &bl, &br);
+        if (is_ok(tn) == 1) { _par_got_g1(&g); } else { _par_got_err(vn); }
+        return 1;
+    }
+    var step = 0;
+    if (_par_eq(fp, fl, "numerical::ThermalGrid1D::fourier_number") == 1) { step = 1; }
+    if (_par_eq(fp, fl, "numerical::ThermalGrid1D::max_stable_dt") == 1) { step = 2; }
+    if (_par_eq(fp, fl, "numerical::ThermalGrid1D::step_explicit") == 1) { step = 3; }
+    if (_par_eq(fp, fl, "numerical::ThermalGrid1D::step_crank_nicolson") == 1) { step = 4; }
+    if (_par_eq(fp, fl, "numerical::ThermalGrid1D::step_adaptive") == 1) { step = 5; }
+    if (step == 0) { return 0; }
+    var gi = _par_g1_in(_par_g1, 0);
+    if (gi < 0) { return 0 - 1; }
+    if (step == 2) {
+        if (gi != _par_in_n) { return 0 - 1; }
+        var md: f64 = us_grid1d_max_stable_dt(_par_g1);
+        _par_got_f(md);
+        return 1;
+    }
+    if (gi + 1 != _par_in_n) { return 0 - 1; }
+    var dt: f64 = _par_in(gi);
+    if (step == 1) {
+        var fo: f64 = us_grid1d_fourier_number(_par_g1, dt);
+        _par_got_f(fo);
+        return 1;
+    }
+    var ts = 0;
+    var vs = 0;
+    if (step == 3) {
+        var t4, v4 = us_grid1d_step_explicit(_par_g1, dt);
+        ts = t4;
+        vs = v4;
+    }
+    if (step == 4) {
+        var t5, v5 = us_grid1d_step_crank_nicolson(_par_g1, dt);
+        ts = t5;
+        vs = v5;
+    }
+    if (step == 5) {
+        var t6, v6 = us_grid1d_step_adaptive(_par_g1, dt);
+        ts = t6;
+        vs = v6;
+        if (is_ok(ts) == 1) { _par_got_f(vs); }
+    }
+    if (is_ok(ts) == 1) { _par_got_g1(_par_g1); } else { _par_got_err(vs); }
+    return 1;
 }
 
 # ── stat ────────────────────────────────────────────────────────────────────────────
@@ -1925,6 +2155,7 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "steam") == 1) { return _par_steam(fp, fl); }
     if (_par_eq(mp, ml, "cycle") == 1) { return _par_cycle(fp, fl); }
     if (_par_eq(mp, ml, "stat") == 1) { return _par_stat(fp, fl); }
+    if (_par_eq(mp, ml, "numerical") == 1) { return _par_numerical(fp, fl); }
     if (_par_eq(mp, ml, "material") == 1 && _par_in_n != 0) { return _par_material(fp, fl); }
     if (_par_eq(mp, ml, "state") == 1 && _par_in_n != 0) { return _par_state(fp, fl); }
     if (_par_eq(mp, ml, "phase") == 1 && _par_in_n != 0) { return _par_phase(fp, fl); }
@@ -2045,6 +2276,7 @@ fn _par_c_bound(fp, fl): i64 {
     if (fl > 7 && _par_eq(fp, 7, "cycle::") == 1) { return 0; }
     if (fl > 6 && _par_eq(fp, 6, "chem::") == 1) { return 0; }
     if (fl > 6 && _par_eq(fp, 6, "stat::") == 1) { return 0; }
+    if (fl > 11 && _par_eq(fp, 11, "numerical::") == 1) { return 0; }
     return 0 - 1;
 }
 

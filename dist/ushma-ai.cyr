@@ -4043,6 +4043,24 @@ fn _us_fail_i(code, fname, what, n): i64 {
     return code;
 }
 
+# --- Caller-owned storage ---
+
+# Sizes vec `v` to `n` words, growing it on allocator `a` (new words 0): 1, or 0 when a grow was refused (`v` is then
+# empty). A vec that holds n words or more already, as a reused result's do, is only truncated.
+fn _us_vec_size(a, v, n): i64 {
+    if (vec_len(v) >= n) {
+        vec_truncate(v, n);
+        return 1;
+    }
+    while (vec_len(v) < n) {
+        if (vec_push_a(a, v, 0) < 0) {
+            vec_truncate(v, 0);
+            return 0;
+        }
+    }
+    return 1;
+}
+
 # --- logging.cyr ---
 
 # logging.cyr — ushma's logging setup and its spans, on lib/log.cyr and sakshi.
@@ -8842,22 +8860,6 @@ fn us_cycle_push_process(r: *UsCycleResult, kind): Result {
     return Ok(0);
 }
 
-# Sizes vec `v` to `n` words, growing it on allocator `a` (new words 0): 1, or 0 when a grow was refused (`v` is then
-# empty). A vec that holds n words or more already, as a reused result's do, is only truncated.
-fn _us_vec_size(a, v, n): i64 {
-    if (vec_len(v) >= n) {
-        vec_truncate(v, n);
-        return 1;
-    }
-    while (vec_len(v) < n) {
-        if (vec_push_a(a, v, 0) < 0) {
-            vec_truncate(v, 0);
-            return 0;
-        }
-    }
-    return 1;
-}
-
 # Readies *r for a four-state cycle of kind `kind` and processes p0 … p3: sizes its state vec to 20 words, for the
 # caller to store the four points into in place (_us_sp_store), and fills its processes. The state words' address, or
 # 0 when a grow was refused (*r then has no state points or processes).
@@ -10513,4 +10515,771 @@ fn us_debye_cv(debye_temp: f64, temperature: f64): Result {
     var integral: f64 = out[0];
     var c: f64 = 9.0 * US_GAS_CONSTANT * r3 * integral;
     return Ok(c);
+}
+
+# --- numerical.cyr ---
+
+# numerical.cyr — numerical heat conduction (Rust 1.4.0 `numerical`): boundary conditions and the 1D transient grid
+# with its explicit, Crank–Nicolson and adaptive steps (M6a). SI: kelvins, metres, seconds, W/(m·K).
+#
+# Each function computes in the order Rust 1.4.0 writes, so its arithmetic is bit-identical (class B); its unary minus
+# is a sign flip (_us_neg). A refusal returns Err(US_ERR_*) and reports its value at DEBUG (src/validate.cyr), leaving
+# the grid as it was. `step_explicit` and `step_crank_nicolson` open DEBUG spans under Rust's names.
+#
+# A boundary condition is a UsBoundaryCondition: its kind (a UsBoundary code) and the values that kind carries (ADR
+# 0002 row 15). A grid is a UsGrid1D the caller owns: its nodes are a stdlib vec on the grid's allocator, and it keeps
+# its own Crank–Nicolson scratch, so a step allocates nothing after the first (ADR 0002 row 2). Its fields are public
+# as Rust's are, and every step checks them (Rust's `check`), so a grid edited by hand, or read from JSON, is refused
+# rather than trusted. JSON is serde_json's (ADR 0005; src/json.cyr has the rules).
+
+enum UsBoundary {
+    US_BOUNDARY_FIXED = 0;
+    US_BOUNDARY_INSULATED = 1;
+    US_BOUNDARY_CONVECTIVE = 2;
+}
+
+# The number of boundary kinds.
+const US_BOUNDARY_COUNT = 3;
+
+# A boundary condition (Rust's BoundaryCondition): its kind, and the values the kind carries. Fixed holds the wall
+# temperature `t`, Convective the film coefficient `h`, the fluid's `t_fluid` and the wall's conductivity `k`; the
+# other fields are 0 and unread.
+struct UsBoundaryCondition {
+    kind;
+    t: f64;
+    h: f64;
+    t_fluid: f64;
+    k: f64;
+}
+
+enum UsSide {
+    US_SIDE_LEFT = 0;
+    US_SIDE_RIGHT = 1;
+    US_SIDE_TOP = 2;
+    US_SIDE_BOTTOM = 3;
+}
+
+# The number of sides.
+const US_SIDE_COUNT = 4;
+
+# A 1D transient conduction grid (Rust's ThermalGrid1D). `nodes` is a vec of the node temperatures (K) as f64 words.
+# `c_star` and `d_star` are the Crank–Nicolson scratch, sized on first use; `alloc` is what the vecs grow on.
+struct UsGrid1D {
+    alloc;
+    nodes;
+    dx: f64;
+    alpha: f64;
+    bc_left: UsBoundaryCondition;
+    bc_right: UsBoundaryCondition;
+    c_star;
+    d_star;
+}
+
+# The byte offsets of a UsGrid1D's two boundary conditions (after alloc, nodes, dx, alpha). Add them to an untyped
+# address: `&g.bc_left` is no Cyrius expression.
+const _US_G1_LEFT = 32;
+const _US_G1_RIGHT = 72;
+
+# --- Names ---
+
+# The Rust name of boundary kind `k` ("Fixed" …), or 0 when `k` is no kind.
+#must_use
+#pure
+fn us_boundary_name(k): cstring {
+    match k {
+        US_BOUNDARY_FIXED => { return "Fixed"; }
+        US_BOUNDARY_INSULATED => { return "Insulated"; }
+        US_BOUNDARY_CONVECTIVE => { return "Convective"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# The Rust name of side `k` ("Left" …), or 0 when `k` is no side.
+#must_use
+#pure
+fn us_side_name(k): cstring {
+    match k {
+        US_SIDE_LEFT => { return "Left"; }
+        US_SIDE_RIGHT => { return "Right"; }
+        US_SIDE_TOP => { return "Top"; }
+        US_SIDE_BOTTOM => { return "Bottom"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# --- Boundary conditions ---
+
+# Makes *out a fixed-temperature (Dirichlet) condition at `t` K.
+fn us_boundary_fixed(out: *UsBoundaryCondition, t: f64) {
+    out.kind = US_BOUNDARY_FIXED;
+    out.t = t;
+    out.h = 0.0;
+    out.t_fluid = 0.0;
+    out.k = 0.0;
+    return 0;
+}
+
+# Makes *out an insulated (adiabatic, zero-flux Neumann) condition.
+fn us_boundary_insulated(out: *UsBoundaryCondition) {
+    out.kind = US_BOUNDARY_INSULATED;
+    out.t = 0.0;
+    out.h = 0.0;
+    out.t_fluid = 0.0;
+    out.k = 0.0;
+    return 0;
+}
+
+# Makes *out a convective (Robin) condition, −k·dT/dx = h·(T − T_fluid).
+fn us_boundary_convective(out: *UsBoundaryCondition, h: f64, t_fluid: f64, k: f64) {
+    out.kind = US_BOUNDARY_CONVECTIVE;
+    out.t = 0.0;
+    out.h = h;
+    out.t_fluid = t_fluid;
+    out.k = k;
+    return 0;
+}
+
+# 0 when *bc's values are physical and finite (Rust's `validate`), else US_ERR_INVALID_PARAMETER reported by `fname`: a
+# Fixed temperature must be finite; a Convective h finite and ≥ 0, k finite and > 0, T_fluid finite. A kind that is no
+# UsBoundary code is refused too (Rust's enum holds none).
+fn _us_bc_check(bc: *UsBoundaryCondition, fname): i64 {
+    var kind = bc.kind;
+    if (kind == US_BOUNDARY_FIXED) {
+        var t: f64 = bc.t;
+        if (_us_is_finite(t) == 0) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, "fixed temperature", t); }
+        return 0;
+    }
+    if (kind == US_BOUNDARY_CONVECTIVE) {
+        var h: f64 = bc.h;
+        var k: f64 = bc.k;
+        var tf: f64 = bc.t_fluid;
+        if (_us_finite_ge(h, 0.0) == 0) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, "convective h", h); }
+        if (_us_finite_gt(k, 0.0) == 0) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, "convective k", k); }
+        if (_us_is_finite(tf) == 0) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, "convective t_fluid", tf); }
+        return 0;
+    }
+    if (kind == US_BOUNDARY_INSULATED) { return 0; }
+    return _us_fail_i(US_ERR_INVALID_PARAMETER, fname, "boundary kind", kind);
+}
+
+# The cell Biot number h·Δ/k of a convective *bc, 0 for any other.
+#must_use
+fn _us_bc_biot(bc: *UsBoundaryCondition, spacing: f64): f64 {
+    if (bc.kind != US_BOUNDARY_CONVECTIVE) { return 0.0; }
+    var h: f64 = bc.h;
+    var k: f64 = bc.k;
+    var bi: f64 = h * spacing / k;
+    return bi;
+}
+
+# --- The 1D grid ---
+
+# The address of *g's left boundary condition, to read or set it (`us_boundary_fixed(us_grid1d_left(g), 400.0)`).
+#must_use
+fn us_grid1d_left(g: *UsGrid1D): *UsBoundaryCondition {
+    var b = g;
+    return b + _US_G1_LEFT;
+}
+
+# The address of *g's right boundary condition.
+#must_use
+fn us_grid1d_right(g: *UsGrid1D): *UsBoundaryCondition {
+    var b = g;
+    return b + _US_G1_RIGHT;
+}
+
+# The number of nodes of *g.
+#must_use
+fn us_grid1d_len(g: *UsGrid1D): i64 {
+    return vec_len(g.nodes);
+}
+
+# The temperature of node `i` of *g (K), or NaN when there is no node `i`.
+#must_use
+fn us_grid1d_node(g: *UsGrid1D, i): f64 {
+    if (i < 0 || i >= vec_len(g.nodes)) {
+        var nan: f64 = 0.0 / 0.0;
+        return nan;
+    }
+    var t: f64 = vec_get(g.nodes, i);
+    return t;
+}
+
+# Sets node `i` of *g to `t` K: 1, or 0 when there is no node `i`. The next step checks the grid; a node takes any f64,
+# as Rust's public `nodes` does.
+fn us_grid1d_set_node(g: *UsGrid1D, i, t: f64): i64 {
+    if (i < 0 || i >= vec_len(g.nodes)) { return 0; }
+    vec_set(g.nodes, i, t);
+    return 1;
+}
+
+# Fills *out with a 1D grid of `num_nodes` nodes over `length` m at diffusivity `alpha` (m²/s), every node at
+# `t_initial` K but a Fixed end at its own temperature, its vecs on the global heap. Ok(0), or
+# Err(US_ERR_INVALID_PARAMETER) unless num_nodes ≥ 3, length and α are > 0, t_initial is finite and both conditions are
+# valid; Err(US_ERR_OUT_OF_MEMORY) when a vec was refused. *out is unchanged on a refusal.
+#must_use
+fn us_grid1d_new(out: *UsGrid1D, num_nodes, length: f64, alpha: f64, t_initial: f64, bc_left: *UsBoundaryCondition,
+  bc_right: *UsBoundaryCondition): Result {
+    return us_grid1d_new_a(default_alloc(), out, num_nodes, length, alpha, t_initial, bc_left, bc_right);
+}
+
+# us_grid1d_new with the grid's vecs on allocator `a`, which the grid keeps and grows them on.
+#must_use
+fn us_grid1d_new_a(a, out: *UsGrid1D, num_nodes, length: f64, alpha: f64, t_initial: f64,
+  bc_left: *UsBoundaryCondition, bc_right: *UsBoundaryCondition): Result {
+    if (num_nodes < 3) { return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_grid1d_new", "num_nodes", num_nodes)); }
+    if (_us_finite_gt(length, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_grid1d_new", "length", length));
+    }
+    if (_us_finite_gt(alpha, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_grid1d_new", "alpha", alpha));
+    }
+    if (_us_is_finite(t_initial) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_grid1d_new", "t_initial", t_initial));
+    }
+    var code = _us_bc_check(bc_left, "us_grid1d_new");
+    if (code == 0) { code = _us_bc_check(bc_right, "us_grid1d_new"); }
+    if (code != 0) { return Err(code); }
+    var nodes = vec_new_a(a);
+    var cs = vec_new_a(a);
+    var ds = vec_new_a(a);
+    if (nodes == 0 || cs == 0 || ds == 0) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_grid1d_new")); }
+    var k = 0;
+    while (k < num_nodes) {
+        if (vec_push_a(a, nodes, t_initial) < 0) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_grid1d_new")); }
+        k = k + 1;
+    }
+    if (bc_left.kind == US_BOUNDARY_FIXED) {
+        var tl: f64 = bc_left.t;
+        vec_set(nodes, 0, tl);
+    }
+    if (bc_right.kind == US_BOUNDARY_FIXED) {
+        var tr: f64 = bc_right.t;
+        vec_set(nodes, num_nodes - 1, tr);
+    }
+    var nm1: f64 = f64_from(num_nodes - 1);
+    var dx: f64 = length / nm1;
+    out.alloc = a;
+    out.nodes = nodes;
+    out.dx = dx;
+    out.alpha = alpha;
+    memcpy(us_grid1d_left(out), bc_left, sizeof(UsBoundaryCondition));
+    memcpy(us_grid1d_right(out), bc_right, sizeof(UsBoundaryCondition));
+    out.c_star = cs;
+    out.d_star = ds;
+    return Ok(0);
+}
+
+# The Fourier number of a step `dt` s, Fo = α·dt/Δx².
+#must_use
+fn us_grid1d_fourier_number(g: *UsGrid1D, dt: f64): f64 {
+    var a: f64 = g.alpha;
+    var dx: f64 = g.dx;
+    var fo: f64 = a * dt / (dx * dx);
+    return fo;
+}
+
+# The largest stable explicit Fourier number, 0.5/(1 + Bi_max), Bi_max the larger convective cell Biot number (Rust's
+# f64::max: a NaN Biot number gives way to the other).
+fn _us_g1_max_fourier(g: *UsGrid1D): f64 {
+    var dx: f64 = g.dx;
+    var bl: f64 = _us_bc_biot(us_grid1d_left(g), dx);
+    var br: f64 = _us_bc_biot(us_grid1d_right(g), dx);
+    var bi: f64 = _us_max(bl, br);
+    var f: f64 = 0.5 / (1.0 + bi);
+    return f;
+}
+
+# The largest stable explicit time step (s), from Fo·(1 + Bi_max) ≤ 0.5: interior nodes need Fo ≤ 0.5, a convective
+# boundary node the stricter bound (Incropera, Table 5.3).
+#must_use
+fn us_grid1d_max_stable_dt(g: *UsGrid1D): f64 {
+    var f: f64 = _us_g1_max_fourier(g);
+    var dx: f64 = g.dx;
+    var a: f64 = g.alpha;
+    var dt: f64 = f * dx * dx / a;
+    return dt;
+}
+
+# 0 when *g is a usable grid (Rust's `check`: at least 3 nodes, Δx and α finite and > 0, both conditions valid), else
+# the refusal's code, reported by `fname`.
+fn _us_g1_check(g: *UsGrid1D, fname): i64 {
+    var n = vec_len(g.nodes);
+    if (n < 3) { return _us_fail_i(US_ERR_INVALID_PARAMETER, fname, "nodes", n); }
+    var dx: f64 = g.dx;
+    var a: f64 = g.alpha;
+    if (_us_finite_gt(dx, 0.0) == 0) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, "dx", dx); }
+    if (_us_finite_gt(a, 0.0) == 0) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, "alpha", a); }
+    var code = _us_bc_check(us_grid1d_left(g), fname);
+    if (code != 0) { return code; }
+    return _us_bc_check(us_grid1d_right(g), fname);
+}
+
+# The explicit update of a boundary node from its old value `tb` and its neighbour's `tin` (the ghost-node or half-cell
+# energy balance).
+fn _us_g1_explicit_boundary(bc: *UsBoundaryCondition, tb: f64, tin: f64, fo: f64, dx: f64): f64 {
+    if (bc.kind == US_BOUNDARY_FIXED) {
+        var t: f64 = bc.t;
+        return t;
+    }
+    if (bc.kind == US_BOUNDARY_INSULATED) {
+        var r: f64 = tb + fo * (2.0 * tin - 2.0 * tb);
+        return r;
+    }
+    var bi: f64 = _us_bc_biot(bc, dx);
+    var tf: f64 = bc.t_fluid;
+    var c: f64 = tb + fo * (2.0 * tin - 2.0 * (1.0 + bi) * tb + 2.0 * bi * tf);
+    return c;
+}
+
+# One forward-Euler update of *g in place at Fourier number `fo` (no allocation; the caller checked stability). The
+# old values roll forward (`prev`, `cur`, `nxt`), each node loaded once.
+fn _us_g1_explicit_update(g: *UsGrid1D, fo: f64) {
+    var n = vec_len(g.nodes);
+    var d = slice_ptr(g.nodes);
+    var old0: f64 = load64(d);
+    var old1: f64 = load64(d + 8);
+    var oldm2: f64 = load64(d + (8 * (n - 2)));
+    var oldm1: f64 = load64(d + (8 * (n - 1)));
+    var prev: f64 = old0;
+    var cur: f64 = old1;
+    var p = d + 8;
+    var end = d + (8 * (n - 1));
+    while (p < end) {
+        var nxt: f64 = load64(p + 8);
+        var t: f64 = cur + fo * (prev - 2.0 * cur + nxt);
+        store64(p, t);
+        prev = cur;
+        cur = nxt;
+        p = p + 8;
+    }
+    var dx: f64 = g.dx;
+    var b0: f64 = _us_g1_explicit_boundary(us_grid1d_left(g), old0, old1, fo, dx);
+    var bn: f64 = _us_g1_explicit_boundary(us_grid1d_right(g), oldm1, oldm2, fo, dx);
+    store64(d, b0);
+    store64(d + (8 * (n - 1)), bn);
+    return 0;
+}
+
+# Advances *g one step of `dt` s by the explicit (forward-Euler) scheme. Ok(0), or the grid's refusal
+# (US_ERR_INVALID_PARAMETER), Err(US_ERR_INVALID_PARAMETER) unless dt is finite and > 0, Err(US_ERR_INVALID_PARAMETER)
+# when Fo exceeds the stability limit (us_grid1d_max_stable_dt) by more than 1e-12 relative.
+#must_use
+fn us_grid1d_step_explicit(g: *UsGrid1D, dt: f64): Result {
+    _us_span_enter("step_explicit", 13);
+    var code = _us_g1_check(g, "us_grid1d_step_explicit");
+    if (code == 0 && _us_finite_gt(dt, 0.0) == 0) {
+        code = _us_fail_f(US_ERR_INVALID_PARAMETER, "us_grid1d_step_explicit", "dt", dt);
+    }
+    if (code != 0) {
+        _us_span_exit();
+        return Err(code);
+    }
+    var fo: f64 = us_grid1d_fourier_number(g, dt);
+    var fmax: f64 = _us_g1_max_fourier(g);
+    if (fo > fmax * (1.0 + 0.000000000001)) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_grid1d_step_explicit", "fourier number", fo));
+    }
+    _us_g1_explicit_update(g, fo);
+    _us_span_exit();
+    return Ok(0);
+}
+
+# A boundary row of the Crank–Nicolson system for *bc at old value `tb` beside `tin`: its diagonal into *w, the
+# off-diagonal toward the interior into *(w + 8), the right-hand side into *(w + 16).
+fn _us_g1_cn_boundary(bc: *UsBoundaryCondition, tb: f64, tin: f64, fo: f64, dx: f64, w) {
+    var nf: f64 = _us_neg(fo);
+    if (bc.kind == US_BOUNDARY_FIXED) {
+        var t: f64 = bc.t;
+        store64(w, 1.0);
+        store64(w + 8, 0.0);
+        store64(w + 16, t);
+        return 0;
+    }
+    if (bc.kind == US_BOUNDARY_INSULATED) {
+        var bi0: f64 = 1.0 + fo;
+        var r0: f64 = (1.0 - fo) * tb + fo * tin;
+        store64(w, bi0);
+        store64(w + 8, nf);
+        store64(w + 16, r0);
+        return 0;
+    }
+    var bi: f64 = _us_bc_biot(bc, dx);
+    var tf: f64 = bc.t_fluid;
+    var diag: f64 = 1.0 + fo * (1.0 + bi);
+    var rhs: f64 = (1.0 - fo * (1.0 + bi)) * tb + fo * tin + 2.0 * fo * bi * tf;
+    store64(w, diag);
+    store64(w + 8, nf);
+    store64(w + 16, rhs);
+    return 0;
+}
+
+# One forward step of the Thomas algorithm (for the two boundary rows; the interior rows inline it) for the row
+# (a, b, c, d): m = b − a·c′, then c′ = c/m and d′ = (d − a·d′)/m,
+# the previous c′ and d′ at *w and *(w + 8), the new ones stored there and at *cs, *ds. 0, or US_ERR_DIVISION_BY_ZERO
+# (reported) when |m| is below 1e-30 or not finite (a zero pivot).
+fn _us_thomas(a: f64, b: f64, c: f64, d: f64, w, cs, ds): i64 {
+    var cp: f64 = load64(w);
+    var dp: f64 = load64(w + 8);
+    var m: f64 = b - a * cp;
+    var am: f64 = f64_abs(m);
+    if (_us_finite_ge(am, 0.000000000000000000000000000001) == 0) {
+        return _us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_grid1d_step_crank_nicolson", "pivot", m);
+    }
+    var nc: f64 = c / m;
+    var nd: f64 = (d - a * dp) / m;
+    store64(w, nc);
+    store64(w + 8, nd);
+    store64(cs, nc);
+    store64(ds, nd);
+    return 0;
+}
+
+# Advances *g one step of `dt` s by Crank–Nicolson (implicit, unconditionally stable): the tridiagonal system by the
+# Thomas algorithm, O(n), in the grid's own scratch (sized on the first step, then reused: no allocation after it).
+# Ok(0), or the grid's and dt's refusals as us_grid1d_step_explicit, Err(US_ERR_DIVISION_BY_ZERO) when a Thomas pivot
+# is below 1e-30 or not finite, Err(US_ERR_OUT_OF_MEMORY) when the scratch could not grow. *g is unchanged on a
+# refusal.
+#must_use
+fn us_grid1d_step_crank_nicolson(g: *UsGrid1D, dt: f64): Result {
+    _us_span_enter("step_crank_nicolson", 19);
+    var code = _us_g1_check(g, "us_grid1d_step_crank_nicolson");
+    if (code == 0 && _us_finite_gt(dt, 0.0) == 0) {
+        code = _us_fail_f(US_ERR_INVALID_PARAMETER, "us_grid1d_step_crank_nicolson", "dt", dt);
+    }
+    if (code != 0) {
+        _us_span_exit();
+        return Err(code);
+    }
+    var n = vec_len(g.nodes);
+    if (_us_vec_size(g.alloc, g.c_star, n) == 0 || _us_vec_size(g.alloc, g.d_star, n) == 0) {
+        _us_span_exit();
+        return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_grid1d_step_crank_nicolson"));
+    }
+    var fo: f64 = us_grid1d_fourier_number(g, dt);
+    var dx: f64 = g.dx;
+    var t = slice_ptr(g.nodes);
+    var cs = slice_ptr(g.c_star);
+    var ds = slice_ptr(g.d_star);
+    var w[16];
+    store64(&w, 0.0);
+    store64(&w + 8, 0.0);
+    var row[24];
+    # Row 0 (the left condition, a = 0), the interior rows with their old temperatures rolled forward, row n − 1.
+    var t0: f64 = load64(t);
+    var t1: f64 = load64(t + 8);
+    _us_g1_cn_boundary(us_grid1d_left(g), t0, t1, fo, dx, &row);
+    var b0: f64 = load64(&row);
+    var c0: f64 = load64(&row + 8);
+    var d0: f64 = load64(&row + 16);
+    code = _us_thomas(0.0, b0, c0, d0, &w, cs, ds);
+    if (code != 0) {
+        _us_span_exit();
+        return Err(code);
+    }
+    var half: f64 = 0.5 * fo;
+    var nh: f64 = _us_neg(half);
+    var bi: f64 = 1.0 + fo;
+    var omf: f64 = 1.0 - fo;
+    var tl: f64 = t0;
+    var ti: f64 = t1;
+    var cp: f64 = load64(&w);
+    var dp: f64 = load64(&w + 8);
+    var i = 1;
+    while (i < n - 1) {
+        var tr: f64 = load64(t + (8 * (i + 1)));
+        var d: f64 = half * tl + omf * ti + half * tr;
+        var m: f64 = bi - nh * cp;
+        var am: f64 = f64_abs(m);
+        if (_us_finite_ge(am, 0.000000000000000000000000000001) == 0) {
+            _us_span_exit();
+            return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_grid1d_step_crank_nicolson", "pivot", m));
+        }
+        cp = nh / m;
+        dp = (d - nh * dp) / m;
+        store64(cs + (8 * i), cp);
+        store64(ds + (8 * i), dp);
+        tl = ti;
+        ti = tr;
+        i = i + 1;
+    }
+    store64(&w, cp);
+    store64(&w + 8, dp);
+    var tn: f64 = load64(t + (8 * (n - 1)));
+    var tm: f64 = load64(t + (8 * (n - 2)));
+    _us_g1_cn_boundary(us_grid1d_right(g), tn, tm, fo, dx, &row);
+    var bn: f64 = load64(&row);
+    var an: f64 = load64(&row + 8);
+    var dn: f64 = load64(&row + 16);
+    code = _us_thomas(an, bn, 0.0, dn, &w, cs + (8 * (n - 1)), ds + (8 * (n - 1)));
+    if (code != 0) {
+        _us_span_exit();
+        return Err(code);
+    }
+    var nx: f64 = load64(ds + (8 * (n - 1)));
+    store64(t + (8 * (n - 1)), nx);
+    i = n - 2;
+    while (i >= 0) {
+        var dsi: f64 = load64(ds + (8 * i));
+        var csi: f64 = load64(cs + (8 * i));
+        var v: f64 = dsi - csi * nx;
+        store64(t + (8 * i), v);
+        nx = v;
+        i = i - 1;
+    }
+    _us_span_exit();
+    return Ok(0);
+}
+
+# Advances *g by `dt_target` s in equal explicit sub-steps no longer than us_grid1d_max_stable_dt (their count
+# ⌈ratio·(1 − 1e-12)⌉, at least 1, so an exact multiple gains no extra sub-step). Ok(dt_target), or the grid's and
+# dt's refusals as us_grid1d_step_explicit, Err(US_ERR_INVALID_PARAMETER) when more than US_MAX_ADAPTIVE_SUBSTEPS
+# sub-steps would be needed (use us_grid1d_step_crank_nicolson for such stiff cases).
+#must_use
+fn us_grid1d_step_adaptive(g: *UsGrid1D, dt_target: f64): Result {
+    var code = _us_g1_check(g, "us_grid1d_step_adaptive");
+    if (code == 0 && _us_finite_gt(dt_target, 0.0) == 0) {
+        code = _us_fail_f(US_ERR_INVALID_PARAMETER, "us_grid1d_step_adaptive", "dt", dt_target);
+    }
+    if (code != 0) { return Err(code); }
+    var dts: f64 = us_grid1d_max_stable_dt(g);
+    var ratio: f64 = dt_target / dts;
+    var c: f64 = f64_ceil(ratio * (1.0 - 0.000000000001));
+    var steps: f64 = _us_max(c, 1.0);
+    var cap: f64 = f64_from(US_MAX_ADAPTIVE_SUBSTEPS);
+    if (_us_finite_ge(steps, 1.0) == 0 || steps > cap) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_grid1d_step_adaptive", "sub-steps", steps));
+    }
+    var num = f64_to(steps);
+    var fo: f64 = us_grid1d_fourier_number(g, dt_target / steps);
+    var k = 0;
+    while (k < num) {
+        _us_g1_explicit_update(g, fo);
+        k = k + 1;
+    }
+    return Ok(dt_target);
+}
+
+# --- JSON ---
+
+# Appends *bc as serde_json writes a `BoundaryCondition` (externally tagged): `{"Fixed":T}`, `"Insulated"`, or
+# `{"Convective":{"h":…,"t_fluid":…,"k":…}}`.
+fn us_boundary_to_json(sb, bc: *UsBoundaryCondition) {
+    var kind = bc.kind;
+    if (kind == US_BOUNDARY_INSULATED) {
+        _us_jw_str(sb, "Insulated", 9);
+        return 0;
+    }
+    str_builder_putc(sb, 123);
+    if (kind == US_BOUNDARY_FIXED) {
+        _us_jw_key(sb, "Fixed", 1);
+        var t: f64 = bc.t;
+        _us_jw_f64(sb, t);
+    } else {
+        _us_jw_key(sb, "Convective", 1);
+        var h: f64 = bc.h;
+        var tf: f64 = bc.t_fluid;
+        var k: f64 = bc.k;
+        str_builder_putc(sb, 123);
+        _us_jw_key(sb, "h", 1);
+        _us_jw_f64(sb, h);
+        _us_jw_key(sb, "t_fluid", 0);
+        _us_jw_f64(sb, tf);
+        _us_jw_key(sb, "k", 0);
+        _us_jw_f64(sb, k);
+        str_builder_putc(sb, 125);
+    }
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# The field names of a Convective condition's values.
+fn _us_conv_field(k): cstring {
+    match k {
+        0 => { return "h"; }
+        1 => { return "t_fluid"; }
+        2 => { return "k"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# A BoundaryCondition node `v` into *out, as serde reads an externally tagged enum: "Insulated" (or {"Insulated":
+# null}), {"Fixed": number}, {"Convective": {h, t_fluid, k} or [h, t_fluid, k]}. 1, or 0.
+fn _us_jr_boundary(v, out: *UsBoundaryCondition): i64 {
+    if (v == 0) { return 0; }
+    if (bayan_json_v_tag(v) == JTAG_STR) {
+        if (_us_jr_unit_enum(v, &us_boundary_name, US_BOUNDARY_COUNT) != US_BOUNDARY_INSULATED) { return 0; }
+        us_boundary_insulated(out);
+        return 1;
+    }
+    if (bayan_json_v_tag(v) != JTAG_OBJ || bayan_json_v_obj_len(v) != 1) { return 0; }
+    var w[24];
+    var x = bayan_json_v_obj_get_by_cstr(v, "Fixed");
+    if (x != 0) {
+        if (_us_jr_f64(x, &w) == 0) { return 0; }
+        var t: f64 = load64(&w);
+        us_boundary_fixed(out, t);
+        return 1;
+    }
+    x = bayan_json_v_obj_get_by_cstr(v, "Insulated");
+    if (x != 0) {
+        if (bayan_json_v_tag(x) != JTAG_NULL) { return 0; }
+        us_boundary_insulated(out);
+        return 1;
+    }
+    x = bayan_json_v_obj_get_by_cstr(v, "Convective");
+    if (x == 0) { return 0; }
+    var form = _us_jr_form(x, 3);
+    if (form == 0) { return 0; }
+    var k = 0;
+    while (k < 3) {
+        if (_us_jr_f64(_us_jr_at(x, form, k, _us_conv_field(k)), &w + (8 * k)) == 0) { return 0; }
+        k = k + 1;
+    }
+    var h: f64 = load64(&w);
+    var tf: f64 = load64(&w + 8);
+    var kk: f64 = load64(&w + 16);
+    us_boundary_convective(out, h, tf, kk);
+    return 1;
+}
+
+# Reads a `BoundaryCondition` document (`n` bytes at `buf`; its tree on allocator `a`) into *out: Ok(0), or
+# Err(US_ERR_DESERIALIZE), leaving *out unchanged.
+#must_use
+fn us_boundary_from_json_a(a, buf, n, out: *UsBoundaryCondition): Result {
+    var bc: UsBoundaryCondition;
+    if (_us_jr_boundary(_us_jr_parse(a, buf, n), &bc) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_boundary_from_json"));
+    }
+    memcpy(out, &bc, sizeof(UsBoundaryCondition));
+    return Ok(0);
+}
+
+# us_boundary_from_json_a on the global heap.
+#must_use
+fn us_boundary_from_json(buf, n, out: *UsBoundaryCondition): Result {
+    return us_boundary_from_json_a(default_alloc(), buf, n, out);
+}
+
+# Appends side `k` as serde_json writes a `Side`: its name as a JSON string.
+fn us_side_to_json(sb, k) {
+    var name = us_side_name(k);
+    if (name == 0) { name = ""; }
+    _us_jw_str(sb, name, strlen(name));
+    return 0;
+}
+
+# Reads a `Side` document (`n` bytes at `buf`; its tree on allocator `a`): Ok(US_SIDE_*), or Err(US_ERR_DESERIALIZE).
+#must_use
+fn us_side_from_json_a(a, buf, n): Result {
+    var k = _us_jr_unit_enum(_us_jr_parse(a, buf, n), &us_side_name, US_SIDE_COUNT);
+    if (k < 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_side_from_json")); }
+    return Ok(k);
+}
+
+# us_side_from_json_a on the global heap.
+#must_use
+fn us_side_from_json(buf, n): Result {
+    return us_side_from_json_a(default_alloc(), buf, n);
+}
+
+# The fields of a ThermalGrid1D, in declaration order.
+fn _us_g1_field(k): cstring {
+    match k {
+        0 => { return "nodes"; }
+        1 => { return "dx"; }
+        2 => { return "alpha"; }
+        3 => { return "bc_left"; }
+        4 => { return "bc_right"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# Appends *g as serde_json writes a `ThermalGrid1D` (its scratch is no field of Rust's).
+fn us_grid1d_to_json(sb, g: *UsGrid1D) {
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "nodes", 1);
+    str_builder_putc(sb, 91);
+    var n = vec_len(g.nodes);
+    var k = 0;
+    while (k < n) {
+        if (k > 0) { str_builder_putc(sb, 44); }
+        var t: f64 = vec_get(g.nodes, k);
+        _us_jw_f64(sb, t);
+        k = k + 1;
+    }
+    str_builder_putc(sb, 93);
+    var dx: f64 = g.dx;
+    var a: f64 = g.alpha;
+    _us_jw_key(sb, "dx", 0);
+    _us_jw_f64(sb, dx);
+    _us_jw_key(sb, "alpha", 0);
+    _us_jw_f64(sb, a);
+    _us_jw_key(sb, "bc_left", 0);
+    us_boundary_to_json(sb, us_grid1d_left(g));
+    _us_jw_key(sb, "bc_right", 0);
+    us_boundary_to_json(sb, us_grid1d_right(g));
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# Reads a `ThermalGrid1D` document (`n` bytes at `buf`; an object, or a 5-element sequence) into *out, its vecs (which
+# then grow on `a`) and the parse tree on allocator `a`. Rust's decoder checks nothing, nor does this one: every step
+# checks the grid. Ok(0), or Err(US_ERR_DESERIALIZE), or Err(US_ERR_OUT_OF_MEMORY) for a refused vec, leaving *out
+# unchanged.
+#must_use
+fn us_grid1d_from_json_a(a, buf, n, out: *UsGrid1D): Result {
+    var v = _us_jr_parse(a, buf, n);
+    var form = _us_jr_form(v, 5);
+    if (form == 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_grid1d_from_json")); }
+    var arr = _us_jr_at(v, form, 0, "nodes");
+    if (arr == 0 || bayan_json_v_tag(arr) != JTAG_ARR) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_grid1d_from_json"));
+    }
+    var w[16];
+    if (_us_jr_f64(_us_jr_at(v, form, 1, "dx"), &w) == 0 || _us_jr_f64(_us_jr_at(v, form, 2, "alpha"), &w + 8) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_grid1d_from_json"));
+    }
+    var bl: UsBoundaryCondition;
+    var br: UsBoundaryCondition;
+    if (_us_jr_boundary(_us_jr_at(v, form, 3, "bc_left"), &bl) == 0
+      || _us_jr_boundary(_us_jr_at(v, form, 4, "bc_right"), &br) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_grid1d_from_json"));
+    }
+    var nodes = vec_new_a(a);
+    var cs = vec_new_a(a);
+    var ds = vec_new_a(a);
+    if (nodes == 0 || cs == 0 || ds == 0) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_grid1d_from_json")); }
+    var nn = bayan_json_v_arr_len(arr);
+    var x[8];
+    var k = 0;
+    while (k < nn) {
+        if (_us_jr_f64(bayan_json_v_arr_get(arr, k), &x) == 0) {
+            return Err(_us_fail(US_ERR_DESERIALIZE, "us_grid1d_from_json"));
+        }
+        if (vec_push_a(a, nodes, load64(&x)) < 0) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_grid1d_from_json")); }
+        k = k + 1;
+    }
+    var dx: f64 = load64(&w);
+    var al: f64 = load64(&w + 8);
+    out.alloc = a;
+    out.nodes = nodes;
+    out.dx = dx;
+    out.alpha = al;
+    memcpy(us_grid1d_left(out), &bl, sizeof(UsBoundaryCondition));
+    memcpy(us_grid1d_right(out), &br, sizeof(UsBoundaryCondition));
+    out.c_star = cs;
+    out.d_star = ds;
+    return Ok(0);
+}
+
+# us_grid1d_from_json_a on the global heap: for a one-off read (its tree and vecs stay allocated).
+#must_use
+fn us_grid1d_from_json(buf, n, out: *UsGrid1D): Result {
+    return us_grid1d_from_json_a(default_alloc(), buf, n, out);
 }

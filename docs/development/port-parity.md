@@ -672,3 +672,28 @@ At the end of M5 the harness's summary is `12 modules, 0 failing | rows: 144841 
   - **Surface parity:** stat 16 of 16. **Tests:** all 33 of stat's, and the last 3 integration tests (all 30 are
     ported; the ledger has 401 of 479, every one due).
 
+
+## 9. M6 (2026-11-12)
+
+After M6a the harness's summary is `13 modules, 0 failing | rows: 146026 ok, 0 failed, 0 measured, 0 pending, 128
+accepted (ADR 4: 63)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
+
+- **numerical, the 1D grid** (M6a): 1,190 rows (class B 1,073, A 117; 336 refusals). The parity is stateful: a step's
+  row holds the grid before the step and the grid after it, so each of a trajectory's steps is checked from the
+  oracle's own state, and an error cannot hide by compounding.
+  - **Seven setups:** Fixed/Fixed (10 and 50 nodes), Fixed/Insulated, Fixed/Convective (Bi = 0.005), two convective
+    ends (Bi = 1.43 and 0.00036), an insulated bar with a sinusoidal start, and the 3-node minimum with an h = 0
+    convective end. Each runs 20 explicit steps at half the stable step, 20 Crank–Nicolson steps at 10 times it, and
+    10 adaptive steps at 3.7 times it.
+  - **The switches:** the explicit stability limit `Fo > Fo_max·(1 + 1e-12)`, bisected on the bit patterns, ± 2 ulps;
+    the adaptive step at 1, 2 and 3 stable steps ± 1 ulp (the (1 − 1e-12) guard against a round-off sub-step); and
+    its 10⁶ sub-step cap, bisected ± 2 ulps. Only the 10-node setup runs the cap, because `validate.py` recomputes
+    every sub-step in Python. Crank–Nicolson at dt = 1e300, where the Thomas pivots stop being finite
+    (`DivisionByZero`).
+  - **Malformed grids**, built from Rust's public fields as a deserialized grid can be: fewer than 3 nodes, Δx or α
+    zero, NaN, negative or infinite, a condition out of range, a NaN or infinite node. A NaN node is not refused, in
+    1.4.0 or the port: it propagates.
+  - **`new`:** node counts 0–10, each length, diffusivity and initial temperature at the edges, and 13 conditions at
+    each end, a convective k of −0 among them.
+  - **JSON:** `BoundaryCondition` (externally tagged: `{"Fixed":T}`, `"Insulated"`, `{"Convective":{…}}` or its
+    sequence form), `Side`, and `ThermalGrid1D`, 117 rows, 5 under ADR 5's mapped divergences.
