@@ -5,7 +5,7 @@
 > (`# rust <file>: <test>`), at its module's milestone. Nothing is deferred: a test not ported yet is one whose
 > milestone hasn't come. The golden corpus (`tests/golden/`) checks every ported function on its grid besides.
 
-**479 Rust tests:** 155 ported; 25 at M2, 95 at M3, 64 at M4, 62 at M5, 27 at M6, 51 at M7.
+**479 Rust tests:** 180 ported; 95 at M3, 64 at M4, 62 at M5, 27 at M6, 51 at M7.
 
 | Rust file | Tests | Ported | Due, unported | Later (milestone) |
 |---|---:|---:|---:|---|
@@ -13,7 +13,7 @@
 | `src/bridge.rs` | 31 | 0 | 0 | 31 (M7) |
 | `src/chem.rs` | 23 | 0 | 0 | 23 (M5) |
 | `src/cycle.rs` | 59 | 0 | 0 | 59 (M4) |
-| `src/entropy.rs` | 23 | 0 | 0 | 23 (M2) |
+| `src/entropy.rs` | 23 | 23 | 0 | — |
 | `src/error.rs` | 18 | 18 | 0 | — |
 | `src/integration/soorat.rs` | 13 | 0 | 0 | 13 (M7) |
 | `src/logging.rs` | 1 | 1 | 0 | — |
@@ -25,13 +25,36 @@
 | `src/steam.rs` | 46 | 0 | 0 | 46 (M3) |
 | `src/transfer.rs` | 67 | 67 | 0 | — |
 | `src/validate.rs` | 2 | 2 | 0 | — |
-| `tests/integration.rs` | 30 | 12 | 0 | 2 (M2), 5 (M3), 5 (M4), 6 (M5) |
-| **Total** | **479** | **155** | **0** | |
+| `tests/integration.rs` | 30 | 14 | 0 | 5 (M3), 5 (M4), 6 (M5) |
+| **Total** | **479** | **180** | **0** | |
 
 ## Where each is ported
 
 | Rust test | Cyrius test |
 |---|---|
+| `src/entropy.rs` `test_carnot_cop` | `tests/entropy.tcyr` `test_carnot` |
+| `src/entropy.rs` `test_carnot_cop_invalid` | `tests/entropy.tcyr` `test_carnot` |
+| `src/entropy.rs` `test_carnot_efficiency` | `tests/entropy.tcyr` `test_carnot` |
+| `src/entropy.rs` `test_carnot_invalid_temps` | `tests/entropy.tcyr` `test_carnot` |
+| `src/entropy.rs` `test_entropy_functions_reject_nan` | `tests/entropy.tcyr` `test_heat_transfer`, `tests/entropy.tcyr` `test_carnot`, `tests/entropy.tcyr` `test_mixing` |
+| `src/entropy.rs` `test_entropy_functions_validate_moles` | `tests/entropy.tcyr` `test_entropy_changes`, `tests/entropy.tcyr` `test_mixing` |
+| `src/entropy.rs` `test_entropy_of_mixing` | `tests/entropy.tcyr` `test_mixing` |
+| `src/entropy.rs` `test_entropy_of_mixing_bad_fractions` | `tests/entropy.tcyr` `test_mixing` |
+| `src/entropy.rs` `test_entropy_of_mixing_pure_substance` | `tests/entropy.tcyr` `test_mixing` |
+| `src/entropy.rs` `test_entropy_of_mixing_three_components` | `tests/entropy.tcyr` `test_mixing` |
+| `src/entropy.rs` `test_entropy_of_mixing_zero_fraction` | `tests/entropy.tcyr` `test_mixing` |
+| `src/entropy.rs` `test_gibbs` | `tests/entropy.tcyr` `test_potentials` |
+| `src/entropy.rs` `test_heat_transfer_entropy` | `tests/entropy.tcyr` `test_heat_transfer` |
+| `src/entropy.rs` `test_heat_transfer_entropy_negative_heat` | `tests/entropy.tcyr` `test_heat_transfer` |
+| `src/entropy.rs` `test_heat_transfer_entropy_zero_temp` | `tests/entropy.tcyr` `test_heat_transfer` |
+| `src/entropy.rs` `test_helmholtz` | `tests/entropy.tcyr` `test_potentials` |
+| `src/entropy.rs` `test_ideal_gas_entropy_change` | `tests/entropy.tcyr` `test_entropy_changes` |
+| `src/entropy.rs` `test_ideal_gas_entropy_zero_temp` | `tests/entropy.tcyr` `test_entropy_changes` |
+| `src/entropy.rs` `test_ideal_gas_entropy_zero_volume` | `tests/entropy.tcyr` `test_entropy_changes` |
+| `src/entropy.rs` `test_is_spontaneous_boundary` | `tests/entropy.tcyr` `test_potentials` |
+| `src/entropy.rs` `test_isothermal_entropy_compression` | `tests/entropy.tcyr` `test_entropy_changes` |
+| `src/entropy.rs` `test_isothermal_entropy_expansion` | `tests/entropy.tcyr` `test_entropy_changes` |
+| `src/entropy.rs` `test_spontaneous` | `tests/entropy.tcyr` `test_potentials` |
 | `src/error.rs` `test_division_by_zero` | `tests/foundation.tcyr` `test_rust_error_variants` |
 | `src/error.rs` `test_error_is_debug` | `tests/foundation.tcyr` `test_rust_error_variants` |
 | `src/error.rs` `test_invalid_compression_ratio` | `tests/foundation.tcyr` `test_rust_error_variants` |
@@ -175,7 +198,9 @@
 | `src/transfer.rs` `test_view_factor_perpendicular_reference_values` | `tests/transfer.tcyr` `test_view_factor_regressions` |
 | `src/validate.rs` `finite_ge_accepts_bound` | `tests/foundation.tcyr` `test_validate_predicates` |
 | `src/validate.rs` `finite_gt_rejects_nan_and_inf` | `tests/foundation.tcyr` `test_validate_predicates` |
+| `tests/integration.rs` `carnot_engine_efficiency` | `tests/integration.tcyr` `carnot_engine_efficiency` |
 | `tests/integration.rs` `energy_conservation_adiabatic_process` | `tests/integration.tcyr` `energy_conservation_adiabatic_process` |
+| `tests/integration.rs` `entropy_increase_irreversible_heat_transfer` | `tests/integration.tcyr` `entropy_increase_irreversible_heat_transfer` |
 | `tests/integration.rs` `eos_comparison_co2_stp` | `tests/integration.tcyr` `eos_comparison_co2_stp` |
 | `tests/integration.rs` `heat_conduction_through_copper_wall` | `tests/integration.tcyr` `heat_conduction_through_copper_wall` |
 | `tests/integration.rs` `ideal_gas_law_roundtrip` | `tests/integration.tcyr` `ideal_gas_law_roundtrip` |

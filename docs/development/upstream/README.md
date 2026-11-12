@@ -1,4 +1,4 @@
-# Upstream filings from ushma's M0
+# Upstream filings from ushma
 
 The port plan's §8, written up in each target repository's own issue format (cyrius's
 `docs/development/issues/README.md`, which the fold repositories follow).
@@ -53,6 +53,14 @@ again", "A third consumer", "Also measured").
 | cyrius [`2026-11-08-cyrius-port-clobbers-project-docs-and-omits-bench.md`](cyrius/2026-11-08-cyrius-port-clobbers-project-docs-and-omits-bench.addendum.md) | one more reproduction (items 1–4 and pravash's `Cargo.lock` point) |
 | bayan [`2026-11-11-json-integer-negative-zero-loses-its-sign.md`](bayan/2026-11-11-json-integer-negative-zero-loses-its-sign.addendum.md) | ushma's 20 documents. pravash filed this issue at 22:06, two minutes before ushma's own filing of the same defect, so ushma's was withdrawn and became this addendum |
 | cyrius [`2026-11-11-derive-json-no-vector-array-or-tagged-variant-shapes.md`](cyrius/2026-11-11-derive-json-no-vector-array-or-tagged-variant-shapes.addendum.md) | prefixed variant names, the sequence form, the 31-byte name limit, and the decoder's leniency |
+
+## Later filings (M1 on)
+
+Filed the same way: into the target's working tree, uncommitted, at the maintainer's word, with the copy kept here.
+
+| Date | Target issue | Kind | Adds |
+|---|---|---|---|
+| 2026-11-12 | cyrius [`2026-11-11-inline-refuses-small-numeric-helpers.md`](cyrius/2026-11-11-inline-refuses-small-numeric-helpers.addendum.md) (pravash's) | addendum, with a repro ([`repros/cyrius-inline-refuses-small-numeric-helpers-if-var.sh`](repros/cyrius-inline-refuses-small-numeric-helpers-if-var.sh), filed as `repros/2026-11-11-inline-refuses-small-numeric-helpers-if-var.sh`; exits 1, reproduced from the cyrius tree) | a fourth `#inline` refusal, "body has control flow or a var declaration", on a 2-parameter, 12-token check; ushma's range checks (21 → 6 ns per three once rewritten as one expression) and its level-gated spans (7 ns a call, with no expression form); the ask to inline `if`, early returns and locals within the size limit |
 
 ## A note for kimiya
 

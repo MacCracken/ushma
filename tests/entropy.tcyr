@@ -1,0 +1,244 @@
+# entropy tests.
+#
+# Rust 1.4.0's 23 entropy.rs tests, one for one, each also checking the refusal's code. Then a reference test of the
+# spans: carnot_efficiency and entropy_of_mixing open a DEBUG span under Rust's span name, and close it on every path.
+
+include "src/constants.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+include "src/entropy.cyr"
+
+var _nan: f64 = 0.0;
+
+# |a − b| as an f64.
+fn absdiff(a: f64, b: f64): f64 {
+    var d: f64 = a - b;
+    if (d < 0.0) { d = 0.0 - d; }
+    return d;
+}
+
+# The Ok value of a Result (asserting it is Ok).
+fn okv(t, v, name): i64 {
+    assert_eq(is_ok(t), 1, name);
+    return v;
+}
+
+# Asserts a Result is Err(code).
+fn errc(t, v, code, name) {
+    assert_eq(is_err_result(t), 1, name);
+    if (is_err_result(t) == 1) { assert_streq(us_error_name(v), us_error_name(code), name); }
+    return 0;
+}
+
+# The ring's raw bytes contain the C string `s`: 1 or 0.
+fn ring_has(s): i64 {
+    var cap = 8192;
+    var buf = alloc(cap);
+    var n = sakshi_ring_read_raw(buf, cap);
+    var sl = strlen(s);
+    var k = 0;
+    while (k + sl <= n) {
+        if (memeq(buf + k, s, sl) == 1) { return 1; }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# A fraction list of up to three into buf; returns its length.
+fn fr(buf, n, a: f64, b: f64, c: f64): i64 {
+    store64(buf, a);
+    store64(buf + 8, b);
+    store64(buf + 16, c);
+    return n;
+}
+
+# The ideal-gas and isothermal entropy changes, and their refusals.
+# rust src/entropy.rs: test_ideal_gas_entropy_change, test_isothermal_entropy_expansion
+# rust src/entropy.rs: test_isothermal_entropy_compression, test_ideal_gas_entropy_zero_temp
+# rust src/entropy.rs: test_ideal_gas_entropy_zero_volume, test_entropy_functions_validate_moles
+fn test_entropy_changes() {
+    test_group("entropy changes");
+    var t, v = us_ideal_gas_entropy_change(1.0, 20.8, 300.0, 300.0, 0.01, 0.02);
+    var ds: f64 = okv(t, v, "isothermal doubling is Ok");
+    assert(ds > 0.0, "doubling V at constant T raises S");
+    var t2, v2 = us_isothermal_entropy_change(1.0, 0.01, 0.02);
+    var de: f64 = okv(t2, v2, "expansion is Ok");
+    assert(de > 0.0, "expansion: dS > 0");
+    var t3, v3 = us_isothermal_entropy_change(1.0, 0.02, 0.01);
+    var dc: f64 = okv(t3, v3, "compression is Ok");
+    assert(dc < 0.0, "compression: dS < 0");
+    var t4, v4 = us_ideal_gas_entropy_change(1.0, 20.8, 0.0, 300.0, 0.01, 0.02);
+    errc(t4, v4, US_ERR_INVALID_TEMPERATURE, "T1 = 0");
+    var t5, v5 = us_ideal_gas_entropy_change(1.0, 20.8, 300.0, 0.0, 0.01, 0.02);
+    errc(t5, v5, US_ERR_INVALID_TEMPERATURE, "T2 = 0");
+    var t6, v6 = us_ideal_gas_entropy_change(1.0, 20.8, 300.0, 300.0, 0.0, 0.02);
+    errc(t6, v6, US_ERR_INVALID_VOLUME, "V1 = 0");
+    var t7, v7 = us_ideal_gas_entropy_change(1.0, 20.8, 300.0, 300.0, 0.01, 0.0);
+    errc(t7, v7, US_ERR_INVALID_VOLUME, "V2 = 0");
+    var t8, v8 = us_isothermal_entropy_change(-1.0, 1.0, 2.0);
+    errc(t8, v8, US_ERR_INVALID_PARAMETER, "isothermal, negative moles");
+    var t9, v9 = us_ideal_gas_entropy_change(-1.0, 20.8, 300.0, 400.0, 1.0, 2.0);
+    errc(t9, v9, US_ERR_INVALID_PARAMETER, "ideal gas, negative moles");
+    var ta, va = us_ideal_gas_entropy_change(1.0, -20.8, 300.0, 400.0, 1.0, 2.0);
+    errc(ta, va, US_ERR_INVALID_SPECIFIC_HEAT, "negative Cv");
+}
+
+# Heat transfer's entropy: Q/T, a rejected heat, and the refusals.
+# rust src/entropy.rs: test_heat_transfer_entropy, test_heat_transfer_entropy_zero_temp
+# rust src/entropy.rs: test_heat_transfer_entropy_negative_heat, test_entropy_functions_reject_nan
+fn test_heat_transfer() {
+    test_group("heat transfer entropy");
+    var t, v = us_heat_transfer_entropy(1000.0, 300.0);
+    var ds: f64 = okv(t, v, "1 kJ at 300 K is Ok");
+    var want: f64 = 1000.0 / 300.0;
+    var d: f64 = absdiff(ds, want);
+    assert(d < 0.0000000001, "dS = Q / T");
+    var t2, v2 = us_heat_transfer_entropy(1000.0, 0.0);
+    errc(t2, v2, US_ERR_INVALID_TEMPERATURE, "T = 0");
+    var t3, v3 = us_heat_transfer_entropy(-1000.0, 300.0);
+    var dn: f64 = okv(t3, v3, "rejected heat is Ok");
+    assert(dn < 0.0, "Q < 0: dS < 0");
+    var t4, v4 = us_heat_transfer_entropy(_nan, 300.0);
+    errc(t4, v4, US_ERR_INVALID_PARAMETER, "NaN heat");
+    var t5, v5 = us_heat_transfer_entropy(100.0, _nan);
+    errc(t5, v5, US_ERR_INVALID_TEMPERATURE, "NaN temperature");
+}
+
+# The Carnot efficiency and refrigeration COP, and their refusals.
+# rust src/entropy.rs: test_carnot_efficiency, test_carnot_cop, test_carnot_invalid_temps, test_carnot_cop_invalid
+# rust src/entropy.rs: test_entropy_functions_reject_nan
+fn test_carnot() {
+    test_group("Carnot");
+    var t, v = us_carnot_efficiency(500.0, 300.0);
+    var eta: f64 = okv(t, v, "500 K / 300 K is Ok");
+    var d: f64 = absdiff(eta, 0.4);
+    assert(d < 0.0000000001, "eta = 0.4");
+    var t2, v2 = us_carnot_cop_refrigeration(300.0, 250.0);
+    var cop: f64 = okv(t2, v2, "COP is Ok");
+    var dc: f64 = absdiff(cop, 5.0);
+    assert(dc < 0.0000000001, "COP = 5");
+    var t3, v3 = us_carnot_efficiency(300.0, 300.0);
+    errc(t3, v3, US_ERR_INVALID_PARAMETER, "T_cold = T_hot");
+    var t4, v4 = us_carnot_efficiency(200.0, 300.0);
+    errc(t4, v4, US_ERR_INVALID_PARAMETER, "T_cold > T_hot");
+    var t5, v5 = us_carnot_cop_refrigeration(300.0, 300.0);
+    errc(t5, v5, US_ERR_INVALID_PARAMETER, "COP, T_cold = T_hot");
+    var t6, v6 = us_carnot_cop_refrigeration(200.0, 300.0);
+    errc(t6, v6, US_ERR_INVALID_PARAMETER, "COP, T_cold > T_hot");
+    var t7, v7 = us_carnot_cop_refrigeration(0.0, 250.0);
+    errc(t7, v7, US_ERR_INVALID_TEMPERATURE, "COP, T_hot = 0");
+    var t8, v8 = us_carnot_efficiency(_nan, 300.0);
+    errc(t8, v8, US_ERR_INVALID_TEMPERATURE, "NaN T_hot");
+    var t9, v9 = us_carnot_efficiency(500.0, _nan);
+    errc(t9, v9, US_ERR_INVALID_TEMPERATURE, "NaN T_cold");
+    var ta, va = us_carnot_cop_refrigeration(_nan, 250.0);
+    errc(ta, va, US_ERR_INVALID_TEMPERATURE, "COP, NaN T_hot");
+}
+
+# The free energies and the Clausius inequality.
+# rust src/entropy.rs: test_helmholtz, test_gibbs, test_spontaneous, test_is_spontaneous_boundary
+fn test_potentials() {
+    test_group("free energies, spontaneity");
+    var a: f64 = us_helmholtz(1000.0, 300.0, 5.0);
+    var da: f64 = absdiff(a, 0.0 - 500.0);
+    assert(da < 0.0000000001, "A = U - TS");
+    var g: f64 = us_gibbs(2000.0, 300.0, 5.0);
+    var dg: f64 = absdiff(g, 500.0);
+    assert(dg < 0.0000000001, "G = H - TS");
+    assert_eq(us_is_spontaneous(0.1), 1, "dS > 0 is spontaneous");
+    assert_eq(us_is_spontaneous(0.0), 1, "dS = 0 (reversible) is allowed");
+    assert_eq(us_is_spontaneous(-0.1), 0, "dS < 0 is forbidden");
+    assert_eq(us_is_spontaneous(_nan), 0, "NaN is not spontaneous");
+}
+
+# The entropy of mixing: two and three components, a zero fraction, a pure substance, and the refusals.
+# rust src/entropy.rs: test_entropy_of_mixing, test_entropy_of_mixing_bad_fractions
+# rust src/entropy.rs: test_entropy_of_mixing_zero_fraction
+# rust src/entropy.rs: test_entropy_of_mixing_pure_substance, test_entropy_of_mixing_three_components
+# rust src/entropy.rs: test_entropy_functions_validate_moles, test_entropy_functions_reject_nan
+fn test_mixing() {
+    test_group("entropy of mixing");
+    var xs[24];
+    var n = fr(&xs, 2, 0.5, 0.5, 0.0);
+    var t, v = us_entropy_of_mixing(1.0, &xs, n);
+    var ds: f64 = okv(t, v, "50/50 is Ok");
+    assert(ds > 0.0, "mixing raises S");
+    n = fr(&xs, 2, 0.3, 0.3, 0.0);
+    var t2, v2 = us_entropy_of_mixing(1.0, &xs, n);
+    errc(t2, v2, US_ERR_INVALID_PARAMETER, "fractions summing to 0.6");
+    n = fr(&xs, 2, 0.0, 1.0, 0.0);
+    var t3, v3 = us_entropy_of_mixing(1.0, &xs, n);
+    var d0: f64 = okv(t3, v3, "a zero fraction is Ok");
+    var a0: f64 = f64_abs(d0);
+    assert(a0 < 0.0000000001, "an absent component adds nothing");
+    n = fr(&xs, 1, 1.0, 0.0, 0.0);
+    var t4, v4 = us_entropy_of_mixing(1.0, &xs, n);
+    var d1: f64 = okv(t4, v4, "a pure substance is Ok");
+    var a1: f64 = f64_abs(d1);
+    assert(a1 < 0.0000000001, "a pure substance: dS = 0");
+    n = fr(&xs, 3, 0.2, 0.3, 0.5);
+    var t5, v5 = us_entropy_of_mixing(1.0, &xs, n);
+    var d3: f64 = okv(t5, v5, "three components are Ok");
+    assert(d3 > 0.0, "three components raise S");
+    n = fr(&xs, 2, 0.5, 0.5, 0.0);
+    var t6, v6 = us_entropy_of_mixing(-1.0, &xs, n);
+    errc(t6, v6, US_ERR_INVALID_PARAMETER, "negative moles");
+    var t7, v7 = us_entropy_of_mixing(_nan, &xs, n);
+    errc(t7, v7, US_ERR_INVALID_PARAMETER, "NaN moles");
+    n = fr(&xs, 2, _nan, 1.0, 0.0);
+    var t8, v8 = us_entropy_of_mixing(1.0, &xs, n);
+    errc(t8, v8, US_ERR_INVALID_PARAMETER, "a NaN fraction");
+}
+
+# The span named `name` opened and closed: depth back to 0, `events` events in the ring.
+fn span_seen(name, events, label) {
+    assert_eq(sakshi_span_depth(), 0, label);
+    assert_eq(sakshi_ring_event_count(), events, label);
+    assert_eq(ring_has(name), 1, label);
+    sakshi_ring_clear();
+    return 0;
+}
+
+# carnot_efficiency and entropy_of_mixing open a DEBUG span under Rust's span name and close it on Ok and on Err; at
+# INFO they record nothing.
+fn test_spans() {
+    test_group("spans");
+    sakshi_output_buffer();
+    sakshi_set_level(SK_DEBUG);
+    sakshi_ring_clear();
+    var t, v = us_carnot_efficiency(500.0, 300.0);
+    span_seen("carnot_efficiency", 2, "carnot_efficiency");
+    var t1, v1 = us_carnot_efficiency(300.0, 500.0);
+    span_seen("carnot_efficiency", 3, "carnot_efficiency, refused");
+    var xs[16];
+    var n = fr(&xs, 2, 0.5, 0.5, 0.0);
+    var t2, v2 = us_entropy_of_mixing(1.0, &xs, n);
+    span_seen("entropy_of_mixing", 2, "entropy_of_mixing");
+    var t3, v3 = us_entropy_of_mixing(0.0, &xs, n);
+    span_seen("entropy_of_mixing", 3, "entropy_of_mixing, refused");
+    sakshi_set_level(SK_INFO);
+    sakshi_ring_clear();
+    var t4, v4 = us_carnot_efficiency(500.0, 300.0);
+    assert_eq(sakshi_ring_event_count(), 0, "no span event at INFO");
+}
+
+# Runs every group and returns the failure count.
+fn main() {
+    alloc_init();
+    _nan = 0.0 / 0.0;
+    test_entropy_changes();
+    test_heat_transfer();
+    test_carnot();
+    test_potentials();
+    test_mixing();
+    test_spans();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

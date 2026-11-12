@@ -17,9 +17,11 @@ include "src/material.cyr"
 include "src/transfer.cyr"
 include "src/state_data.cyr"
 include "src/state.cyr"
+include "src/entropy.cyr"
 
 # Keeps results observable, so no call can be dropped.
 var _bn_sink = 0;
+var _bn_mix = 0;
 
 # Empty benchmark body: the harness floor the real benchmarks are compared against.
 fn bench_noop(): i64 { return 0; }
@@ -217,6 +219,42 @@ fn b_pr(x): i64 {
     return v;
 }
 
+# carnot_efficiency(500, 300).
+fn b_carnot(x): i64 {
+    var t, v = us_carnot_efficiency(500.0, 300.0);
+    return v;
+}
+
+# carnot_cop_refrigeration(300, 250).
+fn b_cop(x): i64 {
+    var t, v = us_carnot_cop_refrigeration(300.0, 250.0);
+    return v;
+}
+
+# helmholtz(1000, 300, 5).
+fn b_helmholtz(x): i64 {
+    var a: f64 = us_helmholtz(1000.0, 300.0, 5.0);
+    return a;
+}
+
+# gibbs(2000, 300, 5).
+fn b_gibbs(x): i64 {
+    var g: f64 = us_gibbs(2000.0, 300.0, 5.0);
+    return g;
+}
+
+# entropy_of_mixing(1, [0.3, 0.3, 0.4]).
+fn b_mixing(x): i64 {
+    var t, v = us_entropy_of_mixing(1.0, _bn_mix, 3);
+    return v;
+}
+
+# ideal_gas_entropy_change(1, 20.8, 300, 400, 0.01, 0.02).
+fn b_ig_ds(x): i64 {
+    var t, v = us_ideal_gas_entropy_change(1.0, 20.8, 300.0, 400.0, 0.01, 0.02);
+    return v;
+}
+
 # Fills the two resistance lists the benchmarks use.
 fn bn_lists() {
     _bn_series = alloc(40);
@@ -237,6 +275,12 @@ fn bn_lists() {
     store64(_bn_parallel, p);
     store64(_bn_parallel + 8, q);
     store64(_bn_parallel + 16, r);
+    _bn_mix = alloc(24);
+    var x1: f64 = 0.3;
+    var x3: f64 = 0.4;
+    store64(_bn_mix, x1);
+    store64(_bn_mix + 8, x1);
+    store64(_bn_mix + 16, x3);
     return 0;
 }
 
@@ -290,6 +334,12 @@ fn main(): i64 {
     bn_run("state/compressibility_factor", &b_z, 0, 1000000);
     bn_run("state/redlich_kwong", &b_rk, 0, 1000000);
     bn_run("state/peng_robinson", &b_pr, 0, 1000000);
+    bn_run("entropy/carnot_efficiency", &b_carnot, 0, 1000000);
+    bn_run("entropy/carnot_cop", &b_cop, 0, 1000000);
+    bn_run("entropy/helmholtz", &b_helmholtz, 0, 1000000);
+    bn_run("entropy/gibbs", &b_gibbs, 0, 1000000);
+    bn_run("entropy/mixing", &b_mixing, 0, 1000000);
+    bn_run("entropy/ideal_gas_ds", &b_ig_ds, 0, 1000000);
     return 0;
 }
 

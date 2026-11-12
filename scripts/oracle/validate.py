@@ -1071,6 +1071,72 @@ def m_kays(a, p):
     return F(r)
 
 
+def m_ig_ds(a, p):
+    n, cv, t1, t2, v1, v2 = a
+    if not fgt(n, 0.0):
+        return E("InvalidParameter")
+    if not fgt(cv, 0.0):
+        return E("InvalidSpecificHeat")
+    if not fgt(t1, 0.0) or not fgt(t2, 0.0):
+        return E("InvalidTemperature")
+    if not fgt(v1, 0.0) or not fgt(v2, 0.0):
+        return E("InvalidVolume")
+    return F(n * (cv * p.log(fdiv(t2, t1)) + GAS_R * p.log(fdiv(v2, v1))))
+
+
+def m_iso_ds(a, p):
+    n, v1, v2 = a
+    if not fgt(n, 0.0):
+        return E("InvalidParameter")
+    if not fgt(v1, 0.0) or not fgt(v2, 0.0):
+        return E("InvalidVolume")
+    return F(n * GAS_R * p.log(fdiv(v2, v1)))
+
+
+def m_heat_ds(a, p):
+    q, temp = a
+    if not math.isfinite(q):
+        return E("InvalidParameter")
+    if not fgt(temp, 0.0):
+        return E("InvalidTemperature")
+    return F(fdiv(q, temp))
+
+
+def m_carnot(a, p):
+    th, tc = a
+    if not fgt(th, 0.0) or not fgt(tc, 0.0):
+        return E("InvalidTemperature")
+    if tc >= th:
+        return E("InvalidParameter")
+    return F(1.0 - fdiv(tc, th))
+
+
+def m_cop(a, p):
+    th, tc = a
+    if not fgt(th, 0.0) or not fgt(tc, 0.0):
+        return E("InvalidTemperature")
+    dt = th - tc
+    if not fgt(dt, 0.0):
+        return E("InvalidParameter")
+    return F(fdiv(tc, dt))
+
+
+def m_mixing(a, p):
+    n, xs = a
+    if not fgt(n, 0.0) or not all(0.0 <= x <= 1.0 for x in xs):
+        return E("InvalidParameter")
+    fs = -0.0
+    for x in xs:
+        fs = fs + x
+    if abs(fs - 1.0) > 1e-10:
+        return E("InvalidParameter")
+    s = -0.0
+    for x in xs:
+        if x > 0.0:
+            s = s + x * p.log(x)
+    return F(-n * GAS_R * s)
+
+
 def unmodelled(fn, ins):
     """Rows of a modelled module that other checks own: the table presets (no inputs; check_tables) and the JSON
     documents (serde_json's text and verdicts, which the harness compares byte for byte; ADR 0005)."""
@@ -1078,6 +1144,17 @@ def unmodelled(fn, ins):
 
 
 MODELS = {
+    "entropy": {
+        "entropy::ideal_gas_entropy_change": m_ig_ds,
+        "entropy::isothermal_entropy_change": m_iso_ds,
+        "entropy::heat_transfer_entropy": m_heat_ds,
+        "entropy::carnot_efficiency": m_carnot,
+        "entropy::carnot_cop_refrigeration": m_cop,
+        "entropy::helmholtz": lambda a, p: F(a[0] - a[1] * a[2]),
+        "entropy::gibbs": lambda a, p: F(a[0] - a[1] * a[2]),
+        "entropy::is_spontaneous": lambda a, p: [f"i:{int(a[0] >= 0.0)}"],
+        "entropy::entropy_of_mixing": m_mixing,
+    },
     "state": {
         "state::ideal_gas_pressure": m_ig_pressure,
         "state::ideal_gas_volume": m_ig_volume,

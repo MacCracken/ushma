@@ -66,3 +66,13 @@ The rest of the gap is the harness floor (4 ns a call) and, in the seven instrum
 | state/compressibility_factor | 4.46 | 21 | five checks, PV/(nRT) |
 | state/redlich_kwong | 27.27 | 188 | four checks, a correctly rounded T_c^2.5 (ADR 0004), √T, a span |
 | state/peng_robinson | 18.85 | 69 | five checks, √(T/T_c), the attractive denominator's check, a span |
+| entropy/carnot_efficiency | 8.69 | 20 | two checks, the T_cold < T_hot test, a span |
+| entropy/carnot_cop | 3.30 | 14 | three checks |
+| entropy/helmholtz | 0.99 | 9 | U − TS |
+| entropy/gibbs | 0.99 | 9 | H − TS |
+| entropy/mixing | 25.41 | 233 | three fractions: the range and sum checks, three correctly rounded ln, a span |
+| entropy/ideal_gas_ds | 15.97 | 151 | six checks, two correctly rounded ln |
+
+**M2's review.** Every check is the inlined branch-free form from M1d, no state or entropy function allocates (Kay's
+rules and mixing read the caller's lists; the JSON readers work on the caller's arena), and the gap to Rust is the
+correctly rounded ln and pow (ADR 0004), the harness floor and the spans. Nothing in M2 measured worth changing.

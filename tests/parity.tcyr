@@ -30,6 +30,7 @@ include "src/material.cyr"
 include "src/transfer.cyr"
 include "src/state_data.cyr"
 include "src/state.cyr"
+include "src/entropy.cyr"
 include "src/phase_data.cyr"
 include "src/chem_data.cyr"
 
@@ -659,6 +660,65 @@ fn _par_state(fp, fl): i64 {
     return _par_state2(fp, fl);
 }
 
+# ── entropy ─────────────────────────────────────────────────────────────────────────
+
+# One entropy row: 1 when handled, 0 for a function with no counterpart yet.
+fn _par_entropy(fp, fl): i64 {
+    var a: f64 = _par_in(0);
+    var b: f64 = _par_in(1);
+    var c: f64 = _par_in(2);
+    var d: f64 = _par_in(3);
+    var e: f64 = _par_in(4);
+    var g: f64 = _par_in(5);
+    if (_par_eq(fp, fl, "entropy::ideal_gas_entropy_change") == 1) {
+        var t, v = us_ideal_gas_entropy_change(a, b, c, d, e, g);
+        _par_got_res(t, v);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "entropy::isothermal_entropy_change") == 1) {
+        var t1, v1 = us_isothermal_entropy_change(a, b, c);
+        _par_got_res(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "entropy::heat_transfer_entropy") == 1) {
+        var t2, v2 = us_heat_transfer_entropy(a, b);
+        _par_got_res(t2, v2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "entropy::carnot_efficiency") == 1) {
+        var t3, v3 = us_carnot_efficiency(a, b);
+        _par_got_res(t3, v3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "entropy::carnot_cop_refrigeration") == 1) {
+        var t4, v4 = us_carnot_cop_refrigeration(a, b);
+        _par_got_res(t4, v4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "entropy::helmholtz") == 1) {
+        var h: f64 = us_helmholtz(a, b, c);
+        _par_got_f(h);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "entropy::gibbs") == 1) {
+        var gb: f64 = us_gibbs(a, b, c);
+        _par_got_f(gb);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "entropy::is_spontaneous") == 1) {
+        _par_got_i(us_is_spontaneous(a));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "entropy::entropy_of_mixing") == 1) {
+        if (_par_list == 0) { _par_list = alloc(8 * 64); }
+        var n = _par_in_f64s(1, _par_list);
+        var t5, v5 = us_entropy_of_mixing(a, _par_list, n);
+        _par_got_res(t5, v5);
+        return 1;
+    }
+    return 0;
+}
+
 # ── transfer ────────────────────────────────────────────────────────────────────────
 
 # Appends a Result: the f64 payload of Ok, or `E:Variant` for Err.
@@ -863,6 +923,7 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "math") == 1) { return _par_math(fp, fl); }
     if (_par_eq(mp, ml, "fmtf") == 1) { return _par_fmtf(fp, fl); }
     if (_par_eq(mp, ml, "transfer") == 1) { return _par_transfer(fp, fl); }
+    if (_par_eq(mp, ml, "entropy") == 1) { return _par_entropy(fp, fl); }
     _par_adr5 = 0;
     if (_par_eq(mp, ml, "material") == 1 && _par_in_n != 0) { return _par_material(fp, fl); }
     if (_par_eq(mp, ml, "state") == 1 && _par_in_n != 0) { return _par_state(fp, fl); }
@@ -973,9 +1034,10 @@ fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "f64::powf") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::atan") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::tanh") == 1) { return 0; }
-    # Every class-C transfer and state function computes on the _us_cr_* primitives.
+    # Every class-C transfer, state and entropy function computes on the _us_cr_* primitives.
     if (fl > 10 && _par_eq(fp, 10, "transfer::") == 1) { return 0; }
     if (fl > 7 && _par_eq(fp, 7, "state::") == 1) { return 0; }
+    if (fl > 9 && _par_eq(fp, 9, "entropy::") == 1) { return 0; }
     return 0 - 1;
 }
 

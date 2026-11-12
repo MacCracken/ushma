@@ -1,5 +1,5 @@
 # Rust 1.4.0's integration tests (rust-old/tests/integration.rs), cross-module, each ported at the milestone of the
-# last module it calls: M1's six on transfer and material, then M2's on state (and, at M2c, entropy).
+# last module it calls: M1's six on transfer and material, then M2's eight on state and entropy.
 
 include "src/constants.cyr"
 include "src/error.cyr"
@@ -14,6 +14,7 @@ include "src/material.cyr"
 include "src/transfer.cyr"
 include "src/state_data.cyr"
 include "src/state.cyr"
+include "src/entropy.cyr"
 
 # |a − b| as an f64.
 fn absdiff(a: f64, b: f64): f64 {
@@ -249,6 +250,30 @@ fn mixture_z_factor_kays_rule() {
     assert(z > 0.5 && z < 1.5, "a physical Z");
 }
 
+# The Carnot limit at 500 K / 300 K is 40 %, above any real engine's.
+# rust tests/integration.rs: carnot_engine_efficiency
+fn carnot_engine_efficiency() {
+    test_group("Carnot engine");
+    var t, v = us_carnot_efficiency(500.0, 300.0);
+    var eta: f64 = okv(t, v, "Carnot is Ok");
+    var d: f64 = absdiff(eta, 0.4);
+    assert(d < 0.0000000001, "eta = 40%");
+    assert(0.35 < eta, "a real engine's 35% is below it");
+}
+
+# 1 kJ from 500 K to 300 K: the cold body gains more entropy than the hot one loses.
+# rust tests/integration.rs: entropy_increase_irreversible_heat_transfer
+fn entropy_increase_irreversible_heat_transfer() {
+    test_group("irreversible heat transfer");
+    var t, v = us_heat_transfer_entropy(0.0 - 1000.0, 500.0);
+    var dh: f64 = okv(t, v, "the hot body's change is Ok");
+    var t2, v2 = us_heat_transfer_entropy(1000.0, 300.0);
+    var dc: f64 = okv(t2, v2, "the cold body's change is Ok");
+    var total: f64 = dh + dc;
+    assert(total > 0.0, "total entropy rises");
+    assert_eq(us_is_spontaneous(total), 1, "spontaneous");
+}
+
 # Runs every test and returns the failure count.
 fn main() {
     alloc_init();
@@ -264,6 +289,8 @@ fn main() {
     eos_comparison_co2_stp();
     virial_approaches_ideal_at_low_density();
     mixture_z_factor_kays_rule();
+    carnot_engine_efficiency();
+    entropy_increase_irreversible_heat_transfer();
     return assert_summary();
 }
 

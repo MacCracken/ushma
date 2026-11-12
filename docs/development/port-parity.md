@@ -474,10 +474,10 @@ The harness's summary at the end of M1, identical on x86_64 ELF, `--bounds`, PE 
   validate, logging, material and transfer are ported, and the 6 integration tests that call only transfer and
   material (`tests/integration.tcyr`). The other 377 are counted under their milestones.
 
-## 5. M2 (2026-11-12 on)
+## 5. M2 (2026-11-12)
 
-After M2b the harness's summary is `8 modules, 0 failing | rows: 70924 ok, 0 failed, 0 measured, 0 pending, 45
-accepted (ADR 4: 35)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
+The harness's summary at the end of M2 is `9 modules, 0 failing | rows: 74377 ok, 0 failed, 0 measured, 0 pending, 46
+accepted (ADR 4: 36)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
 
 - **state, part 1** (M2a): 4,250 rows.
   - The presets and `ALL_GASES`: 9.
@@ -501,3 +501,12 @@ accepted (ADR 4: 35)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
   - **Kay's rules:** 233 mixtures × 3 rules, class B, every row bit-identical, the refusals included (unequal and
     empty lists, NaN, negative and out-of-range fractions, sums across the 1e-10 tolerance, non-finite values).
   - **Surface parity:** state 36 of 36.
+- **entropy** (M2c): 3,454 rows over 9 functions (class A 115, B 1,970, C 1,369; 661 refusals).
+  - **Class B and A** (heat transfer's entropy, both Carnot limits, Helmholtz, Gibbs, the Clausius check):
+    bit-identical. The Carnot rows put T_cold at T_hot and 1–2 ulps either side at 300 K, 1 K, 1e-300 and 1e300, so
+    the T_cold < T_hot refusal switches where Rust's does.
+  - **Class C** (the ideal-gas and isothermal changes, mixing): 0 ulp against MPFR. glibc's `log` misrounds inside
+    one ideal-gas row, `entropy.cr.tsv`'s only entry; the port matches MPFR there. Mixing runs 344 lists, subnormal
+    fractions and sums across the 1e-10 tolerance among them.
+  - **Surface parity:** entropy 9 of 9. **Tests:** all 23 of entropy's and the 2 entropy integration tests; every
+    test due at M2 is ported (ledger: 180 of 479).

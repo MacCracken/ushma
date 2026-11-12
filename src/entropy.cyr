@@ -1,0 +1,179 @@
+# entropy.cyr — entropy changes, free energies, Carnot limits and the second law (Rust 1.4.0 `entropy`). All SI: joules,
+# kelvins, cubic meters, moles.
+#
+# Each function computes in the order Rust 1.4.0 writes, so its arithmetic is bit-identical (class B), and its ln is
+# correctly rounded (ADR 0004, class C). A refusal returns Err(US_ERR_*) and reports its value at DEBUG
+# (src/validate.cyr). carnot_efficiency and entropy_of_mixing open a DEBUG span under Rust's span name.
+# entropy_of_mixing takes its mole fractions as `n` f64 at `xs`; is_spontaneous's bool is 1 or 0.
+
+# The ideal-gas entropy change ΔS = n·(C_v·ln(T₂/T₁) + R·ln(V₂/V₁)) (J/K). Err(US_ERR_INVALID_PARAMETER) unless n > 0,
+# Err(US_ERR_INVALID_SPECIFIC_HEAT) unless C_v > 0, Err(US_ERR_INVALID_TEMPERATURE) unless T₁ > 0 and T₂ > 0,
+# Err(US_ERR_INVALID_VOLUME) unless V₁ > 0 and V₂ > 0.
+#must_use
+fn us_ideal_gas_entropy_change(moles: f64, cv: f64, t1: f64, t2: f64, v1: f64, v2: f64): Result {
+    if (_us_finite_gt(moles, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_ideal_gas_entropy_change", "moles", moles));
+    }
+    if (_us_finite_gt(cv, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_SPECIFIC_HEAT, "us_ideal_gas_entropy_change", "cv", cv));
+    }
+    if (_us_finite_gt(t1, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_ideal_gas_entropy_change", "t1", t1));
+    }
+    if (_us_finite_gt(t2, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_ideal_gas_entropy_change", "t2", t2));
+    }
+    if (_us_finite_gt(v1, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_ideal_gas_entropy_change", "v1", v1));
+    }
+    if (_us_finite_gt(v2, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_ideal_gas_entropy_change", "v2", v2));
+    }
+    var lt: f64 = _us_cr_ln(t2 / t1);
+    var lv: f64 = _us_cr_ln(v2 / v1);
+    var ds: f64 = moles * (cv * lt + US_GAS_CONSTANT * lv);
+    return Ok(ds);
+}
+
+# The isothermal entropy change ΔS = nR·ln(V₂/V₁) (J/K). Err(US_ERR_INVALID_PARAMETER) unless n > 0,
+# Err(US_ERR_INVALID_VOLUME) unless V₁ > 0 and V₂ > 0.
+#must_use
+fn us_isothermal_entropy_change(moles: f64, v1: f64, v2: f64): Result {
+    if (_us_finite_gt(moles, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_isothermal_entropy_change", "moles", moles));
+    }
+    if (_us_finite_gt(v1, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_isothermal_entropy_change", "v1", v1));
+    }
+    if (_us_finite_gt(v2, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_isothermal_entropy_change", "v2", v2));
+    }
+    var lv: f64 = _us_cr_ln(v2 / v1);
+    var ds: f64 = moles * US_GAS_CONSTANT * lv;
+    return Ok(ds);
+}
+
+# The entropy carried by heat Q at temperature T, ΔS = Q / T (J/K). Err(US_ERR_INVALID_PARAMETER) unless Q is finite,
+# Err(US_ERR_INVALID_TEMPERATURE) unless T > 0.
+#must_use
+fn us_heat_transfer_entropy(heat: f64, temperature: f64): Result {
+    if (_us_is_finite(heat) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_heat_transfer_entropy", "heat", heat));
+    }
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_heat_transfer_entropy", "temperature", temperature));
+    }
+    var ds: f64 = heat / temperature;
+    return Ok(ds);
+}
+
+# The Carnot efficiency η = 1 − T_cold / T_hot. Err(US_ERR_INVALID_TEMPERATURE) unless both temperatures are positive,
+# Err(US_ERR_INVALID_PARAMETER) unless T_cold < T_hot.
+#must_use
+fn us_carnot_efficiency(t_hot: f64, t_cold: f64): Result {
+    _us_span_enter("carnot_efficiency", 17);
+    if (_us_finite_gt(t_hot, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_carnot_efficiency", "t_hot", t_hot));
+    }
+    if (_us_finite_gt(t_cold, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_carnot_efficiency", "t_cold", t_cold));
+    }
+    if (t_cold >= t_hot) {
+        _us_span_exit();
+        return Err(_us_fail_ff(US_ERR_INVALID_PARAMETER, "us_carnot_efficiency", "T_cold >= T_hot", "t_cold", t_cold,
+            "t_hot", t_hot));
+    }
+    var eta: f64 = 1.0 - t_cold / t_hot;
+    _us_span_exit();
+    return Ok(eta);
+}
+
+# The Carnot refrigeration COP = T_cold / (T_hot − T_cold). Err(US_ERR_INVALID_TEMPERATURE) unless both temperatures
+# are positive, Err(US_ERR_INVALID_PARAMETER) unless T_hot − T_cold > 0.
+#must_use
+fn us_carnot_cop_refrigeration(t_hot: f64, t_cold: f64): Result {
+    if (_us_finite_gt(t_hot, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_carnot_cop_refrigeration", "t_hot", t_hot));
+    }
+    if (_us_finite_gt(t_cold, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_carnot_cop_refrigeration", "t_cold", t_cold));
+    }
+    var dt: f64 = t_hot - t_cold;
+    if (_us_finite_gt(dt, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_carnot_cop_refrigeration", "T_hot - T_cold", dt));
+    }
+    var cop: f64 = t_cold / dt;
+    return Ok(cop);
+}
+
+# The Helmholtz free energy A = U − TS (J).
+#must_use
+#pure
+fn us_helmholtz(internal_energy: f64, temperature: f64, entropy: f64): f64 {
+    var a: f64 = internal_energy - temperature * entropy;
+    return a;
+}
+
+# The Gibbs free energy G = H − TS (J).
+#must_use
+#pure
+fn us_gibbs(enthalpy: f64, temperature: f64, entropy: f64): f64 {
+    var g: f64 = enthalpy - temperature * entropy;
+    return g;
+}
+
+# The Clausius inequality: 1 when ΔS_total ≥ 0 (a reversible process, ΔS = 0, included), else 0 (NaN is 0).
+#must_use
+#pure
+#inline
+fn us_is_spontaneous(delta_s_total: f64): i64 {
+    return delta_s_total >= 0.0;
+}
+
+# The ideal entropy of mixing ΔS_mix = −nR·Σ xᵢ·ln xᵢ (J/K) over the `n` mole fractions at `xs`, a zero fraction
+# contributing nothing. Err(US_ERR_INVALID_PARAMETER) unless the moles are positive, every fraction is in [0, 1], and
+# the fractions sum to 1 within 1e-10.
+#must_use
+fn us_entropy_of_mixing(moles: f64, xs, n): Result {
+    _us_span_enter("entropy_of_mixing", 17);
+    if (_us_finite_gt(moles, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_entropy_of_mixing", "moles", moles));
+    }
+    var k = 0;
+    while (k < n) {
+        var x: f64 = load64(xs + (8 * k));
+        if ((x >= 0.0 && x <= 1.0) == 0) {
+            _us_span_exit();
+            return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_entropy_of_mixing", "mole fraction", x));
+        }
+        k = k + 1;
+    }
+    var fs: f64 = 0.0 - 0.0;
+    k = 0;
+    while (k < n) {
+        var x2: f64 = load64(xs + (8 * k));
+        fs = fs + x2;
+        k = k + 1;
+    }
+    var dev: f64 = f64_abs(fs - 1.0);
+    if (dev > 0.0000000001) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_entropy_of_mixing", "fraction sum", fs));
+    }
+    var s: f64 = 0.0 - 0.0;
+    k = 0;
+    while (k < n) {
+        var x3: f64 = load64(xs + (8 * k));
+        if (x3 > 0.0) {
+            var lx: f64 = _us_cr_ln(x3);
+            s = s + x3 * lx;
+        }
+        k = k + 1;
+    }
+    var ds: f64 = (0.0 - moles) * US_GAS_CONSTANT * s;
+    _us_span_exit();
+    return Ok(ds);
+}
