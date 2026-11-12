@@ -12,7 +12,9 @@
 > ▶ **Start on Cyrius 6.7.18 with hisab 3.4.1**, after 1.4.0 is tagged (M0 step 0).
 >
 > 🟡 **Status:** planned 2026-11-11, revised the same day (everything in scope; stdlib-first
-> mapping). The proposals in §0.2 are confirmed when ADRs 0001–0005 are written (M0 step 2).
+> mapping). The maintainer **accepted P2–P8** (§0.2) on 2026-11-11; ADRs 0001–0005 record them at
+> M0 step 2. M0 starts once 1.4.0 is tagged as it stands (step 0). **The Rust code is never edited**,
+> and every fix goes into the Cyrius port.
 
 | Thing | Value | Source |
 |---|---|---|
@@ -41,11 +43,12 @@
 
   Nothing is dropped or deferred. If something has no Cyrius counterpart, the port shows the
   evidence and asks. It never leaves the thing out.
-- **The oracle is frozen.** Rust 1.4.0 moves to `rust-old/` and is never edited. A generator
-  crate in `scripts/oracle/` drives it by path. A wrong oracle value is fixed in Rust as 1.4.x
-  and the corpus is regenerated.
-- **No Rust 2.0.** API shape changes land in the Cyrius API only, each accepted by an ADR row
-  (§3.3). Rust stays on 1.x for soorat and any crates.io dependent.
+- **The Rust code is frozen and never touched** (maintainer, 2026-11-11). Rust 1.4.0 moves to
+  `rust-old/` as it stands, with no fixes, no 1.4.x releases and no port tooling added. A
+  generator crate in `scripts/oracle/` drives it by path, read-only. When the oracle is wrong,
+  the port does it right, and an ADR 0002 row maps the oracle's rows to the corrected value.
+- **No further Rust releases.** API shape changes and fixes land in the Cyrius API only, each
+  accepted by an ADR row (§3.3).
 - **Stdlib- and hisab-first.** The port calls the Cyrius stdlib (math, ganita, sakshi, log,
   sandhi, bayan, …) and hisab for everything they provide. Where they fall short, the port files
   the gap upstream (§8) with the probe that shows it. A stopgap is local and named as one.
@@ -61,9 +64,9 @@
 - **The maintainer does all git.** Each verified milestone part ends with a summary and a request
   to commit before the next part starts.
 
-### 0.2 Proposed (confirm in M0 step 2)
+### 0.2 Accepted 2026-11-11 (maintainer: "Accept all"; ADRs 0001–0005 at M0 step 2)
 
-| # | Proposal | Why | Alternative |
+| # | Decision | Why | Rejected alternative |
 |---|---|---|---|
 | P2 | **Range-edge sweep inside each milestone**, not a library-wide audit afterwards. | kimiya ran its audit after M4 and had to reopen every module (batches B1–B12). | Port first, audit later. |
 | P3 | **Correctly rounded primitives** in `src/mathx.cyr` (`_us_cr_exp`, `_ln`, `_expm1`, `_pow`, atan as atan2(x, 1), and tanh), vendored from kimiya's `src/mathx.cyr`, plus an upstream request to host one shared set. | The stdlib's exp/ln/atan polyfills and ganita's pow/tanh are ≤1 ulp with the same bits everywhere, but they are **not correctly rounded**, and the accuracy policy (§0.1) requires correct rounding. The stdlib has no expm1. ushma would be the third private copy, after impetus `crmath.cyr` and kimiya `mathx.cyr`. | Use the stdlib polyfills and ganita, and accept ≤1 ulp under an ADR. |
@@ -71,7 +74,7 @@
 | P5 | **Two bundles, as prakash:** `[lib]` (every module except the HTTP client, logging included) and `[lib.ai]` (`[lib]` + `src/ai.cyr`). | sandhi pulls the whole TLS stack (tls, async, random, fdlopen, dynlib). A consumer that wants only the physics shouldn't link it, which is what Rust's `ai` feature did. The 10 domain features are additive, so they need no profiles. | A single bundle with ai included. |
 | P6 | **Public names live under `us`.** Functions become `us_ideal_gas_pressure`, `us_ai_register_agent`, …. Enum variants, constants and error codes get `US_` names (`US_PHASE_SOLID`, `US_ERR_INVALID_TEMPERATURE`). Probe 6 picks the mechanism: the language's own `mod us;` mangling (a consumer then writes `use us.ideal_gas_pressure;` and calls the bare name), or a written prefix. | Cyrius has **one global namespace**. A duplicate non-private `fn` is a warning, and **the last definition wins** (guide L5267–5279). A bare enum variant name also resolves to the last definition, retroactively (L391–396, L10297). Collisions already exist: 10 functions with kimiya's bundle (`ideal_gas_pressure`, `reaction_enthalpy`, `equilibrium_constant`, …), and prakash's `ai_*` client names. kiran uses both kimiya and ushma. `mod`/`use` (6.7.17, L625) is documented in one sentence and no library uses it yet, hence the probe. | Keep Rust's names and rename only the collisions. |
 | P7 | **JSON is byte-identical to serde_json**, with serde's field semantics. Readers work on `bayan_json_parse`'s tree, writers on `str_builder`. The f64 text comes from a shortest-digit printer (`src/fmtf.cyr`, vendored from impetus), which also prints `UshmaError`'s Display text the way Rust does. | `#derive(Serialize)` exists (guide L4548–4660, on bayan), but it isn't serde's semantics: a missing key leaves 0 instead of an error; u64, `Vec<Str>`, tuple and payload-enum fields are refused; its f64 text is bayan's printer, which round-trips but isn't always shortest and formats differently from serde_json. Its scanner also has three open issues (2026-11-07: reads past a NUL, memsets a refused allocation, hangs on a stray brace). impetus reached the same decision (its ADR 0010). | `#derive(Serialize)`, compared by parsed value only, with its decode differences accepted by ADR. |
-| P8 | **Fix the daimon registration in Rust 1.4.1 and in the port.** Rust posts to `/v1/agents/register` and reads `agent_id`. daimon serves `POST /v1/agents` and answers `{"id":N,…}`, so the Rust client has never registered. prakash found and fixed the same bug in its 2.5.1 (`prakash/src/ai.cyr`). | It's an oracle defect, so §0.1's rule fixes it in Rust 1.4.x first. soorat and crates.io users of the Rust client get a working client too. | Fix it in the Cyrius port only (ADR 0002 row). |
+| P8 | **The port talks to daimon's real API: `POST /v1/agents`, reading `id`.** Rust 1.4.0 posts to `/v1/agents/register` and reads `agent_id`, which matches no daimon that exists. daimon is Cyrius-only (2.5.6), and there is no Rust daimon. prakash made the same correction in its 2.5.1 (`prakash/src/ai.cyr`). | The Rust code is frozen (§0.1), so the fix lives only in the Cyrius port, as ADR 0002 row #6. | Mirror Rust's path, which would never register. |
 
 ---
 
@@ -117,9 +120,9 @@
    with Rust's `f64::from_str`, plus a proof that every `const` in the module is emitted or
    excused (impetus's `t_private.rs`). They are never re-typed.
 2. **Stateful objects with public state.** `ThermalGrid1D`, `ThermalGrid2D` and `ThermalNetwork`
-   step or solve in place. Their fields are public, so the oracle dumps the full state without a
-   hidden feature (confirm at M0 step 0). They get single-step parity rows: load the state, step
-   once, compare the whole state.
+   step or solve in place. Their fields are public, so the generator dumps the full state through
+   the public API without touching the Rust code (confirm at M0 step 0). They get single-step
+   parity rows: load the state, step once, compare the whole state.
 3. **ushma's own iterations**, transcribed exactly and expected class B:
    - Rankine's and refrigeration's s(T, P) = s₁ inversions;
    - `superheated_by_entropy`;
@@ -146,7 +149,8 @@
    - **JSON:** 28 types (§3.1), 30 serde round-trip test sites, documents byte-identical to
      serde_json (P7).
 6. **An oracle defect in `ai`** (P8). The Rust client posts to the wrong path and reads a field
-   daimon never sends.
+   daimon never sends. The Cyrius client uses daimon 2.5.6's API, and the frozen Rust stays as it
+   is.
 7. **sakshi arrives twice.** hisab 3.4.1's `cyrius.cyml` declares `[deps.sakshi]` (tag 2.5.10),
    although its bundle makes no `sakshi_` call. ushma needs sakshi as a stdlib leaf for
    `lib/log.cyr` and sandhi. Whenever both are present, the resolver warns: "refusing to overwrite
@@ -238,9 +242,9 @@ and anything that moves results noticeably goes to the maintainer first.
 | 1 | `UshmaError` variants with `String` payloads (`DivisionByZero`, `InvalidParameter`, `SubstanceNotFound`) and f64 payloads | `US_ERR_*` code enum (append-only) carried in the value-form `Result`'s one payload word; the detail fields go in an error record (an out-pointer or a per-call error slot, as prakash's `err_out`). The JSON stays serde's shape, and `us_error_message` prints thiserror's Display text | code class A; JSON document class A; message text class A |
 | 2 | `ThermalGrid2D` stores `Vec<Vec<f64>>`; Crank–Nicolson allocates per step (roadmap backlog: breaking in Rust) | flat row-major buffer + dims; caller-reusable scratch; the JSON keeps Rust's nested-array shape | state dump flattened the same way, class B; JSON class A |
 | 3 | lookups by `&str` name | table index (−1 when absent) plus a name search | same index set, class A |
-| 4 | `register_agent` is `async` (tokio + reqwest) | synchronous `sandhi_http_post_opts` with the same 30 s timeout | request bytes (method, path after P8, headers, body) class A against the oracle's captured request |
+| 4 | `register_agent` is `async` (tokio + reqwest) | synchronous `sandhi_http_post_opts` with the same 30 s timeout | request bytes (method, headers, body) class A against the oracle's captured request; the path is mapped by #6 |
 | 5 | `EnvFilter` directives in `USHMA_LOG` (`ushma=debug,…`) | the level names trace / debug / info / warn / error, and `ushma=<level>`; other directive syntax is refused with a warning | parsing rows class A; log line format is sakshi's, not compared |
-| 6 | the daimon path and response field (P8) | `POST /v1/agents`, `id` | fixed in Rust 1.4.1 first, so no divergence remains |
+| 6 | `POST /v1/agents/register`, reads `agent_id` (matches no daimon that exists) | `POST /v1/agents`, reads `id`, as daimon 2.5.6 serves (P8) | the oracle's path is mapped to `/v1/agents`; response handling is checked against a stub answering as daimon 2.5.6 (`{"id":N}`, 401, 500, malformed, missing `id`) |
 | — | exponents written as rounded decimals (`powf(1.0/3.0)`, `powf(1.0/6.0)`) and similar exact-constant misses | fixed under the accuracy policy as each module ports (P2) | mapped per row, as kimiya's ADR 0002 #12 |
 
 ### 3.4 Not carried
@@ -257,21 +261,19 @@ hand-build the structure. On 6.7.18 the scaffold still overwrites project files 
 `cyrius/docs/development/issues/2026-11-08-cyrius-port-clobbers-project-docs-and-omits-bench.md`,
 **open**), so step 2 repairs what it writes.
 
-0. **Freeze a green oracle (Rust, before the move).** *Maintainer.*
-   - Fix P8 first, if confirmed. Post to `/v1/agents`, read `id`, and add a regression test
-     against a local stub. This is 1.4.1 (or fold it into 1.4.0 before tagging, if you prefer).
-   - Tag the release at its commit; the release workflow requires the tag to equal `VERSION`.
-     Publishing to crates.io is optional.
-   - Re-run the P(-1) checks on the tagged commit. They are clean on rustc 1.99.1 (header table).
-     After this point nothing in `src/` changes.
+0. **Freeze the oracle as it stands.** *Maintainer: git only, no code changes.*
+   - Tag `1.4.0` at `9528e1f` (the release workflow requires the tag to equal `VERSION`).
+     Publishing is optional.
+   - The P(-1) checks are already clean on rustc 1.99.1 (header table). From here on, nothing in
+     the Rust code changes.
    - Run `./scripts/bench-history.sh` on the tag. The last row in `bench-history.csv` is from
      `2f35058` (1.3.0).
    - Record glibc (**2.44** today); the oracle's transcendental bits depend on it.
    - Check crates.io reverse dependencies and record them in the header table. The CLAUDE.md
      consumer list (kiran, joshua) may be stale.
    - Confirm that every state the generator needs is reachable through the public API (§2.2). If
-     something isn't, add a hidden read-only `oracle` feature as unreleased port tooling, as
-     impetus did.
+     something isn't, the generator extracts it from the Rust source (as the steam tables, §2.1).
+     The Rust code is not edited.
 1. **Scaffold.**
    ```sh
    cd /home/macro/Repos/ushma
@@ -307,7 +309,7 @@ hand-build the structure. On 6.7.18 the scaffold still overwrites project files 
 
      Replace "Do not commit `Cargo.lock`" with the lockfile rule for `rust-old/`. Refresh the
      consumer list from step 0.
-   - **Roadmap** restored from git, with its 2.0 section. **`state.md`** rewritten for 1.4.x →
+   - **Roadmap** restored from git, with its 2.0 section. **`state.md`** rewritten for 1.4.0 →
      2.0.0-dev.
    - **Workflows.** Keep the scaffold's Cyrius CI and add `test --bounds`, `deps --locked`,
      `audit` and a `[lib.ai]` profile job. Move the Rust workflows to
@@ -325,7 +327,7 @@ hand-build the structure. On 6.7.18 the scaffold still overwrites project files 
      - `0005-serde-compatible-json.md`: P7.
    - Check that `cyrius.cyml` reads `version = "${file:VERSION}"`, not `0.1.0`, and that `bench`
      is in `[test] stdlib`. Document the scaffold's stub functions so `cyrius audit` passes.
-     `VERSION` stays 1.4.x until M8.
+     `VERSION` stays 1.4.0 until M8.
    - Copy kimiya's `handoff/gates/gates.sh` to `scripts/gates.sh`, adapted for ushma and both
      profiles. `handoff/` is untracked there and will be deleted.
 3. **`cyrius.cyml`.** Confirm the keys with `cyrius help manifest`, and model it on prakash's
@@ -498,7 +500,8 @@ tanmatra's classes apply, with kimiya's ADR 0006 reading of class C:
 - **Never widen a class to make a row pass.** A failure is one of three things:
   - a port defect;
   - a Cyrius stdlib or hisab defect (file it upstream);
-  - a Rust oracle defect (fix it in 1.4.x and regenerate).
+  - a Rust oracle defect (fixed in the port, with an ADR 0002 row; the Rust code is never
+    edited).
 
   The only exception is an ADR-accepted divergence, which the harness still reports by name.
 - **The reference-value tests travel with the code.** They cover IAPWS-IF97 saturation to 1e-8,
@@ -659,7 +662,8 @@ the gate is a warning-free `cyrius test`:
 
 - Switch `mathx.cyr` and `fmtf.cyr` to upstream versions when §8 lands, then re-measure.
 - The roadmap backlog, demand-gated.
-- Rust 1.4.x stays maintained for soorat and crates.io dependents: oracle fixes only.
+- Rust 1.4.0 stays frozen in `rust-old/` as the parity reference. It gets no fixes and no
+  releases.
 
 ---
 
@@ -667,7 +671,7 @@ the gate is a warning-free `cyrius test`:
 
 | Milestone | Status | Golden rows | Reference tests | Benches | Notes |
 |---|---|---|---|---|---|
-| M0 Prep & initialize | ☐ planned 2026-11-11 | — | — | — | Blocked on step 0: P8 decision + tag |
+| M0 Prep & initialize | ☐ planned 2026-11-11; P2–P8 accepted | — | — | — | Step 0: tag 1.4.0 as it stands |
 | M1 Foundation, logging & transfer | ☐ | | | | |
 | M2 Equations of state & entropy | ☐ | | | | |
 | M3 Phase & steam | ☐ | | | | M3a/b/c |

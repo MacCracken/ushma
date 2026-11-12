@@ -163,7 +163,7 @@ Rust 1.4.0 is the final Rust feature release and becomes the frozen parity oracl
 the Cyrius port ships as 2.0.0 and carries **everything** — every module, feature, test,
 benchmark and example. Plan of record: [ushma-port-plan.md](ushma-port-plan.md).
 
-- [ ] M0 — tag 1.4.x, `cyrius port`, oracle generator, parity harness, probes, upstream filings
+- [ ] M0 — tag 1.4.0 (Rust frozen as it stands), `cyrius port`, oracle generator, parity harness, probes, upstream filings
 - [ ] M1 — foundation, logging (sakshi) & transfer
 - [ ] M2 — equations of state & entropy
 - [ ] M3 — phase & steam
