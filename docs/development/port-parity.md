@@ -89,9 +89,29 @@ Rows at 1 ulp from glibc (none is further, except the one `pow` row below):
 The harness's summary is identical on x86_64 ELF, `--bounds`, PE (wine) and aarch64 (qemu):
 `6 modules, 0 failing | rows: 3374 ok, 0 failed, 8826 measured, 3538 pending`.
 
-### 2b. The correctly rounded primitives against MPFR
+### 2b. The corrected oracle (ADR 0004, 2026-11-11)
 
-*Pending (M0 part 2c-2).*
+`python3 -I -B scripts/oracle/validate.py . --write-corrections` recomputes every class-C math row
+correctly rounded with MPFR 4.2.2 (`scripts/oracle/mpfr_ref.py`: 53 bits, binary64's exponent
+range, subnormalized). It writes `tests/golden/math.cr.tsv` for the rows where glibc 2.44's result
+differs: **26 of 9,836**.
+
+| Function | Rows | glibc misrounds | So the stdlib's differences from glibc (§2a) are |
+|---|---|---|---|
+| exp | 1,140 | 0 | the builtin's and polyfill's own errors (45 / 99 rows on x86) |
+| exp_m1 | 1,010 | **23** | — (no stdlib function) |
+| ln | 1,587 | 1 | the x87 builtin is correctly rounded on every row, the one glibc misrounds included; the polyfill is off on 29 |
+| powf | 3,615 | 2 | ganita's own errors (373 of its 375), plus `pow(−1, DBL_MAX)`; on the 2 corrected rows it matches the correct value once and glibc's error once |
+| atan | 1,624 | 0 | the polyfill's own errors (11); the x87 builtin and `ganita_f64_atan2(x, 1)` are correct on every row on x86 |
+| tanh | 860 | 0 | **ganita's own errors (52 rows)**: `ganita_f64_tanh` is not correctly rounded, so the port needs `_us_cr_tanh` (M0 part 2c-3) |
+
+The harness loads the file and compares each corrected row against the corrected outputs. While
+the class-C rows are measured, it reports per function how many corrected rows the counterpart
+gets right (`port = corrected`) and how many repeat glibc's error (`= glibc's`).
+
+### 2c. The correctly rounded primitives against MPFR
+
+*Pending (M0 part 2c-2b, 2c-3).*
 
 ## 3. Probes 1–12 (M0 step 9)
 

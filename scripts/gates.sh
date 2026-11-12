@@ -31,6 +31,7 @@ PAT='test result' TAILN=6 run cargo test --manifest-path rust-old/Cargo.toml --a
 if [ -f scripts/oracle/Cargo.toml ]; then
     PAT='ok|fail|error|warn|pass|check' run cargo run --release --locked --manifest-path scripts/oracle/Cargo.toml -- --check
     PAT='warn|error|Finished' run cargo clippy --release --locked --manifest-path scripts/oracle/Cargo.toml --all-targets -- -D warnings
+    PAT='self-checks|Error|assert' run python3 -I -B scripts/oracle/mpfr_ref.py
     for py in validate.py probe_tables.py cr_verify.py mathx_tables.py; do
         if [ -f "scripts/oracle/$py" ]; then
             case "$py" in

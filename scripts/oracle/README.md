@@ -104,6 +104,28 @@ struct literal in the Rust source, and the `ALL_*` row against the slice's entri
 are checked against MPFR by the corrected-oracle tooling (M0 part 2c). Run it with
 `python3 -I -B`. A tampered row fails it, as checked when it was written.
 
+## mpfr_ref.py and the corrected oracle (ADR 0004)
+
+`mpfr_ref.py` calls the system MPFR (4.x, through ctypes): 53 bits, binary64's exponent range,
+subnormalized. That makes every result the IEEE round-to-nearest-even value of the exact
+function, exact ties and subnormals included. `python3 -I -B scripts/oracle/mpfr_ref.py` runs its
+self-checks.
+
+`validate.py . --write-corrections` writes `tests/golden/math.cr.tsv`: one row per class-C math
+row whose correctly rounded output differs from the oracle's (glibc's):
+
+```text
+fn <TAB> inputs <TAB> corrected outputs <TAB> note
+```
+
+- **fn** and **inputs** are the golden row's, byte for byte (the key the harness matches).
+- **note** is `oracle <outputs>; <fn>(<args>) glibc f:<g> correctly rounded f:<c>`.
+- The header is the golden file's provenance plus the MPFR version.
+
+The plain `validate.py .` run recomputes the file and checks it. On the recorded libm platform
+it also checks that each note's glibc value is this machine's libm result, and the exact text.
+26 rows at part 2c-2a: exp_m1 23, ln 1, powf 2.
+
 ## probe_tables.py
 
 Compiles every generated constant and cell with the Cyrius compiler (`build/oracle-probe/`)

@@ -671,7 +671,7 @@ the gate is a warning-free `cyrius test`:
 
 | Milestone | Status | Golden rows | Reference tests | Benches | Notes |
 |---|---|---|---|---|---|
-| M0 Prep & initialize | 🟡 part 1 done 2026-11-11 (steps 0–3: tag verified, Rust bench baseline, `cyrius port`, repairs, manifest, ADRs 0001–0005; gates green on ELF, `--bounds`, PE, aarch64) | 15,738 (constants 9, math 15,687, table presets 42) | — | Rust baseline: 63 | Parts 2a (math check, generator, validate.py), 2b (table data, probe_tables.py) and 2c-1 (parity harness: 3,374 ok, 0 failed) done. Next: 2c-2 mathx + MPFR, 2c-3 CR tanh |
+| M0 Prep & initialize | 🟡 part 1 done 2026-11-11 (steps 0–3: tag verified, Rust bench baseline, `cyrius port`, repairs, manifest, ADRs 0001–0005; gates green on ELF, `--bounds`, PE, aarch64) | 15,738 (constants 9, math 15,687, table presets 42) | — | Rust baseline: 63 | Parts 2a (math check, generator, validate.py), 2b (table data, probe_tables.py), 2c-1 (parity harness: 3,374 ok, 0 failed) and 2c-2a (MPFR corrected oracle: 26 rows) done. Next: 2c-2b mathx, 2c-3 CR tanh |
 | M1 Foundation, logging & transfer | ☐ | | | | |
 | M2 Equations of state & entropy | ☐ | | | | |
 | M3 Phase & steam | ☐ | | | | M3a/b/c |
