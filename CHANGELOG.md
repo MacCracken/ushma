@@ -41,15 +41,15 @@ ADRs 0001–0005.
   - `src/constants_private.cyr`: the 8 other private constants.
 
   Private data comes from its Rust literals, with a proof that every `const` item in `rust-old/src` is generated or excused. `scripts/oracle/probe_tables.py` compiles all 1,052 values with the Cyrius compiler and checks them against the golden rows or an independent Python parse, with identical output on ELF, aarch64 and PE
-- **docs/development/upstream/** (M0 step 10): the port plan's §8 drafted in each target's issue format, not yet filed. It holds 12 new issues, each with a repro under `repros/` that exits 1 while the defect is present (all run and reproduced on 6.7.18):
+- **docs/development/upstream/** (M0 step 10): the port plan's §8 in each target's issue format, filed into the targets on 2026-11-11 (uncommitted there) and kept here as the record. It holds 11 new issues, each with a repro under `repros/` that exits 1 while the defect is present (all run and reproduced on 6.7.18, from ushma and from the target):
   - hisab: the unused `[deps.sakshi]`;
   - ganita: `lu_solve`'s per-call allocation, and elimination's threshold scaling with b;
   - sandhi: `total_ms` not bounding a silent server;
   - sakshi: spans with no level;
-  - bayan: the `-0` sign, raw control bytes and invalid UTF-8 in strings, and a serde-compatible printer;
+  - bayan: raw control bytes and invalid UTF-8 in strings, and a serde-compatible printer;
   - cyrius: `mod` scope leaking into the includer, duplicate fns across bundles, the derive writer faulting on a 0 `Str`, and fdlopen / dynlib's PE warnings.
 
-  It also holds 6 addenda to issues impetus, kimiya and pravash filed, and a note for kimiya
+  It also holds 7 addenda to issues impetus, kimiya and pravash filed (the `-0` sign among them: pravash filed it minutes earlier, so ushma's duplicate was withdrawn), and a note for kimiya
 - **scripts/probes/** (M0 part 3b): probes 1 (Simpson against Rust hisab), 7 (the daimon registration on sandhi, against a loopback stub), 9 (network solves against Rust hisab), 10 (`[lib]` / `[lib.ai]` bundles and consumers, `p10_manifest.sh`) and 11 (JSON against serde_json, `p11_json.sh`), with results in `docs/development/port-parity.md` §3; their Rust halves are oracle binaries (`scripts/oracle/src/bin/probe_hisab.rs`, `probe_ai.rs`, `probe_json.rs`). Each bundle links and runs a consumer on x86_64, PE and aarch64, and the probe-7 and probe-11 summaries are identical on all three
 - **scripts/probes/** (M0 part 3a): probes 2 (memory), 3 (wide results), 4 (point lists), 5 (steam lookups), 6 (names and `mod`), 8 (span cost), 12 (f64 hygiene and the open field-store miscompile), with their results in `docs/development/port-parity.md` §3. They settle P6 as a written `us_` prefix (`mod`'s scope leaks into consumers; ADR 0001 amendment). They also set the design rules now in CLAUDE.md: level-gated spans (sakshi's spans have no level check, 192 ns each), out-pointer results, caller buffers for point lists, arenas for per-step scratch, and no truth test on an f64
 - **`_us_cr_tanh`** (M0 part 2c-3, ADR 0004 amendment): ushma's own correctly rounded tanh, needed because `ganita_f64_tanh` is not correctly rounded (off on 52 of 860 golden rows). It computes tanh a = E/(E + 2) with E = expm1(2a), a double-double fast path with a proven rounding test and a triple-double accurate path, with `TANH_ONE` generated from MPFR. Every golden row is now gated (15,712 ok + 26 accepted)

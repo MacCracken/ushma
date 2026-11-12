@@ -18,7 +18,7 @@ fn main(): i64 {
         k = k + 1;
     }
     var events = sakshi_ring_event_count();
-    print("events in the ring after 10 spans at level SK_ERROR: ", 53);
+    println("events in the ring after 10 spans at level SK_ERROR:");
     println_int(events);
     if (events > 0) { return 1; }
     return 0;

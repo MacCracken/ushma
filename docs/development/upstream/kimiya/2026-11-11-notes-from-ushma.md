@@ -1,7 +1,8 @@
 # Notes for kimiya from ushma's port (2026-11-11)
 
-kimiya has no issues directory, so these are delivered as a note. Both come from ushma's M0
-(`ushma/docs/development/port-parity.md` §3, `ushma-port-plan.md` §8).
+Two notes from ushma's M0, for kimiya's port to weigh (`ushma/docs/development/port-parity.md` §3,
+`ushma-port-plan.md` §8). Neither is a defect report. This directory follows the issues layout the other AGNOS
+repositories use (`docs/development/issues/`, `YYYY-MM-DD-slug.md`).
 
 ## 1. ganita's LU reproduces Rust hisab 1.4.0's Gaussian elimination, refusals included
 

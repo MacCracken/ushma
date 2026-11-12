@@ -648,9 +648,9 @@ the gate is a warning-free `cyrius test`:
 
 ## 8. Upstream (file at M0, then as found)
 
-**Drafted 2026-11-11, not filed:** [`upstream/README.md`](upstream/README.md) has 12 new issues, each with a repro
-that exits 1 while the defect is present (all run and reproduced), 6 addenda to issues other ports filed, and a
-note for kimiya, all in the targets' own format. Writing into another repository is the maintainer's call.
+**Filed 2026-11-11** (uncommitted in each target, for the maintainer): [`upstream/README.md`](upstream/README.md)
+lists the 11 new issues (each with a repro that reproduced from its own repository), the 7 addenda to issues other
+ports filed, and the note for kimiya.
 
 | To | Request | Evidence |
 |---|---|---|
@@ -662,7 +662,7 @@ note for kimiya, all in the targets' own format. Writing into another repository
 | ganita | an allocator-taking `ganita_mat_lu_solve_a` (or a caller scratch): `_lu_solve` allocates its forward-substitution vector on every call and never frees it | probe 9: 320 B per call at n = 40 with every other buffer reused |
 | ganita | `ganita_mat_gaussian_elim`'s threshold scales with the right-hand side, so it refuses well-posed systems whose b is large | probe 9: 259 of 2,000 row-scaled network systems that LU and Rust hisab 1.4.0 solve |
 | sandhi | `total_ms` doesn't bound a read that blocks before the first response byte (nor does `idle_ms`); only `read_ms` does | probe 7: a server silent for 3 s answers 200 under `total_ms` 1000 |
-| bayan | keep the sign of the integer `-0` (serde_json reads it as −0.0 into an f64; the tree has +0) | probe 11: 20 documents |
+| bayan | keep the sign of the integer `-0` (serde_json reads it as −0.0 into an f64; the tree has +0) | probe 11: 20 documents; an addendum to pravash's issue, filed the same evening |
 | bayan | refuse a raw control character (U+0000–U+001F) inside a string, as RFC 8259 and serde_json do | probe 11: 10 documents parsed that serde_json refuses |
 | cyrius stdlib (fdlopen, dynlib) | six raw syscalls with no PE route (`fdlopen.cyr:472, 530, 626, 954`; `dynlib.cyr:674, 950`) warn on every PE build that links sandhi | probe 10: every `[lib.ai]` consumer's PE build keeps `dynlib.cyr:674` after DCE |
 | sakshi | a level-taking span entry (`sakshi_span_enter_at`): `sakshi_span_enter` / `_exit` never test the level | probe 8: 192 ns per filtered-out span into the ring buffer, 9.7 ns level-gated, around an 8.1 ns function |
@@ -689,7 +689,7 @@ note for kimiya, all in the targets' own format. Writing into another repository
 
 | Milestone | Status | Golden rows | Reference tests | Benches | Notes |
 |---|---|---|---|---|---|
-| M0 Prep & initialize | 🟡 part 1 done 2026-11-11 (steps 0–3: tag verified, Rust bench baseline, `cyrius port`, repairs, manifest, ADRs 0001–0005; gates green on ELF, `--bounds`, PE, aarch64) | 15,738 (constants 9, math 15,687, table presets 42) | — | Rust baseline: 63 | Parts 2a (math check, generator, validate.py), 2b (table data, probe_tables.py), 2c-1 (parity harness: 3,374 ok, 0 failed) 2c-2a (MPFR corrected oracle: 26 rows), 2c-2b (mathx vendored) and 2c-3 (CR tanh, cr_verify: every golden row gated, 15,712 ok + 26 accepted) done. Part 3a (probes 2, 3, 4, 5, 6, 8, 12) done; P6 settled as a written prefix. Part 3b (probes 1, 7, 9, 10, 11) done: Simpson class D, P4 moved to LU (class B), the ai client sets `read_ms`, both bundles link on three targets, P7 stands with the ADR 0005 amendment's decoder rules. Upstream drafted (step 10, §8: 12 issues with verified repros, 6 addenda, a kimiya note; `upstream/README.md`), filing is the maintainer's. Next: M1 |
+| M0 Prep & initialize | 🟡 part 1 done 2026-11-11 (steps 0–3: tag verified, Rust bench baseline, `cyrius port`, repairs, manifest, ADRs 0001–0005; gates green on ELF, `--bounds`, PE, aarch64) | 15,738 (constants 9, math 15,687, table presets 42) | — | Rust baseline: 63 | Parts 2a (math check, generator, validate.py), 2b (table data, probe_tables.py), 2c-1 (parity harness: 3,374 ok, 0 failed) 2c-2a (MPFR corrected oracle: 26 rows), 2c-2b (mathx vendored) and 2c-3 (CR tanh, cr_verify: every golden row gated, 15,712 ok + 26 accepted) done. Part 3a (probes 2, 3, 4, 5, 6, 8, 12) done; P6 settled as a written prefix. Part 3b (probes 1, 7, 9, 10, 11) done: Simpson class D, P4 moved to LU (class B), the ai client sets `read_ms`, both bundles link on three targets, P7 stands with the ADR 0005 amendment's decoder rules. Upstream filed (step 10, §8: 11 issues with verified repros, 7 addenda, a kimiya note; `upstream/README.md`), uncommitted in the targets. Next: M1 |
 | M1 Foundation, logging & transfer | ☐ | | | | |
 | M2 Equations of state & entropy | ☐ | | | | |
 | M3 Phase & steam | ☐ | | | | M3a/b/c |
