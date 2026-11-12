@@ -149,3 +149,15 @@ minimum of three runs.
 correctly rounded pows. Each point of T_a·(T_b/T_a)^f or P_a·(V_a/V)^k is the correctly rounded pow (ADR 0004), and a
 cheaper exp(f·ln r) would not give those bits. Probe 4 measured 2.0 µs for writing 200 plain points into a
 caller buffer; the rest is the pows. The buffer is the caller's, so a diagram allocates nothing.
+
+## M5
+
+| Benchmark | Rust 1.4.0 (ns) | Cyrius (ns) | Notes |
+|---|---|---|---|
+| chem/reaction_enthalpy | 2.57 | 31 | methane's combustion: two two-term sums from −0.0 through the term lists (Rust's are inlined into the loop) |
+| chem/equilibrium_constant | 11.92 | 89 | two checks, ln K, a correctly rounded exp (ADR 0004), the finite check, the span |
+| chem/adiabatic_flame | 27.59 | 125 | methane in air: the coefficient checks over six terms, three sums, the span |
+
+**M5a.** Each function does a few loads and adds per term, plus the harness floor (4 ns) and two calls through the
+term list. Nothing measured worth changing.
+

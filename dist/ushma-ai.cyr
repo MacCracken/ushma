@@ -9960,3 +9960,277 @@ fn us_cycle_comparison_from_json_a(a, buf, n, out: *UsCycleComparison): Result {
 fn us_cycle_comparison_from_json(buf, n, out: *UsCycleComparison): Result {
     return us_cycle_comparison_from_json_a(default_alloc(), buf, n, out);
 }
+
+# --- chem.cyr ---
+
+# chem.cyr — chemical thermodynamics (Rust 1.4.0 `chem`): the standard formation data of 12 species, Hess's law, the
+# Gibbs energy of reaction, equilibrium constants, Van 't Hoff, and the adiabatic flame temperature. SI: joules,
+# moles, kelvins; the standard state is US_STANDARD_T (298.15 K) and 1 atm.
+#
+# Each function computes in the order Rust 1.4.0 writes: its sums from −0.0 as Rust's `sum`, its unary minus a sign
+# flip (_us_neg), its exp correctly rounded (ADR 0004). A refusal returns Err(US_ERR_*) and reports its value at DEBUG
+# (src/validate.cyr). `equilibrium_constant` and `adiabatic_flame_temperature` open DEBUG spans under Rust's names.
+#
+# A species is a UsSpecies, filled from the generated table by us_species_preset (src/chem_data.cyr). One side of a
+# reaction is a term list: n consecutive word pairs (the coefficient, an f64; the species, a *UsSpecies), the Cyrius
+# form of Rust's `&[(f64, &Species)]` (ADR 0002 row 13). JSON is serde_json's (ADR 0005).
+
+struct UsSpecies {
+    name;
+    name_len;
+    delta_hf: f64;
+    delta_gf: f64;
+    cp: f64;
+}
+
+# --- Species ---
+
+# The name of species `i` (a C string into the generated table), or 0 when `i` is no species.
+#must_use
+fn us_species_name(i): cstring {
+    if (i < 0 || i >= US_SPECIES_COUNT) { return 0; }
+    var off = load16(&_US_SPECIES_NAME_OFF + (2 * i));
+    return &_US_SPECIES_NAME_BYTES + off;
+}
+
+# Fills *out with species `i` (`US_SPECIES_H2` … `US_SPECIES_NO`): Ok(0), or Err(US_ERR_INVALID_PARAMETER) when `i` is
+# no species.
+#must_use
+fn us_species_preset(i, out: *UsSpecies): Result {
+    if (i < 0 || i >= US_SPECIES_COUNT) {
+        return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_species_preset", "index", i));
+    }
+    var name = us_species_name(i);
+    var hf: f64 = US_SPECIES_DELTA_HF[i];
+    var gf: f64 = US_SPECIES_DELTA_GF[i];
+    var cp: f64 = US_SPECIES_CP[i];
+    out.name = name;
+    out.name_len = strlen(name);
+    out.delta_hf = hf;
+    out.delta_gf = gf;
+    out.cp = cp;
+    return Ok(0);
+}
+
+# --- Reactions ---
+
+# Σ n·x over the `n` terms at `terms`, x the f64 at byte offset `off` of each term's species (16 ΔH°f, 24 ΔG°f, 32 C°p),
+# summed left to right from −0.0 as Rust's `sum` does.
+fn _us_terms_sum(terms, n, off): f64 {
+    var s: f64 = _US_NEG_ZERO;
+    var k = 0;
+    while (k < n) {
+        var c: f64 = load64(terms + (16 * k));
+        var sp = load64(terms + (16 * k) + 8);
+        var x: f64 = load64(sp + off);
+        s = s + c * x;
+        k = k + 1;
+    }
+    return s;
+}
+
+# The standard reaction enthalpy by Hess's law, ΔH°rxn = Σ n·ΔH°f(products) − Σ n·ΔH°f(reactants) (J/mol), over the
+# `np` product and `nr` reactant terms.
+#must_use
+fn us_reaction_enthalpy(products, np, reactants, nr): f64 {
+    var hp: f64 = _us_terms_sum(products, np, 16);
+    var hr: f64 = _us_terms_sum(reactants, nr, 16);
+    var d: f64 = hp - hr;
+    return d;
+}
+
+# The standard Gibbs energy of reaction, ΔG°rxn = Σ n·ΔG°f(products) − Σ n·ΔG°f(reactants) (J/mol).
+#must_use
+fn us_reaction_gibbs(products, np, reactants, nr): f64 {
+    var gp: f64 = _us_terms_sum(products, np, 24);
+    var gr: f64 = _us_terms_sum(reactants, nr, 24);
+    var d: f64 = gp - gr;
+    return d;
+}
+
+# The Gibbs energy from enthalpy and entropy, ΔG = ΔH − T·ΔS (J/mol).
+#must_use
+#pure
+fn us_gibbs_from_enthalpy_entropy(delta_h: f64, delta_s: f64, temperature: f64): f64 {
+    var g: f64 = delta_h - temperature * delta_s;
+    return g;
+}
+
+# The natural log of the equilibrium constant, ln K = −ΔG°/(R·T): use it where K itself leaves the f64 range
+# (combustion, where ln K is several hundred). Ok(ln K), or Err(US_ERR_INVALID_TEMPERATURE) unless T > 0,
+# Err(US_ERR_INVALID_PARAMETER) unless ΔG° is finite.
+#must_use
+fn us_ln_equilibrium_constant(delta_g: f64, temperature: f64): Result {
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_ln_equilibrium_constant", "temperature", temperature));
+    }
+    if (_us_is_finite(delta_g) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_ln_equilibrium_constant", "delta_g", delta_g));
+    }
+    var ng: f64 = _us_neg(delta_g);
+    var lk: f64 = ng / (US_GAS_CONSTANT * temperature);
+    return Ok(lk);
+}
+
+# The equilibrium constant, K = exp(−ΔG°/(R·T)). Ok(K), or us_ln_equilibrium_constant's refusals, or
+# Err(US_ERR_INVALID_PARAMETER) when K overflows to ∞ or underflows to 0 (|ln K| ≳ 709: use the log form).
+#must_use
+fn us_equilibrium_constant(delta_g: f64, temperature: f64): Result {
+    _us_span_enter("equilibrium_constant", 20);
+    var t, v = us_ln_equilibrium_constant(delta_g, temperature);
+    if (is_err_result(t) == 1) {
+        _us_span_exit();
+        return Err(v);
+    }
+    var lk: f64 = v;
+    var k: f64 = _us_cr_exp(lk);
+    if (_us_finite_gt(k, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_equilibrium_constant", "ln_k", lk));
+    }
+    _us_span_exit();
+    return Ok(k);
+}
+
+# Van 't Hoff: K at `t_target` from `k_ref` at `t_ref`, ln(K₂/K₁) = −(ΔH°/R)·(1/T₂ − 1/T₁). Ok(K₂), or
+# Err(US_ERR_INVALID_PARAMETER) unless K₁ > 0, Err(US_ERR_INVALID_TEMPERATURE) unless both temperatures are > 0,
+# Err(US_ERR_INVALID_PARAMETER) when K₂ leaves the f64 range (a non-finite ΔH° among the ways).
+#must_use
+fn us_vant_hoff_k(k_ref: f64, delta_h: f64, t_ref: f64, t_target: f64): Result {
+    if (_us_finite_gt(k_ref, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_vant_hoff_k", "k_ref", k_ref));
+    }
+    if (_us_finite_gt(t_ref, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_vant_hoff_k", "t_ref", t_ref));
+    }
+    if (_us_finite_gt(t_target, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_vant_hoff_k", "t_target", t_target));
+    }
+    var nh: f64 = _us_neg(delta_h / US_GAS_CONSTANT);
+    var ex: f64 = nh * (1.0 / t_target - 1.0 / t_ref);
+    var e: f64 = _us_cr_exp(ex);
+    var k: f64 = k_ref * e;
+    if (_us_finite_gt(k, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_vant_hoff_k", "exponent", ex));
+    }
+    return Ok(k);
+}
+
+# 1 when a coefficient of the `n` terms at `terms` is not finite and ≥ 0, the first such into *bad; else 0.
+fn _us_terms_bad(terms, n, bad): i64 {
+    var k = 0;
+    while (k < n) {
+        var c: f64 = load64(terms + (16 * k));
+        if (_us_finite_ge(c, 0.0) == 0) {
+            store64(bad, c);
+            return 1;
+        }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# The adiabatic flame temperature (K) of the `nr` reactant terms burning to the `np` product terms from `t_initial`,
+# with every C°p constant at its 298.15 K value: the analytical solution of Σ n_p·C_p·(T − 298.15) = −ΔH°rxn +
+# Σ n_r·C_p·(T_in − 298.15). Ok(T), or Err(US_ERR_INVALID_TEMPERATURE) unless T_in > 0, Err(US_ERR_INVALID_PARAMETER)
+# unless every coefficient is finite and ≥ 0 (reactants first), Err(US_ERR_DIVISION_BY_ZERO) unless the products' heat
+# capacity is > 0, Err(US_ERR_INVALID_PARAMETER) unless T > 0.
+#must_use
+fn us_adiabatic_flame_temperature(reactants, nr, products, np, t_initial: f64): Result {
+    _us_span_enter("adiabatic_flame_temperature", 27);
+    if (_us_finite_gt(t_initial, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_adiabatic_flame_temperature", "t_initial", t_initial));
+    }
+    var bw[8];
+    var bad = _us_terms_bad(reactants, nr, &bw);
+    if (bad == 0) { bad = _us_terms_bad(products, np, &bw); }
+    if (bad == 1) {
+        var cb: f64 = load64(&bw);
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_adiabatic_flame_temperature", "coefficient", cb));
+    }
+    var dh: f64 = us_reaction_enthalpy(products, np, reactants, nr);
+    var cpp: f64 = _us_terms_sum(products, np, 32);
+    if (_us_finite_gt(cpp, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_adiabatic_flame_temperature", "cp_products", cpp));
+    }
+    var dt: f64 = t_initial - US_STANDARD_T;
+    var q: f64 = _US_NEG_ZERO;
+    var k = 0;
+    while (k < nr) {
+        var c: f64 = load64(reactants + (16 * k));
+        var sp = load64(reactants + (16 * k) + 8);
+        var cp: f64 = load64(sp + 32);
+        q = q + c * cp * dt;
+        k = k + 1;
+    }
+    var ndh: f64 = _us_neg(dh);
+    var tf: f64 = US_STANDARD_T + (ndh + q) / cpp;
+    if (_us_finite_gt(tf, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_adiabatic_flame_temperature", "t_flame", tf));
+    }
+    _us_span_exit();
+    return Ok(tf);
+}
+
+# --- JSON ---
+
+# Appends *s as serde_json writes a `Species`.
+fn us_species_to_json(sb, s: *UsSpecies) {
+    var hf: f64 = s.delta_hf;
+    var gf: f64 = s.delta_gf;
+    var cp: f64 = s.cp;
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "name", 1);
+    _us_jw_str(sb, s.name, s.name_len);
+    _us_jw_key(sb, "delta_hf", 0);
+    _us_jw_f64(sb, hf);
+    _us_jw_key(sb, "delta_gf", 0);
+    _us_jw_f64(sb, gf);
+    _us_jw_key(sb, "cp", 0);
+    _us_jw_f64(sb, cp);
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# Reads a `Species` document (`n` bytes at `buf`) into *out, its name copied onto allocator `a`: Ok(0), or
+# Err(US_ERR_DESERIALIZE), leaving *out unchanged. The parse tree is on `a` too: reset it when the result is used.
+#must_use
+fn us_species_from_json_a(a, buf, n, out: *UsSpecies): Result {
+    var v = _us_jr_parse(a, buf, n);
+    var form = _us_jr_form(v, 4);
+    if (form == 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_species_from_json")); }
+    var np[8];
+    var nn[8];
+    if (_us_jr_str(a, _us_jr_at(v, form, 0, "name"), &np, &nn) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_species_from_json"));
+    }
+    var w[24];
+    if (_us_jr_f64(_us_jr_at(v, form, 1, "delta_hf"), &w) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_species_from_json"));
+    }
+    if (_us_jr_f64(_us_jr_at(v, form, 2, "delta_gf"), &w + 8) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_species_from_json"));
+    }
+    if (_us_jr_f64(_us_jr_at(v, form, 3, "cp"), &w + 16) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_species_from_json"));
+    }
+    var hf: f64 = load64(&w);
+    var gf: f64 = load64(&w + 8);
+    var cp: f64 = load64(&w + 16);
+    out.name = load64(&np);
+    out.name_len = load64(&nn);
+    out.delta_hf = hf;
+    out.delta_gf = gf;
+    out.cp = cp;
+    return Ok(0);
+}
+
+# us_species_from_json_a on the global heap: for a one-off read (each call's tree and name stay allocated).
+#must_use
+fn us_species_from_json(buf, n, out: *UsSpecies): Result {
+    return us_species_from_json_a(default_alloc(), buf, n, out);
+}

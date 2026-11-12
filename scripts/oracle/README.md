@@ -36,6 +36,7 @@ dependency, hisab 1.4.0 above all, is the version the oracle was tested with.
 | `tests/golden/state.tsv` | 11,136 | the 8 presets and `ALL_GASES` (part 2b), then M2 (`m_state.rs`): all 21 state functions over seeded sweeps, every edge and each switch (the cubic equations: every gas × T across T_c × V_m across b; Pitzer–Abbott: T_r × P_r to Z ≤ 0; Kay's rules: 233 mixtures), classes B and C (`state.cr.tsv`: 1 row); 18 `GasData::to_json` and 78 `GasData::from_json` documents (class A) |
 | `tests/golden/material.tsv` | 2,927 | M1b (`m_material.rs`): the presets, then 1,410 rows per method (`diffusivity`, `volumetric_heat_capacity`, class B), 19 `to_json` and 77 `from_json` documents (class A; the variants from `json_cases.rs`, shared with probe 11) |
 | `tests/golden/{state,phase,chem}.tsv` | 9 / 9 / 13 | every public table preset (name + fields) and its `ALL_*` order, class A; each module's function rows join it at its milestone |
+| `tests/golden/chem.tsv` | 2,340 | M5a (`m_chem.rs`), after the 13 preset rows: Hess's law and the Gibbs sum over named, reversed, empty and seeded reactions (a side is `v:n` then per term its coefficient and the species by value), each coefficient and species at the edges (class B); ln K and ΔH − TΔS (class B); K and Van 't Hoff, with where exp leaves the f64 range bisected ± 2 ulps (class C; `chem.cr.tsv`: 3 rows); the flame temperature over named and seeded combustions, the edges, and where T_flame crosses 0 (class B); `Species`'s JSON (class A) |
 | `tests/golden/modules.txt` | 8 | the module list the harness reads |
 | `src/constants.cyr` | 47 lines | the 9 public constants as `US_` consts, under their Rust doc comments |
 | `src/{material,state,phase,chem}_data.cyr` | 101–202 lines | the public tables: `US_<TABLE>_COUNT`, one `US_<TABLE>_<PRESET>` index constant per preset, one `f64[n]` column per field, the names as a NUL-separated blob with `u16` offsets (`t_tables.rs`) |
@@ -112,7 +113,7 @@ struct literal in the Rust source, and the `ALL_*` row against the slice's entri
 are checked against MPFR by the corrected-oracle tooling (M0 part 2c). Run it with
 `python3 -I -B`. A tampered row fails it, as checked when it was written.
 
-From M1 it also models each ported module's functions (`MODELS`: transfer's 32, state's 21, entropy's 9, phase's 10, steam's 10, cycle's 13; the comparison and diagrams read their raw tokens, `RAW_ARGS`): each is recomputed in Rust's
+From M1 it also models each ported module's functions (`MODELS`: transfer's 32, state's 21, entropy's 9, phase's 10, steam's 10, cycle's 13, chem's 7; the comparison, diagrams and term-list functions read their raw tokens, `RAW_ARGS`): each is recomputed in Rust's
 operation order with Python binary64 arithmetic, its transcendentals (`exp`, `ln`, `pow`, `tanh`, `atan`) taken from
 glibc through ctypes, and every row must come out token for token. With MPFR's primitives instead, the same models
 give the module's corrected oracle (`<module>.cr.tsv`), each misrounded call recorded.
@@ -138,7 +139,7 @@ fn <TAB> inputs <TAB> corrected outputs <TAB> note
 The plain `validate.py .` run recomputes the file and checks it. On the recorded libm platform
 it also checks that each note's glibc value is this machine's libm result, and the exact text.
 `math.cr.tsv` has 26 rows (exp_m1 23, ln 1, powf 2), `transfer.cr.tsv` 8 (pow 4, exp 3, atan 1),
-`state.cr.tsv` 1 (pow), `entropy.cr.tsv` 1 (log), `steam.cr.tsv` 10 (log 5, exp 5) and `cycle.cr.tsv` 3 (log 1, pow 2).
+`state.cr.tsv` 1 (pow), `entropy.cr.tsv` 1 (log), `steam.cr.tsv` 10 (log 5, exp 5), `cycle.cr.tsv` 3 (log 1, pow 2) and `chem.cr.tsv` 3 (exp).
 
 ## mathx_tables.py
 

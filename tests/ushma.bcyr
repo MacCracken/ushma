@@ -23,6 +23,8 @@ include "src/phase.cyr"
 include "src/steam_data.cyr"
 include "src/steam.cyr"
 include "src/cycle.cyr"
+include "src/chem_data.cyr"
+include "src/chem.cyr"
 
 # Keeps results observable, so no call can be dropped.
 var _bn_sink = 0;
@@ -414,6 +416,62 @@ fn b_compare(r: *UsCycleResult): i64 {
     return e;
 }
 
+var _bn_prod = 0;
+var _bn_react = 0;
+var _bn_fprod = 0;
+var _bn_freact = 0;
+
+# Species `i` as a fresh UsSpecies.
+fn bn_species(i): i64 {
+    var x = alloc(sizeof(UsSpecies));
+    var t, v = us_species_preset(i, x);
+    return x;
+}
+
+# Term k of a term list: coefficient `c` of species `i`.
+fn bn_term(terms, k, c: f64, i) {
+    store64(terms + (16 * k), c);
+    store64(terms + (16 * k) + 8, bn_species(i));
+    return 0;
+}
+
+# Methane's combustion, and the same in air, as term lists.
+fn bn_reactions() {
+    _bn_prod = alloc(32);
+    _bn_react = alloc(32);
+    bn_term(_bn_prod, 0, 1.0, US_SPECIES_CO2);
+    bn_term(_bn_prod, 1, 2.0, US_SPECIES_H2O_GAS);
+    bn_term(_bn_react, 0, 1.0, US_SPECIES_CH4);
+    bn_term(_bn_react, 1, 2.0, US_SPECIES_O2);
+    _bn_fprod = alloc(48);
+    _bn_freact = alloc(48);
+    bn_term(_bn_freact, 0, 1.0, US_SPECIES_CH4);
+    bn_term(_bn_freact, 1, 2.0, US_SPECIES_O2);
+    bn_term(_bn_freact, 2, 7.52, US_SPECIES_N2);
+    bn_term(_bn_fprod, 0, 1.0, US_SPECIES_CO2);
+    bn_term(_bn_fprod, 1, 2.0, US_SPECIES_H2O_GAS);
+    bn_term(_bn_fprod, 2, 7.52, US_SPECIES_N2);
+    return 0;
+}
+
+# reaction_enthalpy of methane's combustion.
+fn b_reaction_enthalpy(x): i64 {
+    var h: f64 = us_reaction_enthalpy(_bn_prod, 2, _bn_react, 2);
+    return h;
+}
+
+# equilibrium_constant(-800 kJ/mol, 298.15 K).
+fn b_equilibrium_constant(x): i64 {
+    var t, v = us_equilibrium_constant(0.0 - 800000.0, 298.15);
+    return v;
+}
+
+# adiabatic_flame_temperature of methane in air from 298.15 K.
+fn b_flame(x): i64 {
+    var t, v = us_adiabatic_flame_temperature(_bn_freact, 3, _bn_fprod, 3, 298.15);
+    return v;
+}
+
 # Fills the two resistance lists the benchmarks use.
 fn bn_lists() {
     _bn_series = alloc(40);
@@ -534,6 +592,10 @@ fn main(): i64 {
     bn_run("cycle/ts_diagram, 200 points (Cyrius only)", &b_ts_diagram, &cr, 100000);
     bn_run("cycle/pv_diagram, 200 points (Cyrius only)", &b_pv_diagram, &cr, 100000);
     bn_run("cycle/compare, one entry (Cyrius only)", &b_compare, &cr, 1000000);
+    bn_reactions();
+    bn_run("chem/reaction_enthalpy", &b_reaction_enthalpy, 0, 1000000);
+    bn_run("chem/equilibrium_constant", &b_equilibrium_constant, 0, 1000000);
+    bn_run("chem/adiabatic_flame", &b_flame, 0, 1000000);
     return 0;
 }
 

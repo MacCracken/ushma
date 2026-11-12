@@ -631,3 +631,26 @@ after M4b: 137,941 and 92).
   - **JSON:** `DiagramPoint` 54 rows and `CycleComparisonEntry` 61, 5 each accepted under ADR 5's mapped divergences.
   - **Surface parity:** cycle is PORTED, 44 of 44. **Tests:** all 59 of cycle's and the 3 remaining cycle integration
     tests; the ledger has 339 of 479, every one due through M4.
+
+## 8. M5 (2026-11-12)
+
+After M5a the harness's summary is `11 modules, 0 failing | rows: 140682 ok, 0 failed, 0 measured, 0 pending, 112
+accepted (ADR 4: 52)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
+
+- **chem** (M5a): 2,327 rows after the 13 preset rows, 2,340 in all (class A 113, B 1,563, C 664; 380 refusals).
+  - **Hess's law and the Gibbs sum** (290 rows each, bit-identical): eleven named reactions and their reverses
+    (methane, hydrogen, propane, CO and ethane combustion, ammonia and NO synthesis, and sides left empty), 200 seeded
+    reactions, and each coefficient and each species of methane's combustion at the edges. A species is written by
+    value, so NaN, ±∞, −0, f64::MAX and subnormal species sit beside the presets.
+  - **ln K, K, Van 't Hoff:** seeded and at the edges, with ΔG° = ±0, where ln K = −ΔG°/(RT) carries the sign the
+    tightened harness now checks. K's overflow and underflow and Van 't Hoff's overflow are found by bisection on the
+    bit patterns at three temperatures, ± 2 ulps. 0 ulp against MPFR; glibc misrounds an exp inside 3 K rows
+    (`chem.cr.tsv`).
+  - **The flame temperature** (439 rows, bit-identical): nine named reactions at five initial temperatures and the
+    edges; every coefficient of methane-air at the edges, so a bad reactant is reported before a bad product; species
+    with zero, negative and NaN C°p and −∞ ΔH°f; an empty product side (C°p sum −0.0: `DivisionByZero`); 200 seeded
+    combustions; and, for the reverse of methane's combustion, the initial temperature where T_flame crosses 0
+    (bisected) ± 2 ulps.
+  - **JSON:** `Species`, 21 `to_json` and 79 `from_json` rows, 5 accepted under ADR 5's mapped divergences.
+  - **Surface parity:** chem 24 of 24. **Tests:** all 23 of chem's and its 3 integration tests (ledger: 365 of 479,
+    every one due).

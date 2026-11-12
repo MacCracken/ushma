@@ -1659,8 +1659,91 @@ def _pv_point(a, b, pk, frac, gamma, p):
     return v, linear
 
 
-# Functions whose rows hold whole cycle results: their models read the raw tokens.
-RAW_ARGS = {"cycle::compare_cycles", "cycle::cycle_ts_diagram", "cycle::cycle_pv_diagram"}
+STANDARD_T = 298.15  # chem::STANDARD_T
+
+
+def _terms(ins, at):
+    """A term list from ins[at] (`v:n`, then per term its coefficient and species `s:name` ΔH°f ΔG°f C°p): the
+    (coefficient, ΔH°f, ΔG°f, C°p) tuples and the next index."""
+    n, at, out = int(ins[at][2:]), at + 1, []
+    for _ in range(n):
+        out.append((tok_f(ins[at]), tok_f(ins[at + 2]), tok_f(ins[at + 3]), tok_f(ins[at + 4])))
+        at += 5
+    return out, at
+
+
+def _rsum(terms, k):
+    """Σ n·x over a term list, x its field k (1 ΔH°f, 2 ΔG°f, 3 C°p), from −0.0 as Rust's `sum`."""
+    s = -0.0
+    for t in terms:
+        s = s + t[0] * t[k]
+    return s
+
+
+def m_hess(k):
+    def model(ins, p):
+        prod, at = _terms(ins, 0)
+        react, _ = _terms(ins, at)
+        return F(_rsum(prod, k) - _rsum(react, k))
+
+    return model
+
+
+def m_ln_k(a, p):
+    dg, t = a
+    if not fgt(t, 0.0):
+        return E("InvalidTemperature")
+    if not math.isfinite(dg):
+        return E("InvalidParameter")
+    return F(fdiv(-dg, GAS_R * t))
+
+
+def m_k(a, p):
+    r = m_ln_k(a, p)
+    if r[0].startswith("E:"):
+        return r
+    k = p.exp(tok_f(r[0]))
+    return F(k) if fgt(k, 0.0) else E("InvalidParameter")
+
+
+def m_vant_hoff(a, p):
+    k1, dh, t1, t2 = a
+    if not fgt(k1, 0.0):
+        return E("InvalidParameter")
+    if not fgt(t1, 0.0) or not fgt(t2, 0.0):
+        return E("InvalidTemperature")
+    k = k1 * p.exp(-fdiv(dh, GAS_R) * (fdiv(1.0, t2) - fdiv(1.0, t1)))
+    return F(k) if fgt(k, 0.0) else E("InvalidParameter")
+
+
+def m_flame(ins, p):
+    react, at = _terms(ins, 0)
+    prod, at = _terms(ins, at)
+    t = tok_f(ins[at])
+    if not fgt(t, 0.0):
+        return E("InvalidTemperature")
+    if any(not fge(c[0], 0.0) for c in react + prod):
+        return E("InvalidParameter")
+    dh = _rsum(prod, 1) - _rsum(react, 1)
+    cpp = _rsum(prod, 3)
+    if not fgt(cpp, 0.0):
+        return E("DivisionByZero")
+    q = -0.0
+    for c in react:
+        q = q + c[0] * c[3] * (t - STANDARD_T)
+    tf = STANDARD_T + fdiv(-dh + q, cpp)
+    return F(tf) if fgt(tf, 0.0) else E("InvalidParameter")
+
+
+# Functions whose rows hold whole cycle results or term lists: their models read the raw tokens.
+RAW_ARGS = {
+    "cycle::compare_cycles",
+    "cycle::cycle_ts_diagram",
+    "cycle::cycle_pv_diagram",
+    "chem::reaction_enthalpy",
+    "chem::reaction_gibbs",
+    "chem::adiabatic_flame_temperature",
+}
 
 def _gas_ok(g, n):
     return fgt(g, 1.0) and fgt(n, 0.0)
@@ -1787,6 +1870,15 @@ def unmodelled(fn, ins):
 
 
 MODELS = {
+    "chem": {
+        "chem::reaction_enthalpy": m_hess(1),
+        "chem::reaction_gibbs": m_hess(2),
+        "chem::gibbs_from_enthalpy_entropy": lambda a, p: F(a[0] - a[2] * a[1]),
+        "chem::ln_equilibrium_constant": m_ln_k,
+        "chem::equilibrium_constant": m_k,
+        "chem::vant_hoff_k": m_vant_hoff,
+        "chem::adiabatic_flame_temperature": m_flame,
+    },
     "cycle": {
         "cycle::isochoric_heat": lambda a, p: F(a[0] * a[1] * (a[3] - a[2])),
         "cycle::isobaric_heat": lambda a, p: F(a[0] * a[1] * (a[3] - a[2])),

@@ -1,0 +1,309 @@
+# chem tests (M5a): the species table, Hess's law, Gibbs energy, the equilibrium constants, Van 't Hoff and the
+# adiabatic flame temperature.
+#
+# Rust 1.4.0's chem.rs tests, all 23, one for one, each also checking the refusal's code. Then reference tests of the
+# two spans, the sign of ln K at ΔG° = ±0, the preset refusals, and a term list's −0.0 start.
+
+include "src/constants.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+include "src/json.cyr"
+include "src/chem_data.cyr"
+include "src/chem.cyr"
+
+# |a − b| as an f64.
+fn absdiff(a: f64, b: f64): f64 {
+    var d: f64 = a - b;
+    if (d < 0.0) { d = 0.0 - d; }
+    return d;
+}
+
+# Asserts a Result is Err(code).
+fn errc(t, v, code, name) {
+    assert_eq(is_err_result(t), 1, name);
+    if (is_err_result(t) == 1) { assert_streq(us_error_name(v), us_error_name(code), name); }
+    return 0;
+}
+
+# The value of an Ok Result as an f64 (asserting it is Ok).
+fn okv(t, v, name): f64 {
+    assert_eq(is_ok(t), 1, name);
+    var x: f64 = v;
+    return x;
+}
+
+# The ring's raw bytes contain the C string `s`: 1 or 0.
+fn ring_has(s): i64 {
+    var cap = 8192;
+    var buf = alloc(cap);
+    var n = sakshi_ring_read_raw(buf, cap);
+    var sl = strlen(s);
+    var k = 0;
+    while (k + sl <= n) {
+        if (memeq(buf + k, s, sl) == 1) { return 1; }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# Species `i` as a fresh UsSpecies (asserting the preset is Ok).
+fn sp(i): *UsSpecies {
+    var x = alloc(sizeof(UsSpecies));
+    var t, v = us_species_preset(i, x);
+    assert_eq(is_ok(t), 1, "a preset is Ok");
+    return x;
+}
+
+# Term k of the list at `terms`: coefficient `c` of species `s`.
+fn term(terms, k, c: f64, s) {
+    store64(terms + (16 * k), c);
+    store64(terms + (16 * k) + 8, s);
+    return 0;
+}
+
+# The species table: twelve presets, the elements' zero formation, positive heat capacities, liquid water's enthalpy of
+# formation, and a species' JSON round trip.
+# rust src/chem.rs: test_all_species_count, test_elements_zero_formation, test_species_positive_cp
+# rust src/chem.rs: test_water_formation_enthalpy, test_species_serde_roundtrip
+fn test_species() {
+    test_group("species");
+    assert_eq(US_SPECIES_COUNT, 12, "twelve species");
+    var h2: *UsSpecies = sp(US_SPECIES_H2);
+    var o2: *UsSpecies = sp(US_SPECIES_O2);
+    var n2: *UsSpecies = sp(US_SPECIES_N2);
+    var a: f64 = h2.delta_hf;
+    var b: f64 = o2.delta_hf;
+    var c: f64 = n2.delta_hf;
+    var d: f64 = h2.delta_gf;
+    assert(a == 0.0 && b == 0.0 && c == 0.0 && d == 0.0, "H2, O2 and N2 form at zero");
+    var pos = 1;
+    var k = 0;
+    while (k < US_SPECIES_COUNT) {
+        var x: *UsSpecies = sp(k);
+        var cp: f64 = x.cp;
+        if (cp <= 0.0) { pos = 0; }
+        k = k + 1;
+    }
+    assert_eq(pos, 1, "every C°p is positive");
+    var w: *UsSpecies = sp(US_SPECIES_H2O_LIQUID);
+    var wh: f64 = w.delta_hf;
+    var dw: f64 = absdiff(wh, 0.0 - 285830.0);
+    assert(dw < 10.0, "liquid water: -285.83 kJ/mol");
+    var ch4: *UsSpecies = sp(US_SPECIES_CH4);
+    var sb = str_builder_new();
+    us_species_to_json(sb, ch4);
+    var back: UsSpecies;
+    var t, v = us_species_from_json(load64(sb), load64(sb + 8), &back);
+    assert_eq(is_ok(t), 1, "CH4's document reads back");
+    assert(back.name_len == 3 && memeq(back.name, "CH4", 3) == 1, "its name");
+    var bh: f64 = back.delta_hf;
+    var db: f64 = absdiff(bh, 0.0 - 74810.0);
+    assert(db < 1.0, "its enthalpy of formation");
+}
+
+# Hess's law: methane's and hydrogen's combustion enthalpies, and a reverse reaction's opposite sign.
+# rust src/chem.rs: test_methane_combustion_enthalpy, test_hydrogen_combustion_enthalpy
+# rust src/chem.rs: test_reaction_enthalpy_reverse
+fn test_hess() {
+    test_group("Hess's law");
+    var prod[32];
+    var react[32];
+    term(&prod, 0, 1.0, sp(US_SPECIES_CO2));
+    term(&prod, 1, 2.0, sp(US_SPECIES_H2O_GAS));
+    term(&react, 0, 1.0, sp(US_SPECIES_CH4));
+    term(&react, 1, 2.0, sp(US_SPECIES_O2));
+    var dh: f64 = us_reaction_enthalpy(&prod, 2, &react, 2);
+    var d1: f64 = absdiff(dh, 0.0 - 802340.0);
+    assert(d1 < 100.0, "CH4 + 2 O2 -> CO2 + 2 H2O(g): -802.34 kJ/mol");
+    var rev: f64 = us_reaction_enthalpy(&react, 2, &prod, 2);
+    var s: f64 = dh + rev;
+    var ds: f64 = absdiff(s, 0.0);
+    assert(ds < 0.0000000001, "the reverse reaction: the opposite enthalpy");
+    var hp[16];
+    var hr[32];
+    term(&hp, 0, 1.0, sp(US_SPECIES_H2O_LIQUID));
+    term(&hr, 0, 1.0, sp(US_SPECIES_H2));
+    term(&hr, 1, 0.5, sp(US_SPECIES_O2));
+    var dh2: f64 = us_reaction_enthalpy(&hp, 1, &hr, 2);
+    var d2: f64 = absdiff(dh2, 0.0 - 285830.0);
+    assert(d2 < 10.0, "H2 + 1/2 O2 -> H2O(l): -285.83 kJ/mol");
+}
+
+# The Gibbs energy and the equilibrium constant: combustion's very negative ΔG°, K above and below 1, the refusal at
+# T = 0, and ΔH − TΔS.
+# rust src/chem.rs: test_methane_combustion_gibbs, test_equilibrium_constant_spontaneous
+# rust src/chem.rs: test_equilibrium_constant_nonspontaneous, test_equilibrium_constant_invalid
+# rust src/chem.rs: test_gibbs_from_enthalpy_entropy
+fn test_gibbs() {
+    test_group("Gibbs and K");
+    var prod[32];
+    var react[32];
+    term(&prod, 0, 1.0, sp(US_SPECIES_CO2));
+    term(&prod, 1, 2.0, sp(US_SPECIES_H2O_GAS));
+    term(&react, 0, 1.0, sp(US_SPECIES_CH4));
+    term(&react, 1, 2.0, sp(US_SPECIES_O2));
+    var dg: f64 = us_reaction_gibbs(&prod, 2, &react, 2);
+    assert(dg < 0.0 - 700000.0, "combustion's dG < -700 kJ/mol");
+    var t1, v1 = us_equilibrium_constant(0.0 - 50000.0, 298.15);
+    var k1: f64 = okv(t1, v1, "K at dG = -50 kJ/mol");
+    assert(k1 > 1.0, "a spontaneous reaction: K > 1");
+    var t2, v2 = us_equilibrium_constant(50000.0, 298.15);
+    var k2: f64 = okv(t2, v2, "K at dG = +50 kJ/mol");
+    assert(k2 < 1.0, "a non-spontaneous one: K < 1");
+    var e1, f1 = us_equilibrium_constant(0.0 - 50000.0, 0.0);
+    errc(e1, f1, US_ERR_INVALID_TEMPERATURE, "T = 0");
+    var g: f64 = us_gibbs_from_enthalpy_entropy(0.0 - 100000.0, 0.0 - 200.0, 298.15);
+    var dgg: f64 = absdiff(g, 0.0 - 40370.0);
+    assert(dgg < 1.0, "dG = dH - T dS: -40.37 kJ/mol");
+}
+
+# Van 't Hoff: there and back, an exothermic K falling and an endothermic rising with T, and the refusals.
+# rust src/chem.rs: test_vant_hoff_roundtrip, test_vant_hoff_exothermic, test_vant_hoff_endothermic
+# rust src/chem.rs: test_vant_hoff_invalid
+fn test_vant_hoff() {
+    test_group("Van 't Hoff");
+    var t1, v1 = us_vant_hoff_k(100.0, 0.0 - 50000.0, 298.15, 400.0);
+    var k2: f64 = okv(t1, v1, "K at 400 K");
+    var t2, v2 = us_vant_hoff_k(k2, 0.0 - 50000.0, 400.0, 298.15);
+    var kb: f64 = okv(t2, v2, "and back");
+    var d: f64 = absdiff(kb, 100.0);
+    assert(d / 100.0 < 0.0000000001, "there and back: K within 1e-10");
+    assert(k2 < 100.0, "exothermic: K falls with T");
+    var t3, v3 = us_vant_hoff_k(0.01, 50000.0, 298.15, 400.0);
+    var k3: f64 = okv(t3, v3, "endothermic K");
+    assert(k3 > 0.01, "endothermic: K rises with T");
+    var e1, f1 = us_vant_hoff_k(0.0, 0.0 - 50000.0, 298.15, 400.0);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "K_ref = 0");
+    var e2, f2 = us_vant_hoff_k(100.0, 0.0 - 50000.0, 0.0, 400.0);
+    errc(e2, f2, US_ERR_INVALID_TEMPERATURE, "T_ref = 0");
+    var e3, f3 = us_vant_hoff_k(100.0, 0.0 - 50000.0, 298.15, 0.0);
+    errc(e3, f3, US_ERR_INVALID_TEMPERATURE, "T_target = 0");
+}
+
+# The adiabatic flame temperature: methane and hydrogen in air, the refusal at T_in = 0, and bad coefficients.
+# rust src/chem.rs: test_methane_air_flame_temperature, test_hydrogen_flame_temperature
+# rust src/chem.rs: test_flame_temperature_invalid, test_flame_temperature_rejects_bad_coefficients
+fn test_flame() {
+    test_group("flame temperature");
+    var react[48];
+    var prod[48];
+    term(&react, 0, 1.0, sp(US_SPECIES_CH4));
+    term(&react, 1, 2.0, sp(US_SPECIES_O2));
+    term(&react, 2, 7.52, sp(US_SPECIES_N2));
+    term(&prod, 0, 1.0, sp(US_SPECIES_CO2));
+    term(&prod, 1, 2.0, sp(US_SPECIES_H2O_GAS));
+    term(&prod, 2, 7.52, sp(US_SPECIES_N2));
+    var t1, v1 = us_adiabatic_flame_temperature(&react, 3, &prod, 3, 298.15);
+    var tf: f64 = okv(t1, v1, "methane-air is Ok");
+    assert(tf > 2500.0 && tf < 3200.0, "methane-air: 2500-3200 K at constant Cp");
+    var hr[48];
+    var hp[32];
+    term(&hr, 0, 1.0, sp(US_SPECIES_H2));
+    term(&hr, 1, 0.5, sp(US_SPECIES_O2));
+    term(&hr, 2, 1.88, sp(US_SPECIES_N2));
+    term(&hp, 0, 1.0, sp(US_SPECIES_H2O_GAS));
+    term(&hp, 1, 1.88, sp(US_SPECIES_N2));
+    var t2, v2 = us_adiabatic_flame_temperature(&hr, 3, &hp, 2, 298.15);
+    var th: f64 = okv(t2, v2, "hydrogen-air is Ok");
+    assert(th > 2700.0 && th < 3500.0, "hydrogen-air: 2700-3500 K");
+    var e1, f1 = us_adiabatic_flame_temperature(&react, 1, &prod, 1, 0.0);
+    errc(e1, f1, US_ERR_INVALID_TEMPERATURE, "T_in = 0");
+    var bad[32];
+    term(&bad, 0, 0.0 - 1.0, sp(US_SPECIES_CO2));
+    term(&bad, 1, 2.0, sp(US_SPECIES_H2O_GAS));
+    var e2, f2 = us_adiabatic_flame_temperature(&react, 2, &bad, 2, 298.15);
+    errc(e2, f2, US_ERR_INVALID_PARAMETER, "a negative product coefficient");
+    var nan: f64 = 0.0 / 0.0;
+    term(&bad, 0, nan, sp(US_SPECIES_CO2));
+    var e3, f3 = us_adiabatic_flame_temperature(&react, 2, &bad, 2, 298.15);
+    errc(e3, f3, US_ERR_INVALID_PARAMETER, "a NaN product coefficient");
+}
+
+# The 1.4.0 audit's regressions: propane's ln K ≈ 837, which K cannot hold (nor its reciprocal); the log form agreeing
+# with ln K where K is ordinary; NaN refused everywhere.
+# rust src/chem.rs: test_equilibrium_constant_overflow_is_error, test_chem_rejects_nan
+fn test_regressions() {
+    test_group("1.4.0's regressions");
+    var dg: f64 = 0.0 - 2073900.0;
+    var e1, f1 = us_equilibrium_constant(dg, 298.15);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "propane's K overflows");
+    var t1, v1 = us_ln_equilibrium_constant(dg, 298.15);
+    var lk: f64 = okv(t1, v1, "its ln K");
+    var dl: f64 = absdiff(lk, 836.6);
+    assert(dl < 0.5, "ln K = 836.6");
+    var e2, f2 = us_equilibrium_constant(2073900.0, 298.15);
+    errc(e2, f2, US_ERR_INVALID_PARAMETER, "and the reverse underflows");
+    var t2, v2 = us_equilibrium_constant(0.0 - 10000.0, 298.15);
+    var k: f64 = okv(t2, v2, "an ordinary K");
+    var t3, v3 = us_ln_equilibrium_constant(0.0 - 10000.0, 298.15);
+    var lk2: f64 = okv(t3, v3, "and its ln K");
+    var lnk: f64 = _us_cr_ln(k);
+    var d: f64 = absdiff(lnk, lk2);
+    assert(d < 0.000000000001, "ln(K) = ln K within 1e-12");
+    var nan: f64 = 0.0 / 0.0;
+    var e3, f3 = us_equilibrium_constant(nan, 298.15);
+    errc(e3, f3, US_ERR_INVALID_PARAMETER, "dG NaN");
+    var e4, f4 = us_equilibrium_constant(0.0 - 10000.0, nan);
+    errc(e4, f4, US_ERR_INVALID_TEMPERATURE, "T NaN");
+    var e5, f5 = us_vant_hoff_k(1.0, 0.0 - 50000.0, nan, 400.0);
+    errc(e5, f5, US_ERR_INVALID_TEMPERATURE, "T_ref NaN");
+    var e6, f6 = us_vant_hoff_k(1.0, nan, 298.15, 400.0);
+    errc(e6, f6, US_ERR_INVALID_PARAMETER, "dH NaN: K is no number");
+}
+
+# Reference: the spans, ln K's sign at ΔG° = ±0 (Rust's −ΔG°/(RT)), the preset refusals, and an empty reaction.
+fn test_reference() {
+    test_group("reference");
+    var nz: f64 = _US_NEG_ZERO;
+    var t1, v1 = us_ln_equilibrium_constant(0.0, 298.15);
+    var t2, v2 = us_ln_equilibrium_constant(nz, 298.15);
+    assert(v1 == 0x8000000000000000 && v2 == 0, "ln K at dG = +0 is -0, at -0 is +0");
+    var x: UsSpecies;
+    var e1, f1 = us_species_preset(US_SPECIES_COUNT, &x);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "no species past the last");
+    var e2, f2 = us_species_preset(0 - 1, &x);
+    errc(e2, f2, US_ERR_INVALID_PARAMETER, "nor before the first");
+    assert_eq(us_species_name(US_SPECIES_COUNT), 0, "no name past the last");
+    assert_streq(us_species_name(US_SPECIES_H2O_GAS), "H2O(g)", "the gas water's name");
+    var none[16];
+    var e: f64 = us_reaction_enthalpy(&none, 0, &none, 0);
+    assert(load64(&e) == 0, "an empty reaction: -0 - -0 = +0");
+    var react[48];
+    var prod[48];
+    term(&react, 0, 1.0, sp(US_SPECIES_CH4));
+    term(&react, 1, 2.0, sp(US_SPECIES_O2));
+    term(&prod, 0, 1.0, sp(US_SPECIES_CO2));
+    term(&prod, 1, 2.0, sp(US_SPECIES_H2O_GAS));
+    sakshi_output_buffer();
+    sakshi_set_level(SK_DEBUG);
+    sakshi_ring_clear();
+    var t3, v3 = us_equilibrium_constant(0.0 - 50000.0, 298.15);
+    assert_eq(ring_has("equilibrium_constant"), 1, "equilibrium_constant's span");
+    var t4, v4 = us_adiabatic_flame_temperature(&react, 2, &prod, 2, 298.15);
+    assert_eq(ring_has("adiabatic_flame_temperature"), 1, "adiabatic_flame_temperature's span");
+    var t5, v5 = us_adiabatic_flame_temperature(&react, 2, &prod, 2, 0.0);
+    assert_eq(sakshi_span_depth(), 0, "every span closed, a refused one too");
+    sakshi_set_level(SK_INFO);
+    sakshi_ring_clear();
+}
+
+# Runs every group and returns the failure count.
+fn main() {
+    alloc_init();
+    test_species();
+    test_hess();
+    test_gibbs();
+    test_vant_hoff();
+    test_flame();
+    test_regressions();
+    test_reference();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

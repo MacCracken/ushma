@@ -2,8 +2,8 @@
 #
 # The targets so far: USHMA_LOG parsing (`us_log_parse`), and the `ThermalMaterial`, `GasData`, `SubstanceData`,
 # `Phase`, `SaturatedEntry`, `WetSteamProperties`, `SuperheatedEntry`, `StatePoint`, `ProcessKind`, `CycleKind`,
-# `CycleResult`, `RefrigerationResult`, `DiagramPoint` and `CycleComparisonEntry` decoders, which must also
-# round-trip: what one accepts re-encodes, reads
+# `CycleResult`, `RefrigerationResult`, `DiagramPoint`, `CycleComparisonEntry` and `Species` decoders, which must
+# also round-trip: what one accepts re-encodes, reads
 # back, and re-encodes to the same bytes. The other JSON decoders and the daimon response
 # handling join as they port. Each target must accept any bytes: return a defined result, never crash, never write
 # outside its buffers (the poisoning allocator and --bounds check that).
@@ -28,6 +28,8 @@ include "src/phase.cyr"
 include "src/steam_data.cyr"
 include "src/steam.cyr"
 include "src/cycle.cyr"
+include "src/chem_data.cyr"
+include "src/chem.cyr"
 
 var _fz_state = 0x2545F4914F6CDD1D;
 var _fz_bad = 0;
@@ -92,30 +94,48 @@ fn fz_material(data, len) {
     return 0;
 }
 
-# The GasData decoder on one input: any result is fine, but an accepted document must round-trip.
-fn fz_gas(data, len) {
-    var g: UsGas;
+# A named document of three f64 (`kind` 1 a GasData, 2 a Species; both a name and length then the three) decoded into
+# the 40 bytes at `w`: Ok's tag, its code into *code.
+fn fz_named_decode(kind, data, len, w, code): i64 {
+    if (kind == 1) {
+        var t, v = us_gas_from_json_a(_fz_arena, data, len, w);
+        store64(code, v);
+        return is_ok(t);
+    }
+    var t2, v2 = us_species_from_json_a(_fz_arena, data, len, w);
+    store64(code, v2);
+    return is_ok(t2);
+}
+
+# The 40 bytes at `w` re-encoded into builder `sb`, as `kind`'s document.
+fn fz_named_encode(kind, sb, w) {
+    store64(sb + 8, 0);
+    if (kind == 1) { us_gas_to_json(sb, w); }
+    if (kind == 2) { us_species_to_json(sb, w); }
+    return 0;
+}
+
+# A named decoder on one input: any result is fine, but an accepted document must round-trip.
+fn fz_named(kind, data, len) {
+    var w[40];
+    var w2[40];
+    var code[8];
     reset_via(_fz_arena);
-    var t, v = us_gas_from_json_a(_fz_arena, data, len, &g);
-    if (is_ok(t) == 0) {
-        if (v != US_ERR_DESERIALIZE) { _fz_bad = _fz_bad + 1; }
+    if (fz_named_decode(kind, data, len, &w, &code) == 0) {
+        if (load64(&code) != US_ERR_DESERIALIZE) { _fz_bad = _fz_bad + 1; }
         return 0;
     }
     _fz_gas_read = _fz_gas_read + 1;
-    store64(_fz_sb + 8, 0);
-    us_gas_to_json(_fz_sb, &g);
-    var g2: UsGas;
-    var t2, v2 = us_gas_from_json_a(_fz_arena, load64(_fz_sb), load64(_fz_sb + 8), &g2);
-    if (is_ok(t2) == 0) {
+    fz_named_encode(kind, _fz_sb, &w);
+    if (fz_named_decode(kind, load64(_fz_sb), load64(_fz_sb + 8), &w2, &code) == 0) {
         # NaN and ±∞ write as null, which reads back as no f64 (as fz_material).
-        var tc: f64 = g.critical_t;
-        var pc: f64 = g.critical_p;
-        var om: f64 = g.acentric_factor;
-        if (_us_is_finite(tc) + _us_is_finite(pc) + _us_is_finite(om) == 3) { _fz_bad = _fz_bad + 1; }
+        var a: f64 = load64(&w + 16);
+        var b: f64 = load64(&w + 24);
+        var c: f64 = load64(&w + 32);
+        if (_us_is_finite(a) + _us_is_finite(b) + _us_is_finite(c) == 3) { _fz_bad = _fz_bad + 1; }
         return 0;
     }
-    store64(_fz_sb2 + 8, 0);
-    us_gas_to_json(_fz_sb2, &g2);
+    fz_named_encode(kind, _fz_sb2, &w2);
     var n1 = load64(_fz_sb + 8);
     if (n1 != load64(_fz_sb2 + 8) || memeq(load64(_fz_sb), load64(_fz_sb2), n1) == 0) { _fz_bad = _fz_bad + 1; }
     return 0;
@@ -419,7 +439,8 @@ fn fuzz_main(data, len) {
     var lv = us_log_parse(data, len);
     if (lv < 0 - 1 || lv > LOG_FATAL + 1) { _fz_bad = _fz_bad + 1; }
     fz_material(data, len);
-    fz_gas(data, len);
+    fz_named(1, data, len);
+    fz_named(2, data, len);
     fz_substance(data, len);
     fz_enum(1, data, len);
     fz_enum(2, data, len);
@@ -488,7 +509,7 @@ fn main() {
     _fz_sb2 = str_builder_new();
     var cap = 2048;
     var buf = alloc(cap + 1);
-    var seeds = alloc(8 * 40);
+    var seeds = alloc(8 * 42);
     store64(seeds, "trace");
     store64(seeds + 8, "debug");
     store64(seeds + 16, "info");
@@ -553,6 +574,8 @@ fn main() {
     var cc1 = "{\"kind\":\"Otto\",\"efficiency\":0.56,\"net_work\":28233.0,\"back_work_ratio\":0.0,";
     store64(seeds + 304, fz_cat(cc1, "\"carnot_efficiency\":0.83,\"second_law_efficiency\":0.67}"));
     store64(seeds + 312, "[\"Refrigeration\",5,-1,1,5,1]");
+    store64(seeds + 320, "{\"name\":\"CH4\",\"delta_hf\":-74810.0,\"delta_gf\":-50720.0,\"cp\":35.31}");
+    store64(seeds + 328, "[\"H2O(g)\",-241820,-228570,33.58]");
     var i = 0;
     while (i < 50000) {
         var n = 0;
@@ -561,7 +584,7 @@ fn main() {
             var k = 0;
             while (k < n) { store8(buf + k, fz_below(256)); k = k + 1; }
         } else {
-            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(40)));
+            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(42)));
         }
         fuzz_main(buf, n);
         i = i + 1;
@@ -573,7 +596,7 @@ fn main() {
     }
     print("fuzz: ok (50000 inputs; material documents read: ", 49);
     fmt_int(_fz_read);
-    print(", gas documents read: ", 22);
+    print(", gas and species documents read: ", 34);
     fmt_int(_fz_gas_read);
     print(", substance documents read: ", 28);
     fmt_int(_fz_sub_read);

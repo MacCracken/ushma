@@ -5,13 +5,13 @@
 > (`# rust <file>: <test>`), at its module's milestone. Nothing is deferred: a test not ported yet is one whose
 > milestone hasn't come. The golden corpus (`tests/golden/`) checks every ported function on its grid besides.
 
-**479 Rust tests:** 339 ported; 62 at M5, 27 at M6, 51 at M7.
+**479 Rust tests:** 365 ported; 36 at M5, 27 at M6, 51 at M7.
 
 | Rust file | Tests | Ported | Due, unported | Later (milestone) |
 |---|---:|---:|---:|---|
 | `src/ai.rs` | 7 | 0 | 0 | 7 (M7) |
 | `src/bridge.rs` | 31 | 0 | 0 | 31 (M7) |
-| `src/chem.rs` | 23 | 0 | 0 | 23 (M5) |
+| `src/chem.rs` | 23 | 23 | 0 | — |
 | `src/cycle.rs` | 59 | 59 | 0 | — |
 | `src/entropy.rs` | 23 | 23 | 0 | — |
 | `src/error.rs` | 18 | 18 | 0 | — |
@@ -25,13 +25,36 @@
 | `src/steam.rs` | 46 | 46 | 0 | — |
 | `src/transfer.rs` | 67 | 67 | 0 | — |
 | `src/validate.rs` | 2 | 2 | 0 | — |
-| `tests/integration.rs` | 30 | 24 | 0 | 6 (M5) |
-| **Total** | **479** | **339** | **0** | |
+| `tests/integration.rs` | 30 | 27 | 0 | 3 (M5) |
+| **Total** | **479** | **365** | **0** | |
 
 ## Where each is ported
 
 | Rust test | Cyrius test |
 |---|---|
+| `src/chem.rs` `test_all_species_count` | `tests/chem.tcyr` `test_species` |
+| `src/chem.rs` `test_chem_rejects_nan` | `tests/chem.tcyr` `test_regressions` |
+| `src/chem.rs` `test_elements_zero_formation` | `tests/chem.tcyr` `test_species` |
+| `src/chem.rs` `test_equilibrium_constant_invalid` | `tests/chem.tcyr` `test_gibbs` |
+| `src/chem.rs` `test_equilibrium_constant_nonspontaneous` | `tests/chem.tcyr` `test_gibbs` |
+| `src/chem.rs` `test_equilibrium_constant_overflow_is_error` | `tests/chem.tcyr` `test_regressions` |
+| `src/chem.rs` `test_equilibrium_constant_spontaneous` | `tests/chem.tcyr` `test_gibbs` |
+| `src/chem.rs` `test_flame_temperature_invalid` | `tests/chem.tcyr` `test_flame` |
+| `src/chem.rs` `test_flame_temperature_rejects_bad_coefficients` | `tests/chem.tcyr` `test_flame` |
+| `src/chem.rs` `test_gibbs_from_enthalpy_entropy` | `tests/chem.tcyr` `test_gibbs` |
+| `src/chem.rs` `test_hydrogen_combustion_enthalpy` | `tests/chem.tcyr` `test_hess` |
+| `src/chem.rs` `test_hydrogen_flame_temperature` | `tests/chem.tcyr` `test_flame` |
+| `src/chem.rs` `test_methane_air_flame_temperature` | `tests/chem.tcyr` `test_flame` |
+| `src/chem.rs` `test_methane_combustion_enthalpy` | `tests/chem.tcyr` `test_hess` |
+| `src/chem.rs` `test_methane_combustion_gibbs` | `tests/chem.tcyr` `test_gibbs` |
+| `src/chem.rs` `test_reaction_enthalpy_reverse` | `tests/chem.tcyr` `test_hess` |
+| `src/chem.rs` `test_species_positive_cp` | `tests/chem.tcyr` `test_species` |
+| `src/chem.rs` `test_species_serde_roundtrip` | `tests/chem.tcyr` `test_species` |
+| `src/chem.rs` `test_vant_hoff_endothermic` | `tests/chem.tcyr` `test_vant_hoff` |
+| `src/chem.rs` `test_vant_hoff_exothermic` | `tests/chem.tcyr` `test_vant_hoff` |
+| `src/chem.rs` `test_vant_hoff_invalid` | `tests/chem.tcyr` `test_vant_hoff` |
+| `src/chem.rs` `test_vant_hoff_roundtrip` | `tests/chem.tcyr` `test_vant_hoff` |
+| `src/chem.rs` `test_water_formation_enthalpy` | `tests/chem.tcyr` `test_species` |
 | `src/cycle.rs` `test_adiabatic_temp_from_pressure_invalid` | `tests/cycle.tcyr` `test_helpers` |
 | `src/cycle.rs` `test_adiabatic_temp_from_pressure_roundtrip` | `tests/cycle.tcyr` `test_helpers` |
 | `src/cycle.rs` `test_adiabatic_work_compression` | `tests/cycle.tcyr` `test_helpers` |
@@ -354,7 +377,10 @@
 | `tests/integration.rs` `energy_conservation_adiabatic_process` | `tests/integration.tcyr` `energy_conservation_adiabatic_process` |
 | `tests/integration.rs` `entropy_increase_irreversible_heat_transfer` | `tests/integration.tcyr` `entropy_increase_irreversible_heat_transfer` |
 | `tests/integration.rs` `eos_comparison_co2_stp` | `tests/integration.tcyr` `eos_comparison_co2_stp` |
+| `tests/integration.rs` `equilibrium_k_consistent_with_vant_hoff` | `tests/integration.tcyr` `equilibrium_k_consistent_with_vant_hoff` |
+| `tests/integration.rs` `excess_air_lowers_flame_temperature` | `tests/integration.tcyr` `excess_air_lowers_flame_temperature` |
 | `tests/integration.rs` `heat_conduction_through_copper_wall` | `tests/integration.tcyr` `heat_conduction_through_copper_wall` |
+| `tests/integration.rs` `hess_law_indirect_path` | `tests/integration.tcyr` `hess_law_indirect_path` |
 | `tests/integration.rs` `ideal_gas_cycle_efficiency_ordering` | `tests/integration.tcyr` `ideal_gas_cycle_efficiency_ordering` |
 | `tests/integration.rs` `ideal_gas_law_roundtrip` | `tests/integration.tcyr` `ideal_gas_law_roundtrip` |
 | `tests/integration.rs` `lmtd_vs_ntu_same_heat_exchanger` | `tests/integration.tcyr` `lmtd_vs_ntu_same_heat_exchanger` |

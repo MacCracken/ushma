@@ -37,6 +37,7 @@ include "src/chem_data.cyr"
 include "src/steam_data.cyr"
 include "src/steam.cyr"
 include "src/cycle.cyr"
+include "src/chem.cyr"
 
 alloc_init();
 
@@ -462,6 +463,146 @@ fn _par_material(fp, fl): i64 {
         store64(_par_mat_sb + 8, 0);
         us_material_to_json(_par_mat_sb, &m);
         _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    return 0;
+}
+
+# ── chem ────────────────────────────────────────────────────────────────────────────
+
+var _PAR_SP_MAX = 64;
+var _par_sp_pool = 0;
+var _par_terms_a = 0;
+var _par_terms_b = 0;
+
+# A term list from input token `at` (`v:n`, then per term f:coefficient and the species as s:name ΔH°f ΔG°f C°p) into
+# the word pairs at `terms`, its species in the pool from slot *used on; its length into *nout. The index after it,
+# or -1.
+fn _par_terms_in(at, terms, used, nout): i64 {
+    if (at >= _par_in_n || load64(_par_in_k + at * 8) != 118) { return 0 - 1; }
+    var n = _par_in(at);
+    var i = at + 1;
+    var k = 0;
+    while (k < n) {
+        var slot = load64(used);
+        if (slot >= _PAR_SP_MAX || i + 5 > _par_in_n) { return 0 - 1; }
+        var sp = _par_sp_pool + slot * sizeof(UsSpecies);
+        store64(used, slot + 1);
+        var dn[8];
+        var name = _par_in_text(i + 1, &dn);
+        if (name == 0) { return 0 - 1; }
+        store64(sp, name);
+        store64(sp + 8, load64(&dn));
+        _par_in_words(i + 2, 3, sp + 16);
+        store64(terms + 16 * k, _par_in(i));
+        store64(terms + 16 * k + 8, sp);
+        i = i + 5;
+        k = k + 1;
+    }
+    store64(nout, n);
+    return i;
+}
+
+# A UsSpecies from the row's four input tokens (s:name, ΔH°f, ΔG°f, C°p): 1, or 0.
+fn _par_species_in(x: *UsSpecies): i64 {
+    if (_par_in_n != 4) { return 0; }
+    var nw[8];
+    var name = _par_in_text(0, &nw);
+    if (name == 0) { return 0; }
+    x.name = name;
+    x.name_len = load64(&nw);
+    var b = x;
+    _par_in_words(1, 3, b + 16);
+    return 1;
+}
+
+# One chem row: 1 when handled, 0 for a function with no counterpart yet, -1 for unusable inputs.
+fn _par_chem(fp, fl): i64 {
+    if (_par_sp_pool == 0) {
+        _par_sp_pool = alloc(_PAR_SP_MAX * sizeof(UsSpecies));
+        _par_terms_a = alloc(16 * _PAR_SP_MAX);
+        _par_terms_b = alloc(16 * _PAR_SP_MAX);
+    }
+    if (_par_mat_sb == 0) {
+        _par_mat_sb = str_builder_new();
+        _par_mat_arena = arena_allocator_growable(65536);
+    }
+    var x: UsSpecies;
+    if (_par_eq(fp, fl, "chem::Species::to_json") == 1) {
+        if (_par_species_in(&x) == 0) { return 0 - 1; }
+        store64(_par_mat_sb + 8, 0);
+        us_species_to_json(_par_mat_sb, &x);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "chem::Species::from_json") == 1) {
+        var dn[8];
+        var doc = _par_in_text(0, &dn);
+        if (doc == 0) { return 0 - 1; }
+        var n = load64(&dn);
+        reset_via(_par_mat_arena);
+        var t, v = us_species_from_json_a(_par_mat_arena, doc, n, &x);
+        if (is_err_result(t) == 1) {
+            _par_got_err(v);
+            if (_par_bayan_mapped_refusal(doc, n) == 1) { _par_adr5 = 1; }
+            return 1;
+        }
+        if (_par_has_int_neg_zero(doc, n) == 1) { _par_adr5 = 1; }
+        _par_got_text(x.name, x.name_len);
+        var xb = &x;
+        _par_got_words(xb + 16, 3);
+        return 1;
+    }
+    var used[8];
+    store64(&used, 0);
+    var na[8];
+    var nb[8];
+    var hess = 0;
+    if (_par_eq(fp, fl, "chem::reaction_enthalpy") == 1) { hess = 1; }
+    if (_par_eq(fp, fl, "chem::reaction_gibbs") == 1) { hess = 2; }
+    if (hess != 0) {
+        var at = _par_terms_in(0, _par_terms_a, &used, &na);
+        if (at < 0) { return 0 - 1; }
+        var at2 = _par_terms_in(at, _par_terms_b, &used, &nb);
+        if (at2 != _par_in_n) { return 0 - 1; }
+        var r: f64 = 0.0;
+        if (hess == 1) { r = us_reaction_enthalpy(_par_terms_a, load64(&na), _par_terms_b, load64(&nb)); }
+        if (hess == 2) { r = us_reaction_gibbs(_par_terms_a, load64(&na), _par_terms_b, load64(&nb)); }
+        _par_got_f(r);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "chem::adiabatic_flame_temperature") == 1) {
+        var bt = _par_terms_in(0, _par_terms_a, &used, &na);
+        if (bt < 0) { return 0 - 1; }
+        var bt2 = _par_terms_in(bt, _par_terms_b, &used, &nb);
+        if (bt2 < 0 || bt2 + 1 != _par_in_n) { return 0 - 1; }
+        var ti: f64 = _par_in(bt2);
+        var tf, vf = us_adiabatic_flame_temperature(_par_terms_a, load64(&na), _par_terms_b, load64(&nb), ti);
+        _par_got_res(tf, vf);
+        return 1;
+    }
+    var a: f64 = _par_in(0);
+    var b: f64 = _par_in(1);
+    var c: f64 = _par_in(2);
+    var d: f64 = _par_in(3);
+    if (_par_eq(fp, fl, "chem::gibbs_from_enthalpy_entropy") == 1) {
+        var g: f64 = us_gibbs_from_enthalpy_entropy(a, b, c);
+        _par_got_f(g);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "chem::ln_equilibrium_constant") == 1) {
+        var t1, v1 = us_ln_equilibrium_constant(a, b);
+        _par_got_res(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "chem::equilibrium_constant") == 1) {
+        var t2, v2 = us_equilibrium_constant(a, b);
+        _par_got_res(t2, v2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "chem::vant_hoff_k") == 1) {
+        var t3, v3 = us_vant_hoff_k(a, b, c, d);
+        _par_got_res(t3, v3);
         return 1;
     }
     return 0;
@@ -1705,6 +1846,7 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "material") == 1 && _par_in_n != 0) { return _par_material(fp, fl); }
     if (_par_eq(mp, ml, "state") == 1 && _par_in_n != 0) { return _par_state(fp, fl); }
     if (_par_eq(mp, ml, "phase") == 1 && _par_in_n != 0) { return _par_phase(fp, fl); }
+    if (_par_eq(mp, ml, "chem") == 1 && _par_in_n != 0) { return _par_chem(fp, fl); }
     if (_par_in_n != 0) { return 0; }   # a preset row has no inputs; anything else is a module function
     if (_par_eq(mp, ml, "material") == 1) {
         return _par_table(fp, fl, "material", "ALL_MATERIALS", _par_tab_material, US_MATERIAL_COUNT,
@@ -1819,6 +1961,7 @@ fn _par_c_bound(fp, fl): i64 {
     if (fl > 7 && _par_eq(fp, 7, "phase::") == 1) { return 0; }
     if (fl > 7 && _par_eq(fp, 7, "steam::") == 1) { return 0; }
     if (fl > 7 && _par_eq(fp, 7, "cycle::") == 1) { return 0; }
+    if (fl > 6 && _par_eq(fp, 6, "chem::") == 1) { return 0; }
     return 0 - 1;
 }
 

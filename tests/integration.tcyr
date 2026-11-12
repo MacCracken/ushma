@@ -1,6 +1,6 @@
 # Rust 1.4.0's integration tests (rust-old/tests/integration.rs), cross-module, each ported at the milestone of the
 # last module it calls: M1's six on transfer and material, M2's eight on state and entropy, M3's on phase and steam,
-# then M4's on the cycles.
+# M4's on the cycles, then M5's on chem and stat.
 
 include "src/constants.cyr"
 include "src/error.cyr"
@@ -21,6 +21,8 @@ include "src/steam.cyr"
 include "src/state.cyr"
 include "src/entropy.cyr"
 include "src/cycle.cyr"
+include "src/chem_data.cyr"
+include "src/chem.cyr"
 
 # |a − b| as an f64.
 fn absdiff(a: f64, b: f64): f64 {
@@ -514,6 +516,98 @@ fn cycle_comparison_all_below_carnot() {
     assert(s0 <= 1.0 && s1 <= 1.0, "eta_II <= 1 for both");
 }
 
+# Species `i` as a fresh UsSpecies.
+fn species(i): *UsSpecies {
+    var x = alloc(sizeof(UsSpecies));
+    var t, v = us_species_preset(i, x);
+    return x;
+}
+
+# Term k of a term list: coefficient `c` of species `s`.
+fn term(terms, k, c: f64, s) {
+    store64(terms + (16 * k), c);
+    store64(terms + (16 * k) + 8, s);
+    return 0;
+}
+
+# Hess's law: C → CO → CO₂ in two steps gives the direct ΔH°f(CO₂) within 1 J/mol.
+# rust tests/integration.rs: hess_law_indirect_path
+fn hess_law_indirect_path() {
+    test_group("Hess's law, indirect path");
+    var o2 = species(US_SPECIES_O2);
+    var co = species(US_SPECIES_CO);
+    var co2: *UsSpecies = species(US_SPECIES_CO2);
+    var p1[16];
+    var r1[16];
+    term(&p1, 0, 1.0, co);
+    term(&r1, 0, 0.5, o2);
+    var h1: f64 = us_reaction_enthalpy(&p1, 1, &r1, 1);
+    var p2[16];
+    var r2[32];
+    term(&p2, 0, 1.0, co2);
+    term(&r2, 0, 1.0, co);
+    term(&r2, 1, 0.5, o2);
+    var h2: f64 = us_reaction_enthalpy(&p2, 1, &r2, 2);
+    var direct: f64 = co2.delta_hf;
+    var d: f64 = absdiff(h1 + h2, direct);
+    assert(d < 1.0, "dH1 + dH2 = dHf(CO2)");
+}
+
+# K at 298.15 K from methane combustion's ΔG°, by Van 't Hoff to 500 K and back, returns within 1e-6.
+# rust tests/integration.rs: equilibrium_k_consistent_with_vant_hoff
+fn equilibrium_k_consistent_with_vant_hoff() {
+    test_group("K against Van 't Hoff");
+    var prod[32];
+    var react[32];
+    term(&prod, 0, 1.0, species(US_SPECIES_CO2));
+    term(&prod, 1, 2.0, species(US_SPECIES_H2O_GAS));
+    term(&react, 0, 1.0, species(US_SPECIES_CH4));
+    term(&react, 1, 2.0, species(US_SPECIES_O2));
+    var dg: f64 = us_reaction_gibbs(&prod, 2, &react, 2);
+    var dh: f64 = us_reaction_enthalpy(&prod, 2, &react, 2);
+    var t1, v1 = us_equilibrium_constant(dg, 298.15);
+    var k298: f64 = okv(t1, v1, "K at 298.15 K");
+    var t2, v2 = us_vant_hoff_k(k298, dh, 298.15, 500.0);
+    var k500: f64 = okv(t2, v2, "K at 500 K");
+    var t3, v3 = us_vant_hoff_k(k500, dh, 500.0, 298.15);
+    var kb: f64 = okv(t3, v3, "and back");
+    var d: f64 = absdiff(kb, k298);
+    assert(d / k298 < 0.000001, "there and back within 1e-6");
+}
+
+# 50 % excess air lowers methane's flame temperature.
+# rust tests/integration.rs: excess_air_lowers_flame_temperature
+fn excess_air_lowers_flame_temperature() {
+    test_group("excess air");
+    var ch4 = species(US_SPECIES_CH4);
+    var o2 = species(US_SPECIES_O2);
+    var n2 = species(US_SPECIES_N2);
+    var co2 = species(US_SPECIES_CO2);
+    var h2o = species(US_SPECIES_H2O_GAS);
+    var r[48];
+    var p[48];
+    term(&r, 0, 1.0, ch4);
+    term(&r, 1, 2.0, o2);
+    term(&r, 2, 7.52, n2);
+    term(&p, 0, 1.0, co2);
+    term(&p, 1, 2.0, h2o);
+    term(&p, 2, 7.52, n2);
+    var t1, v1 = us_adiabatic_flame_temperature(&r, 3, &p, 3, 298.15);
+    var ts: f64 = okv(t1, v1, "stoichiometric");
+    var rx[48];
+    var px[64];
+    term(&rx, 0, 1.0, ch4);
+    term(&rx, 1, 3.0, o2);
+    term(&rx, 2, 11.28, n2);
+    term(&px, 0, 1.0, co2);
+    term(&px, 1, 2.0, h2o);
+    term(&px, 2, 1.0, o2);
+    term(&px, 3, 11.28, n2);
+    var t2, v2 = us_adiabatic_flame_temperature(&rx, 3, &px, 4, 298.15);
+    var te: f64 = okv(t2, v2, "50 % excess air");
+    assert(te < ts, "excess air burns cooler");
+}
+
 # Runs every test and returns the failure count.
 fn main() {
     alloc_init();
@@ -541,6 +635,9 @@ fn main() {
     ideal_gas_cycle_efficiency_ordering();
     cycle_pv_diagram_closed_loop_all_types();
     cycle_comparison_all_below_carnot();
+    hess_law_indirect_path();
+    equilibrium_k_consistent_with_vant_hoff();
+    excess_air_lowers_flame_temperature();
     return assert_summary();
 }
 

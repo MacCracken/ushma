@@ -28,10 +28,10 @@ from pathlib import Path
 root = Path(sys.argv[1]).resolve()
 
 # The modules whose milestone has come.
-PORTED = ["error", "validate", "logging", "material", "transfer", "state", "entropy", "phase", "steam", "cycle"]
+PORTED = ["error", "validate", "logging", "material", "transfer", "state", "entropy", "phase", "steam", "cycle", "chem"]
 # The rest, with their milestone (port plan §3.1).
 SCHEDULED = {
-    "chem": "M5", "stat": "M5",
+    "stat": "M5",
     "numerical": "M6", "bridge": "M7", "integration/soorat": "M7", "ai": "M7",
 }
 WIRING = {
@@ -57,12 +57,14 @@ TYPES = {
     "RefrigerationResult": ("UsRefrigerationResult", "refrigeration_result"),
     "CycleComparisonEntry": ("UsCycleComparison", "cycle_comparison"),
     "DiagramPoint": ("UsDiagramPoint", "diagram_point"),
+    "Species": ("UsSpecies", "species"),
 }
 # Rust item -> the Cyrius names that carry it ("fn x", "const X", "enum X", "struct X"), where the rules give none.
 MAPPED = {
     "material::const ALL_MATERIALS": ["const US_MATERIAL_COUNT", "fn us_material_preset"],
     "state::const ALL_GASES": ["const US_GAS_COUNT", "fn us_gas_preset"],
     "phase::const ALL_SUBSTANCES": ["const US_SUBSTANCE_COUNT", "fn us_substance_preset"],
+    "chem::const ALL_SPECIES": ["const US_SPECIES_COUNT", "fn us_species_preset"],
     "error::type Result": ["fn is_ok", "fn is_err_result"],
     "error::UshmaError: Display": ["fn us_error_message", "fn us_error_name"],
 }

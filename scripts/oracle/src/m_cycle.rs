@@ -27,7 +27,8 @@
 //! Classes: B for the comparison, C for the diagrams (pow and ln).
 
 use ushma::cycle::{
-    self as cy, CycleComparisonEntry, CycleKind, CycleResult, DiagramPoint, ProcessKind, RefrigerationResult, StatePoint,
+    self as cy, CycleComparisonEntry, CycleKind, CycleResult, DiagramPoint, ProcessKind,
+    RefrigerationResult, StatePoint,
 };
 use ushma::steam;
 
@@ -149,7 +150,9 @@ fn steam_cycles(m: &mut Module) {
         }
     }
     pbs.extend([2e7, p_max]);
-    let pcs = [p_min, 2_000.0, 7_384.0, 10_000.0, 47_390.0, 100_000.0, 500_000.0];
+    let pcs = [
+        p_min, 2_000.0, 7_384.0, 10_000.0, 47_390.0, 100_000.0, 500_000.0,
+    ];
     for &pc in &pcs {
         for &pb in &pbs {
             rankine_row(m, pc, pb, None);
@@ -244,7 +247,9 @@ fn steam_cycles(m: &mut Module) {
     }
     // refrigeration_cycle(P_evap, P_cond)
     let mut rf: Vec<Vec<f64>> = Vec::new();
-    let pes = [p_min, 1_000.0, 2_000.0, 3_169.0, 5_000.0, 7_384.0, 10_000.0, 20_000.0, 47_390.0];
+    let pes = [
+        p_min, 1_000.0, 2_000.0, 3_169.0, 5_000.0, 7_384.0, 10_000.0, 20_000.0, 47_390.0,
+    ];
     let mut pcs2: Vec<f64> = pbs[..pbs.len() - 2].to_vec();
     pcs2.extend([3_169.0, 7_384.0, 20_000.0, 47_390.0, 101_325.0, 2e7]);
     for &pe in &pes {
@@ -289,7 +294,13 @@ fn steam_cycles(m: &mut Module) {
     }
     // heat_pump_cop(COP_ref)
     for a in tuples(&[vec![3.0]], 200, 99, &|r| vec![r.uniform(0.0, 20.0)]) {
-        row(m, "cycle::heat_pump_cop", Class::B, &a, vec![f(cy::heat_pump_cop(a[0]))]);
+        row(
+            m,
+            "cycle::heat_pump_cop",
+            Class::B,
+            &a,
+            vec![f(cy::heat_pump_cop(a[0]))],
+        );
     }
 }
 
@@ -664,7 +675,10 @@ fn json_rows(m: &mut Module) {
         format!(r#"{{"cycle":{seq},"cop_refrigeration":1.5}}"#),
         format!(r#"[{seq},1.5]"#),
         r#"{"cycle":null,"cop_refrigeration":1.5,"cop_heat_pump":2.5}"#.to_string(),
-        format!(r#"{{"cycle":{},"cop_refrigeration":1.5,"cop_heat_pump":2.5}}"#, rdocs[0]),
+        format!(
+            r#"{{"cycle":{},"cop_refrigeration":1.5,"cop_heat_pump":2.5}}"#,
+            rdocs[0]
+        ),
         "[]".to_string(),
         "null".to_string(),
     ]);
@@ -678,15 +692,32 @@ fn json_rows(m: &mut Module) {
     }
     // DiagramPoint
     let pts = [
-        DiagramPoint { x: 6_000.5, y: 101_325.0 },
-        DiagramPoint { x: f64::NAN, y: f64::INFINITY },
-        DiagramPoint { x: -0.0, y: f64::from_bits(1) },
-        DiagramPoint { x: 1e300, y: -1e-300 },
+        DiagramPoint {
+            x: 6_000.5,
+            y: 101_325.0,
+        },
+        DiagramPoint {
+            x: f64::NAN,
+            y: f64::INFINITY,
+        },
+        DiagramPoint {
+            x: -0.0,
+            y: f64::from_bits(1),
+        },
+        DiagramPoint {
+            x: 1e300,
+            y: -1e-300,
+        },
     ];
     let mut pdocs = Vec::new();
     for p in &pts {
         let doc = serde_json::to_string(p).expect("serialize");
-        m.row("cycle::DiagramPoint::to_json", Class::A, &dp_toks(p), &[s(doc.clone())]);
+        m.row(
+            "cycle::DiagramPoint::to_json",
+            Class::A,
+            &dp_toks(p),
+            &[s(doc.clone())],
+        );
         pdocs.push(doc);
     }
     let base = pdocs[0].clone();
@@ -698,7 +729,17 @@ fn json_rows(m: &mut Module) {
         }
     }
     pdocs.extend(
-        ["[1,2]", "[1]", "[1,2,3]", r#"{"x":1}"#, r#"{"y":2,"x":1}"#, r#"{"x":"1","y":2}"#, "{}", "null"].map(String::from),
+        [
+            "[1,2]",
+            "[1]",
+            "[1,2,3]",
+            r#"{"x":1}"#,
+            r#"{"y":2,"x":1}"#,
+            r#"{"x":"1","y":2}"#,
+            "{}",
+            "null",
+        ]
+        .map(String::from),
     );
     for doc in &pdocs {
         m.row(
@@ -722,7 +763,12 @@ fn json_rows(m: &mut Module) {
     let mut cdocs = Vec::new();
     for c in &cmp {
         let doc = serde_json::to_string(c).expect("serialize");
-        m.row("cycle::CycleComparisonEntry::to_json", Class::A, &cc_toks(c), &[s(doc.clone())]);
+        m.row(
+            "cycle::CycleComparisonEntry::to_json",
+            Class::A,
+            &cc_toks(c),
+            &[s(doc.clone())],
+        );
         cdocs.push(doc);
     }
     let base = cdocs[0].clone();
@@ -775,12 +821,25 @@ fn sample_results() -> Vec<CycleResult> {
     let otto = cy::otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).expect("otto");
     let diesel = cy::diesel_cycle(300.0, 101_325.0, 20.0, 2.0, 1.4, 1.0).expect("diesel");
     let bray = cy::brayton_cycle(300.0, 101_325.0, 10.0, 1400.0, 1.4, 1.0).expect("brayton");
-    let mono = cy::otto_cycle(300.0, 101_325.0, 10.0, 40_000.0, 5.0 / 3.0, 2.0).expect("otto, monatomic");
+    let mono =
+        cy::otto_cycle(300.0, 101_325.0, 10.0, 40_000.0, 5.0 / 3.0, 2.0).expect("otto, monatomic");
     let rk = cy::rankine_cycle(10_000.0, 2_000_000.0, Some(623.15)).expect("rankine");
     let rk_sat = cy::rankine_cycle(10_000.0, 1_000_000.0, None).expect("rankine, saturated");
-    let rk_sh = cy::rankine_cycle(100_000.0, 500_000.0, Some(573.15)).expect("rankine, superheated exhaust");
-    let rf = cy::refrigeration_cycle(7_384.0, 47_390.0).expect("refrigeration").cycle;
-    let mut v = vec![otto.clone(), diesel, bray.clone(), mono, rk, rk_sat, rk_sh, rf];
+    let rk_sh = cy::rankine_cycle(100_000.0, 500_000.0, Some(573.15))
+        .expect("rankine, superheated exhaust");
+    let rf = cy::refrigeration_cycle(7_384.0, 47_390.0)
+        .expect("refrigeration")
+        .cycle;
+    let mut v = vec![
+        otto.clone(),
+        diesel,
+        bray.clone(),
+        mono,
+        rk,
+        rk_sat,
+        rk_sh,
+        rf,
+    ];
     let edit = |base: &CycleResult, f: &dyn Fn(&mut CycleResult)| {
         let mut c = base.clone();
         f(&mut c);
@@ -863,8 +922,11 @@ fn comparison_rows(m: &mut Module) {
     // a label that differs from the result's own kind; no entries; several at once
     row_of(m, &[(CycleKind::Otto, &results[2], 1400.0, 300.0)]);
     row_of(m, &[]);
-    let all: Vec<(CycleKind, &CycleResult, f64, f64)> =
-        results.iter().take(8).map(|r| (r.kind, r, 1200.0, 290.0)).collect();
+    let all: Vec<(CycleKind, &CycleResult, f64, f64)> = results
+        .iter()
+        .take(8)
+        .map(|r| (r.kind, r, 1200.0, 290.0))
+        .collect();
     row_of(m, &all);
 }
 

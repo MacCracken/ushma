@@ -42,6 +42,20 @@ ADRs 0001–0005.
 - **scripts/oracle** — serde_json is built with `float_roundtrip`: its default float parse reads 35,970 of 160,320 of its own shortest texts back 1–2 ulp off (probe 11). Writing is unchanged, and the golden corpus is unaffected
 
 ### Added
+- **M5a, chem** (port plan §6): `src/chem.cyr`, all 7 functions. `UsSpecies` holds a `Species`, with `us_species_preset` / `us_species_name` over the generated table and its JSON. The functions are `us_reaction_enthalpy`, `us_reaction_gibbs`, `us_gibbs_from_enthalpy_entropy`, `us_ln_equilibrium_constant`, `us_equilibrium_constant`, `us_vant_hoff_k` and `us_adiabatic_flame_temperature`.
+  - **Shapes** (ADR 0002 row 13): a reaction side is a term list, n word pairs of (coefficient, `*UsSpecies`) with its length beside it, the flat form of Rust's `&[(f64, &Species)]`.
+  - **Behaviour:** Rust's operation order. Every sum starts at −0.0, and Rust's unary minus (`-ΔG°`, `-(ΔH°/R)`, `-ΔH°rxn`) is `_us_neg`, so ln K at ΔG° = +0 is −0.0 as in 1.4.0. exp is correctly rounded. `equilibrium_constant` and `adiabatic_flame_temperature` open spans under Rust's names. The flame temperature checks the reactants' coefficients before the products', as Rust's chained iterator does.
+  - **Golden rows:** `tests/golden/chem.tsv` grows from the 13 preset rows to 2,340 (A 113, B 1,563, C 664; 380 refusals):
+    - Hess's law and the Gibbs sum over named reactions, their reverses, empty sides, 200 seeded reactions, and each coefficient and species of methane's combustion at the edges. Edge species are written by value: NaN, ±∞, −0, f64::MAX, subnormal.
+    - ΔH − TΔS, ln K and Van 't Hoff, seeded and at the edges, ΔG° ±0 among them.
+    - K and Van 't Hoff where exp leaves the f64 range, bisected, ± 2 ulps.
+    - The flame temperature over named combustions and initial temperatures, every coefficient at the edges, edge species, an empty product side, and where T_flame crosses 0 (bisected) ± 2 ulps.
+    - `Species`'s JSON.
+    - Every row passes. glibc misrounds an exp inside 3 `equilibrium_constant` rows (`tests/golden/chem.cr.tsv`, new), and 5 JSON rows are accepted under ADR 5.
+  - **`validate.py`** models all 7 (the term-list functions from their raw tokens) and reproduces their 2,227 rows.
+  - **Tests:** `tests/chem.tcyr` (114 assertions) ports all 23 of Rust's chem tests, with propane's ln K ≈ 837 among them. Reference tests cover the spans, ln K's signed zero and the preset refusals. chem's 3 integration tests are ported (93 assertions in `tests/integration.tcyr`). The fuzz harness reads `Species` documents: `fz_gas` became `fz_named` for both name-and-three-numbers types.
+  - **Benches:** Rust's three chem benchmarks, recorded against Rust's.
+  - **Surface parity:** chem is PORTED, 24 of 24, with `ALL_SPECIES` mapped to `US_SPECIES_COUNT` and `us_species_preset`. The ledger has 365 of 479
 - **M4c, comparison, diagrams and the M4 gates** (port plan §6): `us_compare_cycles` / `us_compare_cycle`, `us_cycle_ts_diagram`, `us_cycle_pv_diagram` and `us_cycle_diagram_len`, with `UsCycleComparison` and `UsDiagramPoint` and both types' JSON. cycle is 13 of 13, 44 of its 44 public items, and M4 is complete.
   - **Shapes** (ADR 0002 row 12): a diagram writes `UsDiagramPoint` records into the caller's buffer and returns Ok(the count), or Err(`US_ERR_INVALID_PARAMETER`) when they would not fit. The check divides, so no point count overflows it. `us_compare_cycles(kinds, results, t_highs, t_lows, n, out)` takes Rust's tuples as four parallel lists and writes n records; `us_compare_cycle` does one.
   - **Behaviour:** Rust's operation order, with ln and pow correctly rounded. The T-s isochores and isobars of an ideal gas follow T_a·(T_b/T_a)^f, and the P-v isentropes the polytropic through both state points. A refrigeration result is compared with the Carnot COP. Non-physical limits give 0 and 0.
