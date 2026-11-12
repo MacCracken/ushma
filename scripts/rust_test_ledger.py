@@ -21,7 +21,7 @@ root = Path(sys.argv[1]).resolve()
 check = "--check" in sys.argv[2:]
 out_path = root / "docs/development/rust-test-ledger.md"
 
-PORTED = ["error", "validate", "logging", "material", "transfer", "state", "entropy", "phase", "steam", "cycle", "chem", "stat"]
+PORTED = ["error", "validate", "logging", "material", "transfer", "state", "entropy", "phase", "steam", "cycle", "chem", "stat", "numerical"]
 MILESTONE = {
     "error": "M1", "validate": "M1", "logging": "M1", "material": "M1", "transfer": "M1",
     "state": "M2", "entropy": "M2", "phase": "M3", "steam": "M3", "cycle": "M4", "chem": "M5", "stat": "M5",

@@ -10617,6 +10617,37 @@ struct UsGrid2D {
 # Rust's field order: left, right, bottom, top.
 const _US_G2_BC = 48;
 
+# A thermal resistance network (Rust's ThermalNetwork) of `num_nodes` nodes. `resistances` is a vec of three words per
+# resistance in the order added (node a, node b, and R in K/W as an f64), and `fixed` a vec of two per fixed node (the
+# node, and T in K as an f64). Both are public, as Rust's lists are: us_network_push_resistance and
+# us_network_push_fixed append unchecked, vec_truncate empties them, and every solve checks them. The other vecs are
+# the solve's scratch, sized on first use, so a repeated solve allocates nothing: `work` holds five words per node,
+# `mat` and `lu` the conductance matrix and its factors as ganita matrices, and `vecs` four words per free node (the
+# pivots, the right-hand side, the solution and the forward substitution). `alloc` is what the vecs grow on.
+struct UsNetwork {
+    alloc;
+    num_nodes;
+    resistances;
+    fixed;
+    work;
+    mat;
+    lu;
+    vecs;
+}
+
+# A resistance of a network (Rust's (usize, usize, f64)): `r` K/W between nodes `a` and `b`.
+struct UsResistance {
+    a;
+    b;
+    r: f64;
+}
+
+# A fixed-temperature node of a network (Rust's (usize, f64)): node `node` at `t` K.
+struct UsFixedTemperature {
+    node;
+    t: f64;
+}
+
 # --- Names ---
 
 # The Rust name of boundary kind `k` ("Fixed" …), or 0 when `k` is no kind.
@@ -11405,6 +11436,453 @@ fn us_grid2d_solve_steady_state(g: *UsGrid2D, tolerance: f64, max_iterations): R
         max_iterations));
 }
 
+# --- The thermal network ---
+
+# Fills *out with a network of `num_nodes` nodes and no resistance or fixed node, its vecs on the global heap. Ok(0),
+# or Err(US_ERR_INVALID_PARAMETER) for a negative count (Rust's usize holds none), or Err(US_ERR_OUT_OF_MEMORY) when a
+# vec was refused. *out is unchanged on a refusal.
+#must_use
+fn us_network_new(out: *UsNetwork, num_nodes): Result {
+    return us_network_new_a(default_alloc(), out, num_nodes);
+}
+
+# us_network_new with the network's vecs on allocator `a`, which the network keeps and grows them on.
+#must_use
+fn us_network_new_a(a, out: *UsNetwork, num_nodes): Result {
+    if (num_nodes < 0) { return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_network_new", "num_nodes", num_nodes)); }
+    var rs = vec_new_a(a);
+    var fx = vec_new_a(a);
+    var wk = vec_new_a(a);
+    var mt = vec_new_a(a);
+    var lu = vec_new_a(a);
+    var vs = vec_new_a(a);
+    if (rs == 0 || fx == 0 || wk == 0 || mt == 0 || lu == 0 || vs == 0) {
+        return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_network_new"));
+    }
+    out.alloc = a;
+    out.num_nodes = num_nodes;
+    out.resistances = rs;
+    out.fixed = fx;
+    out.work = wk;
+    out.mat = mt;
+    out.lu = lu;
+    out.vecs = vs;
+    return Ok(0);
+}
+
+# The number of resistances of *net.
+#must_use
+fn us_network_resistance_count(net: *UsNetwork): i64 {
+    return vec_len(net.resistances) / 3;
+}
+
+# Copies resistance `i` of *net into *out: 1, or 0 when there is none.
+fn us_network_resistance(net: *UsNetwork, i, out: *UsResistance): i64 {
+    if (i < 0 || i >= us_network_resistance_count(net)) { return 0; }
+    var v = net.resistances;
+    var a = vec_get(v, 3 * i);
+    var b = vec_get(v, 3 * i + 1);
+    var r: f64 = vec_get(v, 3 * i + 2);
+    out.a = a;
+    out.b = b;
+    out.r = r;
+    return 1;
+}
+
+# The number of fixed-temperature entries of *net (a node set twice counts twice; the later one holds).
+#must_use
+fn us_network_fixed_count(net: *UsNetwork): i64 {
+    return vec_len(net.fixed) / 2;
+}
+
+# Copies fixed-temperature entry `i` of *net into *out: 1, or 0 when there is none.
+fn us_network_fixed(net: *UsNetwork, i, out: *UsFixedTemperature): i64 {
+    if (i < 0 || i >= us_network_fixed_count(net)) { return 0; }
+    var v = net.fixed;
+    var node = vec_get(v, 2 * i);
+    var t: f64 = vec_get(v, 2 * i + 1);
+    out.node = node;
+    out.t = t;
+    return 1;
+}
+
+# Appends `r` K/W between nodes `a` and `b` to *net unchecked, as a push onto Rust's public list does (the solve checks
+# it): Ok(0), or Err(US_ERR_OUT_OF_MEMORY) when a grow was refused (*net is then unchanged).
+#must_use
+fn us_network_push_resistance(net: *UsNetwork, a, b, r: f64): Result {
+    var al = net.alloc;
+    var v = net.resistances;
+    var n = vec_len(v);
+    if (vec_push_a(al, v, a) < 0 || vec_push_a(al, v, b) < 0 || vec_push_a(al, v, r) < 0) {
+        vec_truncate(v, n);
+        return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_network_push_resistance"));
+    }
+    return Ok(0);
+}
+
+# Appends node `node` at `t` K to *net's fixed list unchecked: Ok(0), or Err(US_ERR_OUT_OF_MEMORY) (*net unchanged).
+#must_use
+fn us_network_push_fixed(net: *UsNetwork, node, t: f64): Result {
+    var al = net.alloc;
+    var v = net.fixed;
+    var n = vec_len(v);
+    if (vec_push_a(al, v, node) < 0 || vec_push_a(al, v, t) < 0) {
+        vec_truncate(v, n);
+        return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_network_push_fixed"));
+    }
+    return Ok(0);
+}
+
+# Adds a resistance of `r` K/W between nodes `a` and `b` of *net: Ok(0), or Err(US_ERR_INVALID_PARAMETER) unless both
+# nodes are in [0, num_nodes) and r is finite and > 0, or Err(US_ERR_OUT_OF_MEMORY). *net is unchanged on a refusal.
+#must_use
+fn us_network_add_resistance(net: *UsNetwork, a, b, r: f64): Result {
+    var n = net.num_nodes;
+    if (a < 0 || a >= n) { return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_network_add_resistance", "a", a)); }
+    if (b < 0 || b >= n) { return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_network_add_resistance", "b", b)); }
+    if (_us_finite_gt(r, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_network_add_resistance", "r", r));
+    }
+    return us_network_push_resistance(net, a, b, r);
+}
+
+# Holds node `node` of *net at `t` K: Ok(0), or Err(US_ERR_INVALID_PARAMETER) unless the node is in [0, num_nodes) and
+# t is finite, or Err(US_ERR_OUT_OF_MEMORY). *net is unchanged on a refusal. Setting a node again overrides it.
+#must_use
+fn us_network_set_fixed_temperature(net: *UsNetwork, node, t: f64): Result {
+    var n = net.num_nodes;
+    if (node < 0 || node >= n) {
+        return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_network_set_fixed_temperature", "node", node));
+    }
+    if (_us_is_finite(t) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_network_set_fixed_temperature", "t", t));
+    }
+    return us_network_push_fixed(net, node, t);
+}
+
+# 0 when *net's lists are whole and valid (Rust's `check`: every node index in range, every R finite and > 0, every
+# fixed T finite), else the refusal's code.
+fn _us_net_check(net: *UsNetwork, fname): i64 {
+    var n = net.num_nodes;
+    var nr = vec_len(net.resistances);
+    var nx = vec_len(net.fixed);
+    if (n < 0) { return _us_fail_i(US_ERR_INVALID_PARAMETER, fname, "num_nodes", n); }
+    if (nr % 3 != 0) { return _us_fail_i(US_ERR_INVALID_PARAMETER, fname, "resistance words", nr); }
+    if (nx % 2 != 0) { return _us_fail_i(US_ERR_INVALID_PARAMETER, fname, "fixed words", nx); }
+    var p = slice_ptr(net.resistances);
+    var k = 0;
+    while (k < nr) {
+        var a = load64(p + 8 * k);
+        var b = load64(p + 8 * k + 8);
+        var rb = load64(p + 8 * k + 16);
+        var r: f64 = rb;
+        if (a < 0 || a >= n || b < 0 || b >= n || (rb & _US_NET_EXP) == _US_NET_EXP || r <= 0.0 || r != r) {
+            return _us_fail_i(US_ERR_INVALID_PARAMETER, fname, "resistance", k / 3);
+        }
+        k = k + 3;
+    }
+    var q = slice_ptr(net.fixed);
+    k = 0;
+    while (k < nx) {
+        var node = load64(q + 8 * k);
+        if (node < 0 || node >= n || (load64(q + 8 * k + 8) & _US_NET_EXP) == _US_NET_EXP) {
+            return _us_fail_i(US_ERR_INVALID_PARAMETER, fname, "fixed entry", k / 2);
+        }
+        k = k + 2;
+    }
+    return 0;
+}
+
+# The root of node x in the union-find forest of parents `p` (one word per node), halving the path as Rust's `find`.
+fn _us_net_find(p, x): i64 {
+    var y = x;
+    var py = load64(p + 8 * y);
+    while (py != y) {
+        var gp = load64(p + 8 * py);
+        store64(p + 8 * y, gp);
+        y = gp;
+        py = load64(p + 8 * y);
+    }
+    return y;
+}
+
+# 0 when every free node of *net is joined through its resistances to a fixed node, else the refusal's code
+# (Rust's `check_connectivity`). `w` is the solve's scratch of n nodes: the fixed flags at word 0, the parents at word
+# 2n and the anchored flags at word 3n.
+fn _us_net_connected(net: *UsNetwork, w, n, fname): i64 {
+    var par = w + 16 * n;
+    var anc = w + 24 * n;
+    var k = 0;
+    while (k < n) {
+        store64(par + 8 * k, k);
+        store64(anc + 8 * k, 0);
+        k = k + 1;
+    }
+    var p = slice_ptr(net.resistances);
+    var nr = vec_len(net.resistances);
+    k = 0;
+    while (k < nr) {
+        var ra = _us_net_find(par, load64(p + 8 * k));
+        var rb = _us_net_find(par, load64(p + 8 * k + 8));
+        if (ra != rb) { store64(par + 8 * ra, rb); }
+        k = k + 3;
+    }
+    k = 0;
+    while (k < n) {
+        if (load64(w + 8 * k) == 1) { store64(anc + 8 * _us_net_find(par, k), 1); }
+        k = k + 1;
+    }
+    k = 0;
+    while (k < n) {
+        if (load64(w + 8 * k) == 0 && load64(anc + 8 * _us_net_find(par, k)) == 0) {
+            return _us_fail_i(US_ERR_INVALID_PARAMETER, fname, "unanchored node", k);
+        }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# An f64's exponent bits: all set for NaN and ±∞.
+var _US_NET_EXP = 0x7FF0000000000000;
+
+# The index of the first of the `n` f64 words at `p` that is NaN or ±∞, or −1 when all are finite.
+fn _us_net_nonfinite(p, n): i64 {
+    var k = 0;
+    while (k < n) {
+        if ((load64(p + 8 * k) & _US_NET_EXP) == _US_NET_EXP) { return k; }
+        k = k + 1;
+    }
+    return 0 - 1;
+}
+
+# Solves the free nodes' conductance system (nf of the n nodes free; `w` the scratch _us_net_solve filled), leaving the
+# solution at word 2·nf of net.vecs. The system is built as 1.4.0 builds it: a row per free node, each resistance's
+# conductance 1/R added in list order, and each row divided by its diagonal. ganita_mat_lu factors it (ADR 0003). The
+# forward and back substitution run over its factors in ganita_mat_lu_solve's operations and order, which allocates
+# its forward vector on every call; this keeps it in net.vecs (ADR 0003's stopgap until an allocator-taking form
+# lands). 0, or the refusal's code: the system is singular, or it or its solution overflows f64 (ADR 0002 row 16).
+#
+# ganita_mat_lu refuses a non-finite matrix. ganita_mat_lu_solve refuses non-finite factors or a non-finite right-hand
+# side; here they are caught in the back substitution instead, with the same outcome: a NaN or ±∞ among them reaches x
+# (∞ times any finite y or x is ±∞ or NaN, and every one of U's diagonal entries is tested), so the solve is refused
+# exactly when _lu_solve would refuse it or would return a non-finite temperature.
+fn _us_net_system(net: *UsNetwork, w, n, nf, fname): i64 {
+    if (nf > (VEC_CAP_MAX - 2) / nf) { return _us_fail_i(US_ERR_OUT_OF_MEMORY, fname, "free nodes", nf); }
+    var nn = nf * nf;
+    var al = net.alloc;
+    if (vec_len(net.vecs) != 4 * nf || vec_len(net.mat) != nn + 2 || vec_len(net.lu) != nn + 2) {
+        if (_us_vec_size(al, net.mat, nn + 2) == 0 || _us_vec_size(al, net.lu, nn + 2) == 0
+          || _us_vec_size(al, net.vecs, 4 * nf) == 0) {
+            return _us_fail(US_ERR_OUT_OF_MEMORY, fname);
+        }
+    }
+    var m = slice_ptr(net.mat);
+    var lu = slice_ptr(net.lu);
+    var piv = slice_ptr(net.vecs);
+    var rhs = piv + 8 * nf;
+    var x = piv + 16 * nf;
+    var y = piv + 24 * nf;
+    store64(m, nf);
+    store64(m + 8, nf);
+    store64(lu, nf);
+    store64(lu + 8, nf);
+    var d = m + 16;
+    var k = 0;
+    while (k < nn) {
+        store64(d + 8 * k, 0);
+        k = k + 1;
+    }
+    k = 0;
+    while (k < nf) {
+        store64(rhs + 8 * k, 0);
+        k = k + 1;
+    }
+    var ft = w + 8 * n;
+    var fm = w + 32 * n;
+    var p = slice_ptr(net.resistances);
+    var nr = vec_len(net.resistances);
+    k = 0;
+    while (k < nr) {
+        var a = load64(p + 8 * k);
+        var b = load64(p + 8 * k + 8);
+        var r: f64 = load64(p + 8 * k + 16);
+        var g: f64 = 1.0 / r;
+        var af = load64(w + 8 * a);
+        var bf = load64(w + 8 * b);
+        if (af == 0 && bf == 0) {
+            # Each entry is loaded after the previous store: a self-loop (fa = fb) updates one entry four times.
+            var fa = load64(fm + 8 * a);
+            var fb = load64(fm + 8 * b);
+            var paa = d + 8 * (fa * nf + fa);
+            var pab = d + 8 * (fa * nf + fb);
+            var pbb = d + 8 * (fb * nf + fb);
+            var pba = d + 8 * (fb * nf + fa);
+            var vaa: f64 = load64(paa);
+            var saa: f64 = vaa + g;
+            store64(paa, saa);
+            var vab: f64 = load64(pab);
+            var sab: f64 = vab - g;
+            store64(pab, sab);
+            var vbb: f64 = load64(pbb);
+            var sbb: f64 = vbb + g;
+            store64(pbb, sbb);
+            var vba: f64 = load64(pba);
+            var sba: f64 = vba - g;
+            store64(pba, sba);
+        } elif (af == 0 || bf == 0) {
+            var fr = a;
+            var to = b;
+            if (af == 1) {
+                fr = b;
+                to = a;
+            }
+            var ff = load64(fm + 8 * fr);
+            var pd = d + 8 * (ff * nf + ff);
+            var pr = rhs + 8 * ff;
+            var tt: f64 = load64(ft + 8 * to);
+            var gt: f64 = g * tt;
+            var vd: f64 = load64(pd);
+            var sd: f64 = vd + g;
+            store64(pd, sd);
+            var vr: f64 = load64(pr);
+            var sr: f64 = vr + gt;
+            store64(pr, sr);
+        }
+        k = k + 3;
+    }
+    var i = 0;
+    while (i < nf) {
+        var row = d + 8 * (i * nf);
+        var diag: f64 = load64(row + 8 * i);
+        if (_us_finite_gt(diag, 0.0) == 1) {
+            var j = 0;
+            while (j < nf) {
+                var v: f64 = load64(row + 8 * j);
+                var vq: f64 = v / diag;
+                store64(row + 8 * j, vq);
+                j = j + 1;
+            }
+            var bv: f64 = load64(rhs + 8 * i);
+            var bq: f64 = bv / diag;
+            store64(rhs + 8 * i, bq);
+        }
+        i = i + 1;
+    }
+    if (ganita_mat_lu(m, lu, piv) == 0) {
+        var bad = _us_net_nonfinite(d, nn);
+        if (bad >= 0) {
+            return _us_fail_i(US_ERR_INVALID_PARAMETER, fname, "overflowing conductance in row", bad / nf);
+        }
+        return _us_fail_i(US_ERR_INVALID_PARAMETER, fname, "singular, free nodes", nf);
+    }
+    var u = lu + 16;
+    i = 0;
+    while (i < nf) {
+        var sum: f64 = load64(rhs + 8 * load64(piv + 8 * i));
+        var li = u + 8 * (i * nf);
+        var j2 = 0;
+        while (j2 < i) {
+            var l: f64 = load64(li + 8 * j2);
+            var yj: f64 = load64(y + 8 * j2);
+            sum = sum - l * yj;
+            j2 = j2 + 1;
+        }
+        store64(y + 8 * i, sum);
+        i = i + 1;
+    }
+    i = nf - 1;
+    while (i >= 0) {
+        var s2: f64 = load64(y + 8 * i);
+        var ui = u + 8 * (i * nf);
+        var j3 = i + 1;
+        while (j3 < nf) {
+            var uv: f64 = load64(ui + 8 * j3);
+            var xj: f64 = load64(x + 8 * j3);
+            s2 = s2 - uv * xj;
+            j3 = j3 + 1;
+        }
+        var dg: f64 = load64(ui + 8 * i);
+        var xi: f64 = s2 / dg;
+        store64(x + 8 * i, xi);
+        if ((load64(&dg) & _US_NET_EXP) == _US_NET_EXP || (load64(&xi) & _US_NET_EXP) == _US_NET_EXP) {
+            if (_us_net_nonfinite(rhs, nf) >= 0) {
+                return _us_fail_i(US_ERR_INVALID_PARAMETER, fname, "overflowing right-hand side, free nodes", nf);
+            }
+            return _us_fail_i(US_ERR_INVALID_PARAMETER, fname, "overflowing temperature, free node", i);
+        }
+        i = i - 1;
+    }
+    return 0;
+}
+
+# us_network_solve's body: 0, or the refusal's code (the span is the caller's).
+fn _us_net_solve(net: *UsNetwork, out, cap): i64 {
+    var fname = "us_network_solve";
+    var code = _us_net_check(net, fname);
+    if (code != 0) { return code; }
+    var n = net.num_nodes;
+    if (cap < n) { return _us_fail_i(US_ERR_INVALID_PARAMETER, fname, "cap", cap); }
+    if (n > VEC_CAP_MAX / 5) { return _us_fail_i(US_ERR_OUT_OF_MEMORY, fname, "num_nodes", n); }
+    if (_us_vec_size(net.alloc, net.work, 5 * n) == 0) { return _us_fail(US_ERR_OUT_OF_MEMORY, fname); }
+    var w = slice_ptr(net.work);
+    var ft = w + 8 * n;
+    var fm = w + 32 * n;
+    var k = 0;
+    while (k < n) {
+        store64(w + 8 * k, 0);
+        store64(ft + 8 * k, 0);
+        k = k + 1;
+    }
+    var q = slice_ptr(net.fixed);
+    var nx = vec_len(net.fixed);
+    k = 0;
+    while (k < nx) {
+        var node = load64(q + 8 * k);
+        store64(w + 8 * node, 1);
+        store64(ft + 8 * node, load64(q + 8 * k + 8));
+        k = k + 2;
+    }
+    var nf = 0;
+    k = 0;
+    while (k < n) {
+        if (load64(w + 8 * k) == 0) {
+            store64(fm + 8 * k, nf);
+            nf = nf + 1;
+        }
+        k = k + 1;
+    }
+    if (nf > 0) {
+        code = _us_net_connected(net, w, n, fname);
+        if (code == 0) { code = _us_net_system(net, w, n, nf, fname); }
+        if (code != 0) { return code; }
+    }
+    var x = slice_ptr(net.vecs) + 16 * nf;
+    k = 0;
+    while (k < n) {
+        if (load64(w + 8 * k) == 1) {
+            store64(out + 8 * k, load64(ft + 8 * k));
+        } else {
+            store64(out + 8 * k, load64(x + 8 * load64(fm + 8 * k)));
+        }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# Solves *net for its steady-state temperatures, node k's into word k of `out` (a buffer of `cap` f64 words): Ok(the
+# node count), each fixed node at its temperature. Err(US_ERR_INVALID_PARAMETER) for a list entry out of range or not
+# finite (Rust's `check`), a free node not joined to a fixed one, a singular system, a system or solution that
+# overflows f64 (ADR 0002 row 16), or cap < num_nodes; Err(US_ERR_OUT_OF_MEMORY) when the scratch was refused. `out` is
+# unchanged on a refusal. Opens a DEBUG span under Rust's name.
+#must_use
+fn us_network_solve(net: *UsNetwork, out, cap): Result {
+    _us_span_enter("solve", 5);
+    var code = _us_net_solve(net, out, cap);
+    _us_span_exit();
+    if (code != 0) { return Err(code); }
+    return Ok(net.num_nodes);
+}
+
 # --- JSON ---
 
 # Appends *bc as serde_json writes a `BoundaryCondition` (externally tagged): `{"Fixed":T}`, `"Insulated"`, or
@@ -11781,4 +12259,128 @@ fn us_grid2d_from_json_a(a, buf, n, out: *UsGrid2D): Result {
 #must_use
 fn us_grid2d_from_json(buf, n, out: *UsGrid2D): Result {
     return us_grid2d_from_json_a(default_alloc(), buf, n, out);
+}
+
+# Appends *net as serde_json writes a `ThermalNetwork`, its tuples as arrays:
+# `{"num_nodes":n,"resistances":[[a,b,R],…],"fixed":[[node,T],…]}`.
+fn us_network_to_json(sb, net: *UsNetwork) {
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "num_nodes", 1);
+    _us_jw_usize(sb, net.num_nodes);
+    _us_jw_key(sb, "resistances", 0);
+    str_builder_putc(sb, 91);
+    var p = slice_ptr(net.resistances);
+    var nr = us_network_resistance_count(net);
+    var k = 0;
+    while (k < nr) {
+        if (k > 0) { str_builder_putc(sb, 44); }
+        str_builder_putc(sb, 91);
+        _us_jw_usize(sb, load64(p + 24 * k));
+        str_builder_putc(sb, 44);
+        _us_jw_usize(sb, load64(p + 24 * k + 8));
+        str_builder_putc(sb, 44);
+        var r: f64 = load64(p + 24 * k + 16);
+        _us_jw_f64(sb, r);
+        str_builder_putc(sb, 93);
+        k = k + 1;
+    }
+    str_builder_putc(sb, 93);
+    _us_jw_key(sb, "fixed", 0);
+    str_builder_putc(sb, 91);
+    var q = slice_ptr(net.fixed);
+    var nx = us_network_fixed_count(net);
+    k = 0;
+    while (k < nx) {
+        if (k > 0) { str_builder_putc(sb, 44); }
+        str_builder_putc(sb, 91);
+        _us_jw_usize(sb, load64(q + 16 * k));
+        str_builder_putc(sb, 44);
+        var t: f64 = load64(q + 16 * k + 8);
+        _us_jw_f64(sb, t);
+        str_builder_putc(sb, 93);
+        k = k + 1;
+    }
+    str_builder_putc(sb, 93);
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# The `n` elements of a serde tuple at array node `v` as usizes and then f64s (`nu` usizes first) into the words at
+# `out`: 1, or 0 unless `v` is an array of exactly n elements of those kinds.
+fn _us_jr_tuple(v, n, nu, out): i64 {
+    if (v == 0 || bayan_json_v_tag(v) != JTAG_ARR || bayan_json_v_arr_len(v) != n) { return 0; }
+    var k = 0;
+    while (k < n) {
+        var e = bayan_json_v_arr_get(v, k);
+        if (k < nu) {
+            if (_us_jr_usize(e, out + 8 * k) == 0) { return 0; }
+        } elif (_us_jr_f64(e, out + 8 * k) == 0) {
+            return 0;
+        }
+        k = k + 1;
+    }
+    return 1;
+}
+
+# A ThermalNetwork node `v` (object or 3-element sequence) into *out, its vecs on allocator `a`: 0, 1 for a malformed
+# document, or 3 for a refused vec. *out is unchanged unless 0.
+fn _us_jr_network(a, v, out: *UsNetwork): i64 {
+    var form = _us_jr_form(v, 3);
+    if (form == 0) { return 1; }
+    var nn[8];
+    if (_us_jr_usize(_us_jr_at(v, form, 0, "num_nodes"), &nn) == 0) { return 1; }
+    var rs = _us_jr_at(v, form, 1, "resistances");
+    var fs = _us_jr_at(v, form, 2, "fixed");
+    if (rs == 0 || fs == 0 || bayan_json_v_tag(rs) != JTAG_ARR || bayan_json_v_tag(fs) != JTAG_ARR) { return 1; }
+    var nr = bayan_json_v_arr_len(rs);
+    var nx = bayan_json_v_arr_len(fs);
+    var t[24];
+    var k = 0;
+    while (k < nr) {
+        if (_us_jr_tuple(bayan_json_v_arr_get(rs, k), 3, 2, &t) == 0) { return 1; }
+        k = k + 1;
+    }
+    k = 0;
+    while (k < nx) {
+        if (_us_jr_tuple(bayan_json_v_arr_get(fs, k), 2, 1, &t) == 0) { return 1; }
+        k = k + 1;
+    }
+    var net: UsNetwork;
+    if (is_err_result(us_network_new_a(a, &net, load64(&nn))) == 1) { return 3; }
+    k = 0;
+    while (k < nr) {
+        var ok = _us_jr_tuple(bayan_json_v_arr_get(rs, k), 3, 2, &t);
+        var r: f64 = load64(&t + 16);
+        if (ok == 0 || is_err_result(us_network_push_resistance(&net, load64(&t), load64(&t + 8), r)) == 1) {
+            return 3;
+        }
+        k = k + 1;
+    }
+    k = 0;
+    while (k < nx) {
+        var ok2 = _us_jr_tuple(bayan_json_v_arr_get(fs, k), 2, 1, &t);
+        var tt: f64 = load64(&t + 8);
+        if (ok2 == 0 || is_err_result(us_network_push_fixed(&net, load64(&t), tt)) == 1) { return 3; }
+        k = k + 1;
+    }
+    memcpy(out, &net, sizeof(UsNetwork));
+    return 0;
+}
+
+# Reads a `ThermalNetwork` document (`n` bytes at `buf`; an object, or a 3-element sequence) into *out, its vecs (which
+# then grow on `a`) and the parse tree on allocator `a`. Rust checks nothing at decode, and nor does this: the solve
+# checks the lists. Ok(0), or Err(US_ERR_DESERIALIZE), or Err(US_ERR_OUT_OF_MEMORY) for a refused vec, leaving *out
+# unchanged.
+#must_use
+fn us_network_from_json_a(a, buf, n, out: *UsNetwork): Result {
+    var r = _us_jr_network(a, _us_jr_parse(a, buf, n), out);
+    if (r == 3) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_network_from_json")); }
+    if (r != 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_network_from_json")); }
+    return Ok(0);
+}
+
+# us_network_from_json_a on the global heap: for a one-off read (its tree and vecs stay allocated).
+#must_use
+fn us_network_from_json(buf, n, out: *UsNetwork): Result {
+    return us_network_from_json_a(default_alloc(), buf, n, out);
 }

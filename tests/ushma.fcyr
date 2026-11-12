@@ -3,8 +3,9 @@
 # The targets so far: USHMA_LOG parsing (`us_log_parse`), and the `ThermalMaterial`, `GasData`, `SubstanceData`,
 # `Phase`, `SaturatedEntry`, `WetSteamProperties`, `SuperheatedEntry`, `StatePoint`, `ProcessKind`, `CycleKind`,
 # `CycleResult`, `RefrigerationResult`, `DiagramPoint`, `CycleComparisonEntry`, `Species`, `BoundaryCondition`,
-# `Side`, `ThermalGrid1D` and `ThermalGrid2D` decoders, which must also round-trip: what one accepts re-encodes, reads
-# back, and re-encodes to the same bytes. The other JSON decoders and the daimon response
+# `Side`, `ThermalGrid1D`, `ThermalGrid2D` and `ThermalNetwork` decoders, which must also round-trip: what one accepts
+# re-encodes, reads back, and re-encodes to the same bytes; an accepted network is also solved, which must give a
+# defined result. The other JSON decoders and the daimon response
 # handling join as they port. Each target must accept any bytes: return a defined result, never crash, never write
 # outside its buffers (the poisoning allocator and --bounds check that).
 #
@@ -550,6 +551,41 @@ fn fz_grid2d(data, len) {
     return 0;
 }
 
+var _fz_net_t = 0;
+var _fz_net_read = 0;
+
+# The ThermalNetwork decoder on one input: a refusal is Deserialize; an accepted network solves to Ok or a refusal
+# (its lists are unchecked until then) and round-trips.
+fn fz_network(data, len) {
+    var net: UsNetwork;
+    reset_via(_fz_arena);
+    var t, v = us_network_from_json_a(_fz_arena, data, len, &net);
+    if (is_ok(t) == 0) {
+        if (v != US_ERR_DESERIALIZE) { _fz_bad = _fz_bad + 1; }
+        return 0;
+    }
+    _fz_net_read = _fz_net_read + 1;
+    var ts, vs = us_network_solve(&net, _fz_net_t, 64);
+    if (is_ok(ts) == 1) {
+        if (vs != net.num_nodes || vs > 64) { _fz_bad = _fz_bad + 1; }
+    } elif (vs != US_ERR_INVALID_PARAMETER && vs != US_ERR_OUT_OF_MEMORY) {
+        _fz_bad = _fz_bad + 1;
+    }
+    store64(_fz_sb + 8, 0);
+    us_network_to_json(_fz_sb, &net);
+    var n2: UsNetwork;
+    var t2, v2 = us_network_from_json_a(_fz_arena, load64(_fz_sb), load64(_fz_sb + 8), &n2);
+    if (is_ok(t2) == 0) {
+        _fz_bad = _fz_bad + 1;
+        return 0;
+    }
+    store64(_fz_sb2 + 8, 0);
+    us_network_to_json(_fz_sb2, &n2);
+    var n1 = load64(_fz_sb + 8);
+    if (n1 != load64(_fz_sb2 + 8) || memeq(load64(_fz_sb), load64(_fz_sb2), n1) == 0) { _fz_bad = _fz_bad + 1; }
+    return 0;
+}
+
 # A builder's text as a fresh C string.
 fn fz_text(sb): i64 {
     var n = load64(sb + 8);
@@ -581,6 +617,7 @@ fn fuzz_main(data, len) {
     fz_comparison(data, len);
     fz_numerical(data, len);
     fz_grid2d(data, len);
+    fz_network(data, len);
     return 0;
 }
 
@@ -637,7 +674,7 @@ fn main() {
     _fz_sb2 = str_builder_new();
     var cap = 2048;
     var buf = alloc(cap + 1);
-    var seeds = alloc(8 * 49);
+    var seeds = alloc(8 * 51);
     store64(seeds, "trace");
     store64(seeds + 8, "debug");
     store64(seeds + 16, "info");
@@ -715,6 +752,10 @@ fn main() {
     store64(seeds + 376, fz_cat(h1, h2));
     var h3 = "[[[1,2,3],[4,5,6],[7,8,9]],3,3,0.5,0.5,";
     store64(seeds + 384, fz_cat(h3, "\"Insulated\",\"Insulated\",\"Insulated\",\"Insulated\"]"));
+    var w1n = "{\"num_nodes\":4,\"resistances\":[[0,1,1.0],[1,2,2.5],[2,3,1e14],[1,1,3.0]],";
+    store64(seeds + 392, fz_cat(w1n, "\"fixed\":[[0,400.0],[3,300.0],[0,410.0]]}"));
+    store64(seeds + 400, "[3,[[0,1,0.5],[1,2,0.5]],[[2,300]]]");
+    _fz_net_t = alloc(8 * 64);
     var i = 0;
     while (i < 50000) {
         var n = 0;
@@ -723,7 +764,7 @@ fn main() {
             var k = 0;
             while (k < n) { store8(buf + k, fz_below(256)); k = k + 1; }
         } else {
-            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(49)));
+            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(51)));
         }
         fuzz_main(buf, n);
         i = i + 1;
@@ -751,6 +792,8 @@ fn main() {
     fmt_int(_fz_cmp_read);
     print(", conditions and grids read: ", 29);
     fmt_int(_fz_num_read);
+    print(", networks read and solved: ", 28);
+    fmt_int(_fz_net_read);
     println(")");
     return 0;
 }

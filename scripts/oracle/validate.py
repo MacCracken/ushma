@@ -2181,6 +2181,139 @@ def m_g2_solve(ins, p):
     return E("InvalidParameter")
 
 
+def _net(ins, at):
+    """A network from ins[at]: [num_nodes, [(a, b, R)], [(node, T)]] and the next index."""
+    n, nr = int(ins[at][2:]), int(ins[at + 1][2:])
+    at += 2
+    res = []
+    for _ in range(nr):
+        res.append((int(ins[at][2:]), int(ins[at + 1][2:]), tok_f(ins[at + 2])))
+        at += 3
+    nx = int(ins[at][2:])
+    at += 1
+    fixed = []
+    for _ in range(nx):
+        fixed.append((int(ins[at][2:]), tok_f(ins[at + 1])))
+        at += 2
+    return [n, res, fixed], at
+
+
+def _net_toks(x):
+    toks = [f"i:{x[0]}", f"v:{len(x[1])}"]
+    for a, b, r in x[1]:
+        toks += [f"i:{a}", f"i:{b}", fbits(r)]
+    toks.append(f"v:{len(x[2])}")
+    for node, t in x[2]:
+        toks += [f"i:{node}", fbits(t)]
+    return toks
+
+
+def m_net_new(ins, p):
+    return _net_toks([int(ins[0][2:]), [], []])
+
+
+def m_net_add(ins, p):
+    x, at = _net(ins, 0)
+    a, b, r = int(ins[at][2:]), int(ins[at + 1][2:]), tok_f(ins[at + 2])
+    if a >= x[0] or b >= x[0] or not fgt(r, 0.0):
+        return E("InvalidParameter")
+    x[1].append((a, b, r))
+    return _net_toks(x)
+
+
+def m_net_fix(ins, p):
+    x, at = _net(ins, 0)
+    node, t = int(ins[at][2:]), tok_f(ins[at + 1])
+    if node >= x[0] or not math.isfinite(t):
+        return E("InvalidParameter")
+    x[2].append((node, t))
+    return _net_toks(x)
+
+
+def _net_anchored(n, res, is_fixed):
+    """Every free node reachable from a fixed one through the resistances (a breadth-first search: any correct
+    connectivity test decides the same)."""
+    adj = [[] for _ in range(n)]
+    for a, b, _ in res:
+        adj[a].append(b)
+        adj[b].append(a)
+    seen = list(is_fixed)
+    todo = [i for i in range(n) if is_fixed[i]]
+    while todo:
+        u = todo.pop()
+        for v in adj[u]:
+            if not seen[v]:
+                seen[v] = True
+                todo.append(v)
+    return all(seen)
+
+
+def m_net_solve(ins, p):
+    """1.4.0's ThermalNetwork::solve: the checks, the free nodes' system row-scaled by its diagonal, and hisab 1.4.0's
+    gaussian_elimination (partial pivoting, absolute pivot test 1e-12) on [G | b]."""
+    (n, res, fixed), _ = _net(ins, 0)
+    if any(a >= n or b >= n or not fgt(r, 0.0) for a, b, r in res):
+        return E("InvalidParameter")
+    if any(node >= n or not math.isfinite(t) for node, t in fixed):
+        return E("InvalidParameter")
+    is_fixed, ft = [False] * n, [0.0] * n
+    for node, t in fixed:
+        is_fixed[node], ft[node] = True, t
+    free = [i for i in range(n) if not is_fixed[i]]
+    nf = len(free)
+    if nf == 0:
+        return [f"v:{n}"] + [fbits(t) for t in ft]
+    if not _net_anchored(n, res, is_fixed):
+        return E("InvalidParameter")
+    fmap = {ni: fi for fi, ni in enumerate(free)}
+    mat = [[0.0] * (nf + 1) for _ in range(nf)]
+    for a, b, r in res:
+        g = 1.0 / r
+        if not is_fixed[a] and not is_fixed[b]:
+            fa, fb = fmap[a], fmap[b]
+            mat[fa][fa] += g
+            mat[fa][fb] -= g
+            mat[fb][fb] += g
+            mat[fb][fa] -= g
+        elif not is_fixed[a]:
+            fa = fmap[a]
+            mat[fa][fa] += g
+            mat[fa][nf] += g * ft[b]
+        elif not is_fixed[b]:
+            fb = fmap[b]
+            mat[fb][fb] += g
+            mat[fb][nf] += g * ft[a]
+    for fi, row in enumerate(mat):
+        d = row[fi]
+        if fgt(d, 0.0):
+            for j in range(nf + 1):
+                row[j] = row[j] / d
+    for col in range(nf):
+        max_row, max_val = col, abs(mat[col][col])
+        for row in range(col + 1, nf):
+            v = abs(mat[row][col])
+            if v > max_val:
+                max_val, max_row = v, row
+        if max_val < 1e-12:
+            return E("InvalidParameter")
+        mat[col], mat[max_row] = mat[max_row], mat[col]
+        pivot = mat[col][col]
+        for row in range(col + 1, nf):
+            factor = fdiv(mat[row][col], pivot)
+            for j in range(col, nf + 1):
+                mat[row][j] -= factor * mat[col][j]
+    xs = [0.0] * nf
+    for i in range(nf - 1, -1, -1):
+        acc = mat[i][nf]
+        for j in range(i + 1, nf):
+            acc -= mat[i][j] * xs[j]
+        xs[i] = fdiv(acc, mat[i][i])
+    temps = list(ft)
+    for fi, ni in enumerate(free):
+        temps[ni] = xs[fi]
+    return [f"v:{n}"] + [fbits(t) for t in temps]
+
+
 # Functions whose rows hold whole cycle results or term lists: their models read the raw tokens.
 RAW_ARGS = {
     "numerical::ThermalGrid1D::new",
@@ -2192,6 +2325,10 @@ RAW_ARGS = {
     "numerical::ThermalGrid2D::new",
     "numerical::ThermalGrid2D::set_boundary",
     "numerical::ThermalGrid2D::solve_steady_state",
+    "numerical::ThermalNetwork::new",
+    "numerical::ThermalNetwork::add_resistance",
+    "numerical::ThermalNetwork::set_fixed_temperature",
+    "numerical::ThermalNetwork::solve",
     "cycle::compare_cycles",
     "cycle::cycle_ts_diagram",
     "cycle::cycle_pv_diagram",
@@ -2335,6 +2472,10 @@ MODELS = {
         "numerical::ThermalGrid2D::new": m_g2_new,
         "numerical::ThermalGrid2D::set_boundary": m_g2_set,
         "numerical::ThermalGrid2D::solve_steady_state": m_g2_solve,
+        "numerical::ThermalNetwork::new": m_net_new,
+        "numerical::ThermalNetwork::add_resistance": m_net_add,
+        "numerical::ThermalNetwork::set_fixed_temperature": m_net_fix,
+        "numerical::ThermalNetwork::solve": m_net_solve,
     },
     "stat": {
         "stat::boltzmann_probability": m_boltz_p,

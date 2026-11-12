@@ -22,7 +22,7 @@ Plan of record: [`ushma-port-plan.md`](ushma-port-plan.md). Decisions P2–P8 we
 | M3 Phase & steam | ✅ done 2026-11-12. **M3a:** phase (10 of 10, surface 29/29), 27,333 rows. **M3b:** steam's Region 4, saturated lookups, quality and wet steam, 14,025 rows, the review (R4 coefficients as generated consts: 174 → 141 ns). **M3c:** superheated steam (`us_superheated_lookup`, `us_superheated_by_entropy`, `UsSuperheated`), 31,113 steam rows in all (10 glibc misrounds in `steam.cr.tsv`), `tests/steam.tcyr` (169; all 46 Rust tests), the Rankine integration test, the superheated fuzz target, 3 benchmarks; surface 19/19 |
 | M4 Cycles | ✅ done 2026-11-12. **M4a:** the cycle types (`UsStatePoint`, `UsProcess`, `UsCycle`, `UsCycleResult`, which the caller owns and the analyses fill in place: ADR 0002 row 10) and their JSON, the four process helpers, and Otto, Diesel and Brayton. That is 15 functions (surface 29 of cycle's 44 items; M4b and M4c have the rest) and 2,839 golden rows (1 glibc log misround in `cycle.cr.tsv`). `tests/cycle.tcyr` has 104 assertions (30 of the 59 Rust tests). Also: 3 benchmarks (review: 746 → 510 ns), 4 fuzz targets, and `US_ERR_OUT_OF_MEMORY` for a refused allocation. **M4b:** `us_rankine_cycle` (Rust's `Option<f64>` superheat as a flag and a value: ADR 0002 row 11), `us_refrigeration_cycle` with `UsRefrigerationResult` and its JSON, and `us_heat_pump_cop`: 2,334 rows more, 5,173 in all, every switch tried either side. `tests/cycle.tcyr` has 162 assertions (45 of the 59 Rust tests) and the 2 steam-cycle integration tests are ported. The review gave the superheated inversion an entropy-only probe (refrigeration about 3× faster, every row unchanged). Two harness gaps were closed on the way: a zero's sign is now compared, which found six ports of Rust's `sum` starting at +0.0, and the ADR 5 flag is reset per row. **M4c:** `us_compare_cycles` / `us_compare_cycle` and the T-s and P-v diagrams into the caller's buffer (ADR 0002 row 12), with `UsCycleComparison` and `UsDiagramPoint` and their JSON: cycle 13 of 13, surface 44/44, 5,607 rows (`cycle.cr.tsv` 3). `tests/cycle.tcyr` has 192 assertions (all 59 Rust tests), and every cycle integration test is ported. The review made `us_cycle_push_process` refuse an unknown code |
 | M5 Chemical & statistical | ✅ done 2026-11-12. **M5a:** `src/chem.cyr` (7 of 7; surface 24/24), `UsSpecies` and its JSON, reaction sides as term lists (ADR 0002 row 13); 2,340 chem rows (3 glibc exp misrounds in `chem.cr.tsv`); `tests/chem.tcyr` (114; all 23 Rust tests); the 3 chem integration tests; 3 benchmarks. **M5b:** `src/stat.cyr` (14 of 14; surface 16/16), Debye on hisab's Simpson (class D: 0–2 ulp from 1.4.0), the σ shape (ADR 0002 row 14); 4,170 stat rows (11 glibc misrounds in `stat.cr.tsv`); `tests/stat.tcyr` (107; all 33 Rust tests); the 3 stat integration tests, so all 30; 4 benchmarks |
-| M6 Numerical | 🟡 in progress. **M6a (2026-11-12):** the boundary conditions (`UsBoundary` kinds, `UsBoundaryCondition` values: ADR 0002 row 15), `UsSide`, and the 1D grid `UsGrid1D` with its explicit, Crank–Nicolson (scratch reused) and adaptive steps; 1,190 rows, every step checked from the oracle's own state; `tests/numerical.tcyr` (83; 15 of the 27 Rust tests); 3 benchmarks (review: 822 → 591 ns explicit); 3 fuzz targets. **M6b (2026-11-12):** the 2D grid `UsGrid2D` (flat row-major nodes, the JSON in rows: ADR 0002 row 2), `set_boundary`, Gauss–Seidel with convective sides; 272 rows more, 1,462 in all; 21 of the 27 Rust tests; the 2D bench; the size guards (a vec's 2²⁸ words). **M6c:** the thermal network on ganita LU, the M6 gates |
+| M6 Numerical | ✅ done 2026-11-12. **M6a:** the boundary conditions (`UsBoundary` kinds, `UsBoundaryCondition` values: ADR 0002 row 15), `UsSide`, and the 1D grid `UsGrid1D` with its explicit, Crank–Nicolson (scratch reused) and adaptive steps; 1,190 rows, every step checked from the oracle's own state; `tests/numerical.tcyr` (83; 15 of the 27 Rust tests); 3 benchmarks (review: 822 → 591 ns explicit); 3 fuzz targets. **M6b (2026-11-12):** the 2D grid `UsGrid2D` (flat row-major nodes, the JSON in rows: ADR 0002 row 2), `set_boundary`, Gauss–Seidel with convective sides; 272 rows more, 1,462 in all; 21 of the 27 Rust tests; the 2D bench; the size guards (a vec's 2²⁸ words). **M6c:** the thermal network `UsNetwork` (its lists and solve scratch kept in the network, temperatures into the caller's buffer, a system that overflows f64 refused: ADR 0002 row 16), on ganita LU with the `_lu_solve` stopgap measured bit-identical on 600 networks (ADR 0003, second amendment); 749 rows more, 2,211 in all (9 overflow rows accepted by name); `tests/numerical.tcyr` (347; all 27 Rust tests); the network bench (review: 949 → 829 ns); the network fuzz target; the 10⁵-step soak; surface 36/36 |
 | M7–M8 | ☐ |
 
 ## Golden corpus
@@ -41,7 +41,7 @@ Plan of record: [`ushma-port-plan.md`](ushma-port-plan.md). Decisions P2–P8 we
 | `tests/golden/cycle.tsv` | 5,607 (13 functions, 312 JSON) | A, B, C |
 | `tests/golden/chem.tsv` | 2,340 (13 presets, 7 functions, 100 JSON) | A, B, C |
 | `tests/golden/stat.tsv` | 4,170 (14 functions) | B, C, D |
-| `tests/golden/numerical.tsv` | 1,462 (9 functions, 200 JSON; M6a, M6b) | A, B |
+| `tests/golden/numerical.tsv` | 2,211 (13 functions, 256 JSON) | A, B |
 | `tests/golden/math.cr.tsv` | 26 corrections (ADR 0004, MPFR 4.2.2) | — |
 | `tests/golden/transfer.cr.tsv` | 8 corrections (pow 4, exp 3, atan 1) | — |
 | `tests/golden/state.cr.tsv` | 1 correction (pow) | — |
@@ -51,19 +51,20 @@ Plan of record: [`ushma-port-plan.md`](ushma-port-plan.md). Decisions P2–P8 we
 | `tests/golden/chem.cr.tsv` | 3 corrections (exp) | — |
 | `tests/golden/stat.cr.tsv` | 11 corrections (expm1 10, exp 1) | — |
 
-Recorded on glibc 2.44 x86_64 fma (ushma 1.4.0, hisab 1.4.0). `--check`, `validate.py` (FAILURES 0; 132,732 rows
+Recorded on glibc 2.44 x86_64 fma (ushma 1.4.0, hisab 1.4.0). `--check`, `validate.py` (FAILURES 0; 133,425 rows
 re-derived independently) and `probe_tables.py --all-targets` (1,052 compiled values) are clean.
 
 ## Parity harness
 
 `cyrius test` runs `tests/parity.tcyr` with the other test files, warning-free on every target:
 
-`=== parity summary: 13 modules, 0 failing | rows: 146288 ok, 0 failed, 0 measured, 0 pending, 138 accepted (ADR 4: 63), 0 glibc-matching (failed) ===`
+`=== parity summary: 13 modules, 0 failing | rows: 147023 ok, 0 failed, 0 measured, 0 pending, 152 accepted (ADR 4: 63), 0 glibc-matching (failed) ===`
 
 - **ok / accepted:** every row, identically on x86_64 ELF, `--bounds`, PE (wine) and aarch64 (qemu). 63 rows are
-  accepted under ADR 4 (glibc misrounds; the port gives the correctly rounded value) 72 under ADR 5 (bayan's
-  mapped JSON divergences: 5 in each of the fourteen struct decoders, and two more where a 2D grid's `nx` passes
-  2⁶³), and 3 under ADR 2 (a 2D grid document whose rows are not ny × nx).
+  accepted under ADR 4 (glibc misrounds; the port gives the correctly rounded value), 77 under ADR 5 (bayan's
+  mapped JSON divergences: 5 in each of the fifteen struct decoders, and two more where a 2D grid's `nx` passes
+  2⁶³), and 12 under ADR 2: 3 for a 2D grid document whose rows are not ny × nx (row 2), and 9 for network solves
+  that overflow f64, which 1.4.0 returns as NaN or ±∞ temperatures and the port refuses (row 16).
 - **Zeros:** a zero must carry the oracle's sign in every class (from M4b). The ulp distance alone treats ±0 as
   one point.
 - Nothing is measured or pending. The stdlib candidates remain as ungated shadow lines.
@@ -82,13 +83,13 @@ re-derived independently) and `probe_tables.py --all-targets` (1,052 compiled va
 | `tests/cycle.tcyr` | 192 | cycle.rs 59 |
 | `tests/chem.tcyr` | 114 | chem.rs 23 |
 | `tests/stat.tcyr` | 107 | stat.rs 33 |
-| `tests/numerical.tcyr` | 141 | numerical.rs 21 of 27 (M6a's and M6b's) |
+| `tests/numerical.tcyr` | 347 | numerical.rs 27 |
 | `tests/integration.tcyr` | 100 | integration.rs 30 (all) |
 | `tests/parity.tcyr` | the corpus | — |
 
-`docs/development/rust-test-ledger.md`: 479 Rust tests, 422 ported (every one due), 57 at M6c–M7.
-`cyrius coverage --exec`: 228 of 228 public functions executed. `cyrius fuzz --poison --bounds`: USHMA_LOG parsing and
-the material, GasData, SubstanceData, Phase, three steam, seven cycle, Species and four numerical decoders, 50,000 seeded inputs.
+`docs/development/rust-test-ledger.md`: 479 Rust tests, 428 ported (every one due), 51 at M7.
+`cyrius coverage --exec`: 242 of 242 public functions executed. `cyrius fuzz --poison --bounds`: USHMA_LOG parsing and
+the material, GasData, SubstanceData, Phase, three steam, seven cycle, Species and five numerical decoders (each network it accepts also solved), 50,000 seeded inputs.
 
 ## Toolchain
 
@@ -100,12 +101,12 @@ the material, GasData, SubstanceData, Phase, three steam, seven cycle, Species a
 - **Rust reference**: `rust-old/`, 11,046 lines in total (`LINES_OF_SOURCE.txt`); ≈5,400 code
   lines in `src/`, 155 public functions, 449 unit + 30 integration tests, 63 benchmarks,
   5 examples. Frozen.
-- **Cyrius port** (`src/`, at M6b): error 97 lines, validate 171, logging 100, json 247, material 149, transfer 606,
-  state 553, entropy 179, phase 523, steam 741, cycle 1,339, chem 271, stat 277, numerical 1,247; vendored mathx 1,842 and fmtf 408; generated mathx_data 1,423, constants
-  47, constants_private 41, and the table data (material 148, state 101, phase 202, chem 145, steam 876). Public: 228
+- **Cyrius port** (`src/`, at M6): error 97 lines, validate 171, logging 100, json 247, material 149, transfer 606,
+  state 553, entropy 179, phase 523, steam 741, cycle 1,339, chem 271, stat 277, numerical 1,849; vendored mathx 1,842 and fmtf 408; generated mathx_data 1,423, constants
+  47, constants_private 41, and the table data (material 148, state 101, phase 202, chem 145, steam 876). Public: 242
   functions (`us_*`), the `US_*` constants, codes and enum members. Surface parity: error 19/19, logging 2/2, material
-  16/16, transfer 34/34, state 36/36, entropy 9/9, phase 29/29, steam 19/19, cycle 44/44, chem 24/24, stat 16/16;
-  numerical (scheduled to M6c) 29/36.
+  16/16, transfer 34/34, state 36/36, entropy 9/9, phase 29/29, steam 19/19, cycle 44/44, chem 24/24, stat 16/16,
+  numerical 36/36.
 
 ## Rust baseline (tag 1.4.0, 2026-11-11)
 
@@ -154,4 +155,6 @@ crates.io for "ushma" and waits on the maintainer.
 
 ## Next
 
-M6c: the thermal network (`ThermalNetwork`: resistances and fixed nodes, connectivity by union-find, row scaling, the solve on ganita's LU per ADR 0003 with probe 9's `_lu_solve` scratch stopgap, its JSON) and the M6 gates.
+M7, the integrations: bridge's 16 conversions (bijli, kimiya, dravya, badal, pravash, sharira) with their NaN
+fallbacks; soorat's 6 visualization types and their JSON, built from the M3–M6 golden states; and the ai client
+(the daimon and hoosh configs, `register_agent` on sandhi per ADR 0002 rows 4–8) in `[lib.ai]`.

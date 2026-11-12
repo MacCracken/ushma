@@ -167,9 +167,9 @@ benchmark and example. Plan of record: [ushma-port-plan.md](ushma-port-plan.md).
 - [x] M1 — foundation, logging (sakshi) & transfer (2026-11-12)
 - [x] M2 — equations of state & entropy (2026-11-12)
 - [x] M3 — phase & steam (2026-11-12)
-- [ ] M4 — cycles
-- [ ] M5 — chemical & statistical
-- [ ] M6 — numerical
+- [x] M4 — cycles (2026-11-12)
+- [x] M5 — chemical & statistical (2026-11-12)
+- [x] M6 — numerical (2026-11-12)
 - [ ] M7 — integrations: bridges, soorat-compat, ai (sandhi)
 - [ ] M8 — release 2.0.0 (155/155 functions, 479/479 tests, 5 examples)
 
@@ -177,7 +177,7 @@ benchmark and example. Plan of record: [ushma-port-plan.md](ushma-port-plan.md).
 
 - [ ] 2D boundary nodes: second-order ghost-node treatment (insulated/convective are first-order at the wall; 1D is second-order)
 - [ ] Gauss-Seidel: residual-based stopping criterion and SOR acceleration
-- [ ] `ThermalGrid2D` flat `Vec<f64>` storage and reusable Crank-Nicolson scratch buffers (both change public struct layout → breaking)
+- [x] `ThermalGrid2D` flat `Vec<f64>` storage and reusable Crank-Nicolson scratch buffers (both change public struct layout → breaking). Done in the Cyrius port: ADR 0002 rows 2 and 15; the network keeps its solve scratch too (row 16)
 - [ ] Dittus-Boelter cooling exponent (n = 0.3); laminar / flat-plate branch for `bridge::velocity_to_convection_coefficient`
 - [ ] Tropopause handling in `bridge::altitude_to_temperature`
 - [ ] Dedicated network error variant for `ai` (currently `InvalidParameter`)

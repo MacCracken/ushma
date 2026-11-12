@@ -536,6 +536,14 @@ fn b_gauss_seidel(g: *UsGrid2D): i64 {
     return v;
 }
 
+var _bn_net_t = 0;
+
+# One solve of the 5-node chain (four 1 K/W resistances, node 0 at 400 K and node 4 at 300 K) into a reused buffer.
+fn b_network(net: *UsNetwork): i64 {
+    var t, v = us_network_solve(net, _bn_net_t, 5);
+    return v;
+}
+
 # Fills the two resistance lists the benchmarks use.
 fn bn_lists() {
     _bn_series = alloc(40);
@@ -697,6 +705,17 @@ fn main(): i64 {
     var tsd, vsd = us_grid2d_set_boundary(&gw, US_SIDE_LEFT, us_grid2d_bc(&gsrc, US_SIDE_LEFT));
     var tse, vse = us_grid2d_set_boundary(&gw, US_SIDE_RIGHT, us_grid2d_bc(&gsrc, US_SIDE_RIGHT));
     bn_run("numerical/gauss_seidel_2d_20x20", &b_gauss_seidel, &gw, 100);
+    var net: UsNetwork;
+    var tnw, vnw = us_network_new(&net, 5);
+    var kn = 1;
+    while (kn < 5) {
+        var tnr, vnr = us_network_add_resistance(&net, kn - 1, kn, 1.0);
+        kn = kn + 1;
+    }
+    var tnf, vnf = us_network_set_fixed_temperature(&net, 0, 400.0);
+    var tng, vng = us_network_set_fixed_temperature(&net, 4, 300.0);
+    _bn_net_t = alloc(40);
+    bn_run("numerical/thermal_network_5", &b_network, &net, 100000);
     return 0;
 }
 

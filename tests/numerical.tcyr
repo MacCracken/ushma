@@ -1,8 +1,9 @@
-# numerical tests (M6a: boundary conditions and the 1D grid; M6b: the 2D grid).
+# numerical tests (M6a: boundary conditions and the 1D grid; M6b: the 2D grid; M6c: the thermal network).
 #
-# Rust 1.4.0's numerical.rs tests for these, one for one (21 of its 27; the network joins with M6c), each also checking
-# the refusal's code. Then reference tests of the two spans, the grid's layout, a reused
-# Crank–Nicolson scratch (no allocation after the first step), and refused allocations.
+# Rust 1.4.0's numerical.rs tests, one for one (all 27), each also checking the refusal's code. Then reference tests of
+# the spans, the grid's layout, a reused Crank–Nicolson scratch and network scratch (no allocation after the first
+# step or solve), the network's refusals (ADR 0002 row 16), its substitution against ganita_mat_lu_solve bit for bit
+# (ADR 0003's stopgap), refused allocations, and the 10⁵-step soak.
 
 include "src/constants.cyr"
 include "src/error.cyr"
@@ -557,6 +558,510 @@ fn test_grid2d_reference() {
     errc(e5, f5, US_ERR_OUT_OF_MEMORY, "the 2D grid's nodes refused");
 }
 
+# The f64 whose bit pattern is `b`.
+fn from_bits(b): f64 {
+    var r: f64 = b;
+    return r;
+}
+
+# A network of n nodes into *net, asserting it is Ok.
+fn net_new(net: *UsNetwork, n) {
+    var t, v = us_network_new(net, n);
+    assert_eq(is_ok(t), 1, "the network is Ok");
+    return 0;
+}
+
+# Adds R K/W between a and b of *net, asserting it is Ok.
+fn net_res(net: *UsNetwork, a, b, r: f64) {
+    var t, v = us_network_add_resistance(net, a, b, r);
+    assert_eq(is_ok(t), 1, "the resistance is added");
+    return 0;
+}
+
+# Fixes node `node` of *net at T K, asserting it is Ok.
+fn net_fix(net: *UsNetwork, node, t: f64) {
+    var tf, vf = us_network_set_fixed_temperature(net, node, t);
+    assert_eq(is_ok(tf), 1, "the node is fixed");
+    return 0;
+}
+
+# The 3-node series network of Rust's tests: 0—R₁—1—R₂—2, node 0 at t0 and node 2 at t2.
+fn net_series(net: *UsNetwork, r1: f64, r2: f64, t0: f64, t2: f64) {
+    net_new(net, 3);
+    net_res(net, 0, 1, r1);
+    net_res(net, 1, 2, r2);
+    net_fix(net, 0, t0);
+    net_fix(net, 2, t2);
+    return 0;
+}
+
+# rust src/numerical.rs: test_network_series, test_network_parallel, test_network_invalid
+# rust src/numerical.rs: test_network_empty_and_out_of_range, test_network_unanchored_nodes_are_errors
+# rust src/numerical.rs: test_network_tiny_conductances_solve
+fn test_network() {
+    test_group("network");
+    var t[32];
+    var s: UsNetwork;
+    net_series(&s, 1.0, 1.0, 400.0, 300.0);
+    var t1, v1 = us_network_solve(&s, &t, 4);
+    var a0: f64 = load64(&t);
+    var a1: f64 = load64(&t + 8);
+    var a2: f64 = load64(&t + 16);
+    assert(is_ok(t1) == 1 && v1 == 3, "series: three temperatures");
+    assert(absdiff(a0, 400.0) < 0.000001 && absdiff(a1, 350.0) < 0.000001 && absdiff(a2, 300.0) < 0.000001,
+      "series: 400, 350, 300 K");
+    var p: UsNetwork;
+    net_new(&p, 3);
+    net_res(&p, 0, 1, 2.0);
+    net_res(&p, 1, 2, 2.0);
+    net_res(&p, 0, 2, 2.0);
+    net_fix(&p, 0, 400.0);
+    net_fix(&p, 2, 300.0);
+    var t2, v2 = us_network_solve(&p, &t, 4);
+    var b1: f64 = load64(&t + 8);
+    assert(is_ok(t2) == 1 && absdiff(b1, 350.0) < 0.000001, "parallel: node 1 at 350 K");
+    var iv: UsNetwork;
+    net_new(&iv, 3);
+    var e1, f1 = us_network_add_resistance(&iv, 0, 5, 1.0);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "a resistance to node 5 of 3");
+    var e2, f2 = us_network_add_resistance(&iv, 0, 1, 0.0);
+    errc(e2, f2, US_ERR_INVALID_PARAMETER, "a zero resistance");
+    var e3, f3 = us_network_set_fixed_temperature(&iv, 5, 300.0);
+    errc(e3, f3, US_ERR_INVALID_PARAMETER, "node 5 of 3 fixed");
+    var z: UsNetwork;
+    net_new(&z, 0);
+    var e4, f4 = us_network_add_resistance(&z, 0, 0, 1.0);
+    errc(e4, f4, US_ERR_INVALID_PARAMETER, "no node 0 in an empty network");
+    var e5, f5 = us_network_set_fixed_temperature(&z, 0, 300.0);
+    errc(e5, f5, US_ERR_INVALID_PARAMETER, "no node 0 to fix");
+    var two: UsNetwork;
+    net_new(&two, 2);
+    var nan: f64 = 0.0 / 0.0;
+    var e6, f6 = us_network_set_fixed_temperature(&two, 0, nan);
+    errc(e6, f6, US_ERR_INVALID_PARAMETER, "a NaN fixed temperature");
+    var tp, vp = us_network_push_resistance(&two, 0, 5, 1.0);
+    var e7, f7 = us_network_solve(&two, &t, 4);
+    errc(e7, f7, US_ERR_INVALID_PARAMETER, "a pushed resistance to node 5 of 2: the solve refuses it");
+    var tri: UsNetwork;
+    net_new(&tri, 3);
+    net_res(&tri, 0, 1, 0.001);
+    net_res(&tri, 1, 2, 0.001);
+    net_res(&tri, 0, 2, 0.0003);
+    var e8, f8 = us_network_solve(&tri, &t, 4);
+    errc(e8, f8, US_ERR_INVALID_PARAMETER, "a triangle with no fixed node");
+    var isl: UsNetwork;
+    net_new(&isl, 4);
+    net_res(&isl, 0, 1, 1.0);
+    net_res(&isl, 2, 3, 1.0);
+    net_fix(&isl, 0, 300.0);
+    var e9, f9 = us_network_solve(&isl, &t, 4);
+    errc(e9, f9, US_ERR_INVALID_PARAMETER, "a floating island beside an anchored part");
+    var tiny: UsNetwork;
+    var big: f64 = 100000000000000.0;
+    net_series(&tiny, big, big, 400.0, 300.0);
+    var t3, v3 = us_network_solve(&tiny, &t, 4);
+    var c1: f64 = load64(&t + 8);
+    assert(is_ok(t3) == 1 && absdiff(c1, 350.0) < 0.000000001, "R = 1e14: still 350 K once the rows are scaled");
+}
+
+# The network's own surface: indices below 0 (no usize), a buffer too small, every node fixed, a later entry winning,
+# the signed zeros, the overflow refusal (ADR 0002 row 16), malformed lists, the accessors, the span and the reused
+# scratch.
+fn test_network_port() {
+    test_group("network (port)");
+    var t[32];
+    var n0: UsNetwork;
+    var e1, f1 = us_network_new(&n0, 0 - 1);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "a negative node count");
+    var s: UsNetwork;
+    net_series(&s, 1.0, 1.0, 400.0, 300.0);
+    var e2, f2 = us_network_add_resistance(&s, 0 - 1, 1, 1.0);
+    errc(e2, f2, US_ERR_INVALID_PARAMETER, "node -1");
+    var e3, f3 = us_network_set_fixed_temperature(&s, 0 - 1, 300.0);
+    errc(e3, f3, US_ERR_INVALID_PARAMETER, "node -1 fixed");
+    var inf: f64 = 1.0 / 0.0;
+    var e4, f4 = us_network_add_resistance(&s, 0, 1, inf);
+    errc(e4, f4, US_ERR_INVALID_PARAMETER, "an infinite resistance");
+    assert_eq(us_network_resistance_count(&s), 2, "the refusals added nothing");
+    store64(&t, 7);
+    store64(&t + 8, 7);
+    var e5, f5 = us_network_solve(&s, &t, 2);
+    errc(e5, f5, US_ERR_INVALID_PARAMETER, "a buffer of 2 for 3 temperatures");
+    assert(load64(&t) == 7 && load64(&t + 8) == 7, "the buffer is untouched");
+    var fx: UsNetwork;
+    net_new(&fx, 3);
+    net_res(&fx, 0, 1, 1.0);
+    net_fix(&fx, 0, 300.0);
+    net_fix(&fx, 1, 310.0);
+    net_fix(&fx, 2, 320.0);
+    net_fix(&fx, 1, 330.0);
+    var t6, v6 = us_network_solve(&fx, &t, 4);
+    var d1: f64 = load64(&t + 8);
+    var d2: f64 = load64(&t + 16);
+    assert(is_ok(t6) == 1 && v6 == 3 && d1 == 330.0 && d2 == 320.0,
+      "every node fixed: the later entry for node 1 wins");
+    assert_eq(us_network_fixed_count(&fx), 4, "four fixed entries, one node twice");
+    var empty: UsNetwork;
+    net_new(&empty, 0);
+    var t7, v7 = us_network_solve(&empty, 0, 0);
+    assert(is_ok(t7) == 1 && v7 == 0, "no nodes: no temperatures");
+    var nz: UsNetwork;
+    var mz: f64 = 0.0 * (0.0 - 1.0);
+    net_series(&nz, 1.0, 1.0, mz, mz);
+    var t8, v8 = us_network_solve(&nz, &t, 4);
+    assert(is_ok(t8) == 1 && load64(&t) == 0x8000000000000000 && load64(&t + 8) == 0, "-0 K at both ends: +0 between");
+    var ov: UsNetwork;
+    var rmin: f64 = from_bits(0x0010000000000000);
+    net_series(&ov, rmin, 1.0, 400.0, 300.0);
+    store64(&t, 7);
+    var e9, f9 = us_network_solve(&ov, &t, 4);
+    errc(e9, f9, US_ERR_INVALID_PARAMETER, "g·T past f64::MAX (1.4.0: node 1 at +inf)");
+    assert_eq(load64(&t), 7, "the buffer is untouched");
+    var ov2: UsNetwork;
+    var tmax: f64 = from_bits(0x7FEFFFFFFFFFFFFF);
+    net_series(&ov2, 0.5, 1.0, tmax, 300.0);
+    var e10, f10 = us_network_solve(&ov2, &t, 4);
+    errc(e10, f10, US_ERR_INVALID_PARAMETER, "a fixed T of f64::MAX through 0.5 K/W");
+    var sub: UsNetwork;
+    var rbig: f64 = tmax * 0.5;
+    net_series(&sub, rbig, 1.0, 400.0, 300.0);
+    var t11, v11 = us_network_solve(&sub, &t, 4);
+    var g1: f64 = load64(&t + 8);
+    assert(is_ok(t11) == 1 && g1 == 300.0, "a subnormal conductance solves: node 1 at its other neighbour's 300 K");
+    var rr: UsResistance;
+    assert(us_network_resistance(&s, 1, &rr) == 1 && rr.a == 1 && rr.b == 2, "resistance 1 joins nodes 1 and 2");
+    assert_eq(us_network_resistance(&s, 2, &rr), 0, "no resistance 2");
+    var ff: UsFixedTemperature;
+    var ft: f64 = 0.0;
+    if (us_network_fixed(&s, 1, &ff) == 1) { ft = ff.t; }
+    assert(ff.node == 2 && ft == 300.0, "fixed entry 1: node 2 at 300 K");
+    assert_eq(us_network_fixed(&s, 0 - 1, &ff), 0, "no fixed entry -1");
+    var mal: UsNetwork;
+    net_series(&mal, 1.0, 1.0, 400.0, 300.0);
+    vec_push(mal.resistances, 0);
+    var e12, f12 = us_network_solve(&mal, &t, 4);
+    errc(e12, f12, US_ERR_INVALID_PARAMETER, "a resistance list of 7 words");
+    vec_truncate(mal.resistances, 6);
+    mal.num_nodes = 2;
+    var e13, f13 = us_network_solve(&mal, &t, 4);
+    errc(e13, f13, US_ERR_INVALID_PARAMETER, "num_nodes edited to 2 under a resistance to node 2");
+    mal.num_nodes = 3;
+    var t14, v14 = us_network_solve(&mal, &t, 4);
+    assert(is_ok(t14) == 1, "restored, it solves");
+    var t15, v15 = us_network_solve(&s, &t, 4);
+    var before = alloc_used();
+    var k = 0;
+    while (k < 1000) {
+        var tk, vk = us_network_solve(&s, &t, 4);
+        k = k + 1;
+    }
+    assert_eq(alloc_used() - before, 0, "1,000 solves after the first: 0 heap bytes");
+    sakshi_output_buffer();
+    sakshi_set_level(SK_DEBUG);
+    sakshi_ring_clear();
+    var t16, v16 = us_network_solve(&s, &t, 4);
+    assert_eq(ring_has("solve"), 1, "solve's span");
+    var un = tri_unanchored();
+    var e17, f17 = us_network_solve(un, &t, 4);
+    assert_eq(sakshi_span_depth(), 0, "every span closed, a refused one too");
+    sakshi_set_level(SK_INFO);
+    sakshi_ring_clear();
+}
+
+# A two-node network with no fixed node, on the heap.
+fn tri_unanchored(): *UsNetwork {
+    var net = alloc(sizeof(UsNetwork));
+    var t, v = us_network_new(net, 2);
+    var tr, vr = us_network_add_resistance(net, 0, 1, 1.0);
+    return net;
+}
+
+var _net_rng = 88172645463325252;
+
+# The next draw of a xorshift64 generator, as a non-negative integer.
+fn net_rnd(): i64 {
+    var x = _net_rng;
+    x = x ^ (x << 13);
+    x = x ^ ((x >> 7) & 0x01FFFFFFFFFFFFFF);
+    x = x ^ (x << 17);
+    _net_rng = x;
+    return (x >> 2) & 0x3FFFFFFFFFFFFFFF;
+}
+
+# A connected network into *net as probe 9 draws them: n in [2, 40], a chain through every node plus up to 2n extra
+# edges, R log-uniform over about 1e-3 … 1e14 (a mantissa in [1, 2) times 2^k, k in [-10, 46]), one to three distinct
+# fixed nodes at 200 … 1000 K.
+fn net_seeded(net: *UsNetwork) {
+    var n = 2 + net_rnd() % 39;
+    var tn, vn = us_network_new(net, n);
+    var draws = n - 1 + net_rnd() % (2 * n);
+    var k = 0;
+    while (k < draws) {
+        var a = k;
+        var b = k + 1;
+        if (k >= n - 1) {
+            a = net_rnd() % n;
+            b = net_rnd() % n;
+        }
+        var u: f64 = f64_from(net_rnd() % 1000000);
+        var r: f64 = 1.0 + u / 1000000.0;
+        var e = net_rnd() % 57 - 10;
+        while (e > 0) {
+            r = r * 2.0;
+            e = e - 1;
+        }
+        while (e < 0) {
+            r = r * 0.5;
+            e = e + 1;
+        }
+        if (a != b) { var tr, vr = us_network_add_resistance(net, a, b, r); }
+        k = k + 1;
+    }
+    var m = 3;
+    if (n - 1 < m) { m = n - 1; }
+    var nfix = 1 + net_rnd() % m;
+    k = 0;
+    while (k < nfix) {
+        var node = net_rnd() % n;
+        var seen = 0;
+        var j = 0;
+        var ff: UsFixedTemperature;
+        while (j < us_network_fixed_count(net)) {
+            var hf = us_network_fixed(net, j, &ff);
+            if (ff.node == node) { seen = 1; }
+            j = j + 1;
+        }
+        var w: f64 = f64_from(net_rnd() % 1000000);
+        var tt: f64 = 200.0 + 800.0 * (w / 1000000.0);
+        if (seen == 0) { var tf, vf = us_network_set_fixed_temperature(net, node, tt); }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# ADR 0003's stopgap, measured: on 600 seeded networks, the solve's substitution over ganita's factors gives exactly
+# ganita_mat_lu_solve's bits, and refuses exactly the systems ganita_mat_lu refuses. The scaled system and its
+# right-hand side are read back from the network's scratch.
+fn test_network_substitution() {
+    test_group("network substitution vs ganita_mat_lu_solve");
+    var t = alloc(8 * 64);
+    var solved = 0;
+    var refused = 0;
+    var unknowns = 0;
+    var differ = 0;
+    var disagree = 0;
+    var k = 0;
+    while (k < 600) {
+        var net: UsNetwork;
+        net_seeded(&net);
+        var ts, vs = us_network_solve(&net, t, 64);
+        var m = slice_ptr(net.mat);
+        var nf = load64(m);
+        var lu = ganita_mat_new(nf, nf);
+        var piv = alloc(8 * nf);
+        var x = alloc(8 * nf);
+        var sign = ganita_mat_lu(m, lu, piv);
+        if (is_ok(ts) == 1) {
+            solved = solved + 1;
+            if (sign == 0 || ganita_mat_lu_solve(lu, piv, slice_ptr(net.vecs) + 8 * nf, x) != 0) {
+                disagree = disagree + 1;
+            } else {
+                var mine = slice_ptr(net.vecs) + 16 * nf;
+                var i = 0;
+                while (i < nf) {
+                    if (load64(mine + 8 * i) != load64(x + 8 * i)) { differ = differ + 1; }
+                    unknowns = unknowns + 1;
+                    i = i + 1;
+                }
+            }
+        } else {
+            refused = refused + 1;
+            if (sign != 0) { disagree = disagree + 1; }
+        }
+        k = k + 1;
+    }
+    assert_eq(solved + refused, 600, "600 networks");
+    assert(solved > 500 && refused > 0, "most solve; some refuse (a pivot below 1e-12 after row scaling)");
+    assert_eq(disagree, 0, "the port and ganita refuse the same systems");
+    assert_eq(differ, 0, "every unknown bit-identical to ganita_mat_lu_solve");
+    print("  ", 2);
+    print_num(solved);
+    print(" solved (", 9);
+    print_num(unknowns);
+    print(" unknowns, 0 bits apart), ", 26);
+    print_num(refused);
+    println(" refused by both");
+}
+
+# The network's JSON (serde_json's text, both forms read) and its refused allocations.
+fn test_network_json() {
+    test_group("network JSON and allocation");
+    var s: UsNetwork;
+    net_series(&s, 1.0, 1.0, 400.0, 300.0);
+    var sb = str_builder_new();
+    us_network_to_json(sb, &s);
+    var want = "{\"num_nodes\":3,\"resistances\":[[0,1,1.0],[1,2,1.0]],\"fixed\":[[0,400.0],[2,300.0]]}";
+    var n = load64(sb + 8);
+    assert(n == strlen(want) && memeq(load64(sb), want, n) == 1, "serde_json's text");
+    var back: UsNetwork;
+    var tb, vb = us_network_from_json(load64(sb), n, &back);
+    var sb2 = str_builder_new();
+    us_network_to_json(sb2, &back);
+    assert(is_ok(tb) == 1 && n == load64(sb2 + 8) && memeq(load64(sb), load64(sb2), n) == 1,
+      "it reads back, the same bytes");
+    var t[32];
+    var tq, vq = us_network_solve(&back, &t, 4);
+    var q1: f64 = load64(&t + 8);
+    assert(is_ok(tq) == 1 && q1 == 350.0, "and solves: 350 K");
+    var seq = "[2,[[0,1,0.5]],[[0,300]]]";
+    var sq: UsNetwork;
+    var ts, vs = us_network_from_json(seq, strlen(seq), &sq);
+    assert(is_ok(ts) == 1 && sq.num_nodes == 2 && us_network_resistance_count(&sq) == 1, "serde's sequence form");
+    var bad = "{\"num_nodes\":3,\"resistances\":[[0,1]],\"fixed\":[]}";
+    var e1, f1 = us_network_from_json(bad, strlen(bad), &sq);
+    errc(e1, f1, US_ERR_DESERIALIZE, "a two-element resistance");
+    assert_eq(sq.num_nodes, 2, "*out unchanged");
+    var ta = test_allocator();
+    test_allocator_fail_after(ta, 0);
+    var h: UsNetwork;
+    var e2, f2 = us_network_new_a(ta, &h, 3);
+    errc(e2, f2, US_ERR_OUT_OF_MEMORY, "the network's vecs refused");
+    test_allocator_fail_after(ta, 0 - 1);
+    var t3, v3 = us_network_new_a(ta, &h, 40);
+    var k = 1;
+    while (k < 40) {
+        net_res(&h, k - 1, k, 1.0);
+        k = k + 1;
+    }
+    net_fix(&h, 0, 400.0);
+    test_allocator_fail_after(ta, test_allocator_alloc_count(ta));
+    var big = alloc(8 * 40);
+    var e4, f4 = us_network_solve(&h, big, 40);
+    errc(e4, f4, US_ERR_OUT_OF_MEMORY, "the solve's first scratch grow refused");
+    var pushed = 0;
+    var unchanged = 0;
+    var j = 0;
+    while (j < 8 && pushed == 0) {
+        var cnt = us_network_resistance_count(&h);
+        var tp, vp = us_network_push_resistance(&h, 0, 1, 1.0);
+        if (is_err_result(tp) == 1) {
+            pushed = 1;
+            if (vp == US_ERR_OUT_OF_MEMORY && us_network_resistance_count(&h) == cnt) { unchanged = 1; }
+        }
+        j = j + 1;
+    }
+    assert(pushed == 1 && unchanged == 1, "the push that must grow the vec is refused, and adds nothing");
+    test_allocator_fail_after(ta, 0 - 1);
+    var t6, v6 = us_network_solve(&h, big, 40);
+    assert(is_ok(t6) == 1 && v6 == 40, "allowed, it solves");
+    var hb: UsNetwork;
+    net_new(&hb, 134217728);
+    var e7, f7 = us_network_solve(&hb, big, 134217728);
+    errc(e7, f7, US_ERR_OUT_OF_MEMORY, "2^27 nodes: five scratch words each pass a vec's 2^28, refused, not aborted");
+    var hc: UsNetwork;
+    net_new(&hc, 20000);
+    k = 1;
+    while (k < 20000) {
+        var tr, vr = us_network_push_resistance(&hc, k - 1, k, 1.0);
+        k = k + 1;
+    }
+    net_fix(&hc, 0, 400.0);
+    var hbuf = alloc(8 * 20000);
+    var e8, f8 = us_network_solve(&hc, hbuf, 20000);
+    errc(e8, f8, US_ERR_OUT_OF_MEMORY, "19,999 free nodes: a 4e8-word matrix, refused, not aborted");
+}
+
+# The 10⁵-step soak (port plan §6, probe 2): 10⁵ explicit, Crank–Nicolson and adaptive steps, 10⁵ network solves and
+# 100 Gauss–Seidel solves (each from the same start, every node but the fixed sides reset to 300 K), after a first call
+# of each, allocate 0 heap bytes. The grids end on their steady profiles, and every network solve gives the first one's
+# bits.
+fn test_soak() {
+    test_group("10^5-step soak");
+    var fl: UsBoundaryCondition;
+    var fr: UsBoundaryCondition;
+    us_boundary_fixed(&fl, 400.0);
+    us_boundary_fixed(&fr, 300.0);
+    var ge: UsGrid1D;
+    grid(&ge, 100, 1.0, 0.0001, 300.0, &fl, &fr);
+    var gc: UsGrid1D;
+    grid(&gc, 100, 1.0, 0.0001, 300.0, &fl, &fr);
+    var cv: UsBoundaryCondition;
+    us_boundary_convective(&cv, 50.0, 290.0, 15.0);
+    var ga: UsGrid1D;
+    grid(&ga, 51, 0.1, 0.00001, 300.0, &fl, &cv);
+    var dte: f64 = us_grid1d_max_stable_dt(&ge);
+    dte = dte * 0.8;
+    var msa: f64 = us_grid1d_max_stable_dt(&ga);
+    var dta: f64 = msa * 4.0;
+    var net: UsNetwork;
+    net_series(&net, 1.0, 2.0, 400.0, 300.0);
+    var t0[24];
+    var t1[24];
+    var r0, w0 = us_network_solve(&net, &t0, 3);
+    var g2: UsGrid2D;
+    grid2(&g2, 20, 20, 1.0, 1.0, 300.0);
+    side(&g2, US_SIDE_LEFT, &fl);
+    side(&g2, US_SIDE_RIGHT, &fr);
+    var a0, b0 = us_grid1d_step_explicit(&ge, dte);
+    var a1, b1 = us_grid1d_step_crank_nicolson(&gc, 10.0);
+    var a2, b2 = us_grid1d_step_adaptive(&ga, dta);
+    var a3, b3 = us_grid2d_solve_steady_state(&g2, 0.0001, 100000);
+    var before = alloc_used();
+    var refused = 0;
+    var differ = 0;
+    var k = 0;
+    while (k < 100000) {
+        var te, ve = us_grid1d_step_explicit(&ge, dte);
+        var tc, vc = us_grid1d_step_crank_nicolson(&gc, 10.0);
+        var ta, va = us_grid1d_step_adaptive(&ga, dta);
+        var tn, vn = us_network_solve(&net, &t1, 3);
+        if (is_ok(te) == 0 || is_ok(tc) == 0 || is_ok(ta) == 0 || is_ok(tn) == 0) { refused = refused + 1; }
+        if (load64(&t1 + 8) != load64(&t0 + 8)) { differ = differ + 1; }
+        k = k + 1;
+    }
+    k = 0;
+    while (k < 100) {
+        var j = 0;
+        while (j < 20) {
+            var i = 1;
+            while (i < 19) {
+                var hi = us_grid2d_set_node(&g2, i, j, 300.0);
+                i = i + 1;
+            }
+            j = j + 1;
+        }
+        var ts, vs = us_grid2d_solve_steady_state(&g2, 0.0001, 100000);
+        if (is_ok(ts) == 0 || vs != b3) { refused = refused + 1; }
+        k = k + 1;
+    }
+    assert_eq(alloc_used() - before, 0, "3 x 10^5 steps, 10^5 network and 100 2D solves after the first: 0 heap bytes");
+    assert_eq(refused, 0, "every step and solve Ok, every 2D solve in the first one's sweeps");
+    assert_eq(differ, 0, "every network solve gives the first one's bits");
+    var worst: f64 = 0.0;
+    var n = 0;
+    while (n < 100) {
+        var lin: f64 = 400.0 - 100.0 * f64_from(n) / 99.0;
+        var xe: f64 = us_grid1d_node(&ge, n);
+        var xc: f64 = us_grid1d_node(&gc, n);
+        var de: f64 = absdiff(xe, lin);
+        var dc: f64 = absdiff(xc, lin);
+        if (de > worst) { worst = de; }
+        if (dc > worst) { worst = dc; }
+        n = n + 1;
+    }
+    assert(worst < 0.000000001, "both 100-node grids end on the linear profile (within 1e-9 K)");
+    var inside = 1;
+    n = 0;
+    while (n < 51) {
+        var xa: f64 = us_grid1d_node(&ga, n);
+        if (xa != xa || xa < 290.0 || xa > 400.0) { inside = 0; }
+        n = n + 1;
+    }
+    assert_eq(inside, 1, "the convective grid stays between its fluid's 290 K and its wall's 400 K");
+    var m1: f64 = load64(&t0 + 8);
+    assert(absdiff(m1, 366.6666666666667) < 0.000000001, "the network's node 1 at 366.67 K (R 1 and 2 K/W)");
+}
+
 # Runs every group and returns the failure count.
 fn main() {
     alloc_init();
@@ -568,6 +1073,11 @@ fn main() {
     test_reference();
     test_grid2d();
     test_grid2d_reference();
+    test_network();
+    test_network_port();
+    test_network_substitution();
+    test_network_json();
+    test_soak();
     return assert_summary();
 }
 

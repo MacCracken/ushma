@@ -21,8 +21,11 @@
 //! A ragged row other than the last cannot be held by the port's flat grid, so none is generated. JSON:
 //! `ThermalGrid2D`, its ragged and mis-shaped documents among them (ADR 0002 row 2).
 
-use ushma::numerical::{BoundaryCondition as Bc, Side, ThermalGrid1D, ThermalGrid2D};
+use ushma::numerical::{
+    BoundaryCondition as Bc, Side, ThermalGrid1D, ThermalGrid2D, ThermalNetwork,
+};
 
+use crate::grids::Rng;
 use crate::json_cases::variants;
 use crate::sweep::{around, edges};
 use crate::tsv::{Class, Module, Tok, err, f, i, s};
@@ -539,6 +542,257 @@ fn grid2d_rows(m: &mut Module) {
     }
 }
 
+fn net_toks(x: &ThermalNetwork) -> Vec<Tok> {
+    let mut v = vec![usize_tok(x.num_nodes), Tok::V(x.resistances.len())];
+    for &(a, b, r) in &x.resistances {
+        v.extend([usize_tok(a), usize_tok(b), f(r)]);
+    }
+    v.push(Tok::V(x.fixed.len()));
+    for &(node, t) in &x.fixed {
+        v.extend([usize_tok(node), f(t)]);
+    }
+    v
+}
+
+/// A network with these lists as they stand, unchecked (Rust's fields are public).
+fn net(n: usize, res: &[(usize, usize, f64)], fixed: &[(usize, f64)]) -> ThermalNetwork {
+    let mut x = ThermalNetwork::new(n);
+    x.resistances.extend_from_slice(res);
+    x.fixed.extend_from_slice(fixed);
+    x
+}
+
+fn below(rng: &mut Rng, k: usize) -> usize {
+    usize::try_from(rng.int(0, i64::try_from(k).expect("small") - 1)).expect("small")
+}
+
+/// A connected network as probe 9 draws them: a chain through every node plus extra edges, R log-uniform over
+/// 1e-3 … 1e14, one to three fixed nodes at 200 … 1000 K. `loops` also draws self-loops and repeated edges.
+fn seeded(rng: &mut Rng, max_n: usize, loops: bool) -> ThermalNetwork {
+    let n = 2 + below(rng, max_n - 1);
+    let mut x = ThermalNetwork::new(n);
+    for k in 1..n {
+        let r = rng.log_uniform(-3.0, 14.0);
+        x.resistances.push((k - 1, k, r));
+    }
+    for _ in 0..below(rng, 2 * n) {
+        let a = below(rng, n);
+        let b = below(rng, n);
+        if a != b || loops {
+            let r = rng.log_uniform(-3.0, 14.0);
+            x.resistances.push((a, b, r));
+            if loops && below(rng, 4) == 0 {
+                x.resistances.push((b, a, r));
+            }
+        }
+    }
+    let nfix = 1 + below(rng, 3.min(n - 1));
+    for _ in 0..nfix {
+        let node = below(rng, n);
+        if loops || x.fixed.iter().all(|&(q, _)| q != node) {
+            let t = rng.uniform(200.0, 1000.0);
+            x.fixed.push((node, t));
+        }
+    }
+    x
+}
+
+fn net_solve_row(m: &mut Module, x: &ThermalNetwork) {
+    let out = match x.solve() {
+        Ok(t) => {
+            let mut v = vec![Tok::V(t.len())];
+            v.extend(t.iter().map(|&y| f(y)));
+            v
+        }
+        Err(z) => vec![err(&z)],
+    };
+    m.row(
+        "numerical::ThermalNetwork::solve",
+        Class::B,
+        &net_toks(x),
+        &out,
+    );
+}
+
+fn network_rows(m: &mut Module) {
+    let big = usize::try_from(i64::MAX).expect("64-bit");
+    for n in [0, 1, 2, 3, 40, 1000, big] {
+        m.row(
+            "numerical::ThermalNetwork::new",
+            Class::A,
+            &[usize_tok(n)],
+            &net_toks(&ThermalNetwork::new(n)),
+        );
+    }
+    // add_resistance(a, b, R) and set_fixed_temperature(node, T) at every index edge and every value edge
+    let bases = [
+        ThermalNetwork::new(0),
+        ThermalNetwork::new(3),
+        net(4, &[(0, 1, 2.0)], &[(0, 300.0)]),
+    ];
+    let mut vals = edges();
+    vals.extend([
+        1.0,
+        300.0,
+        1e14,
+        5e-324,
+        f64::MIN_POSITIVE,
+        f64::MAX,
+        f64::MIN,
+    ]);
+    for x in &bases {
+        let n = x.num_nodes;
+        let mut idx = vec![0, 1, n.saturating_sub(1), n, n + 1, big];
+        idx.sort_unstable();
+        idx.dedup();
+        let mut adds: Vec<(usize, usize, f64)> = Vec::new();
+        for &a in &idx {
+            for &b in &idx {
+                adds.push((a, b, 1.0));
+            }
+        }
+        for &r in &vals {
+            adds.push((0, n.saturating_sub(1), r));
+        }
+        for (a, b, r) in adds {
+            let mut after = x.clone();
+            let out = match after.add_resistance(a, b, r) {
+                Ok(()) => net_toks(&after),
+                Err(z) => vec![err(&z)],
+            };
+            let mut ins = net_toks(x);
+            ins.extend([usize_tok(a), usize_tok(b), f(r)]);
+            m.row(
+                "numerical::ThermalNetwork::add_resistance",
+                Class::A,
+                &ins,
+                &out,
+            );
+        }
+        let mut sets: Vec<(usize, f64)> = idx.iter().map(|&k| (k, 300.0)).collect();
+        sets.extend(vals.iter().map(|&t| (n.saturating_sub(1), t)));
+        for (node, t) in sets {
+            let mut after = x.clone();
+            let out = match after.set_fixed_temperature(node, t) {
+                Ok(()) => net_toks(&after),
+                Err(z) => vec![err(&z)],
+            };
+            let mut ins = net_toks(x);
+            ins.extend([usize_tok(node), f(t)]);
+            m.row(
+                "numerical::ThermalNetwork::set_fixed_temperature",
+                Class::A,
+                &ins,
+                &out,
+            );
+        }
+    }
+    // solve: the Rust tests' networks, garbage lists, structure edges, overflow, then seeded networks
+    let series =
+        |r1: f64, r2: f64, t0: f64, t2: f64| net(3, &[(0, 1, r1), (1, 2, r2)], &[(0, t0), (2, t2)]);
+    let mut nets = vec![
+        series(1.0, 1.0, 400.0, 300.0),
+        net(
+            3,
+            &[(0, 1, 2.0), (1, 2, 2.0), (0, 2, 2.0)],
+            &[(0, 400.0), (2, 300.0)],
+        ),
+        net(3, &[(0, 1, 1e-3), (1, 2, 1e-3), (0, 2, 3e-4)], &[]),
+        net(4, &[(0, 1, 1.0), (2, 3, 1.0)], &[(0, 300.0)]),
+        series(1e14, 1e14, 400.0, 300.0),
+        ThermalNetwork::new(0),
+        net(2, &[(0, 5, 1.0)], &[]),
+        net(2, &[(0, 1, 1.0)], &[(0, 300.0), (5, 300.0)]),
+        net(2, &[(0, 1, 1.0)], &[(0, f64::NAN)]),
+        net(2, &[(0, 1, 1.0)], &[(0, f64::INFINITY)]),
+        net(2, &[(1, 1, 0.0)], &[(0, 300.0)]),
+        net(2, &[(0, 1, -1.0)], &[(0, 300.0)]),
+        net(2, &[(0, 1, f64::NAN)], &[(0, 300.0)]),
+        net(2, &[(0, 1, f64::INFINITY)], &[(0, 300.0)]),
+        net(2, &[(0, 1, 1.0)], &[(big, 300.0)]),
+        // every node fixed, no free unknowns; a later entry for a node wins
+        net(1, &[], &[(0, 300.0)]),
+        net(
+            3,
+            &[(0, 1, 1.0)],
+            &[(0, 300.0), (1, 310.0), (2, 320.0), (1, 330.0)],
+        ),
+        net(3, &[], &[(0, 300.0), (1, 310.0), (2, 320.0)]),
+        // a lone free node, unanchored; a free node with no edge beside an anchored one
+        ThermalNetwork::new(1),
+        net(3, &[(0, 1, 1.0)], &[(0, 300.0)]),
+        // self-loops (free and fixed), repeated edges, an edge between two fixed nodes
+        net(
+            3,
+            &[(0, 1, 1.0), (1, 1, 3.0), (1, 2, 1.0)],
+            &[(0, 400.0), (2, 300.0)],
+        ),
+        net(
+            3,
+            &[(0, 0, 1.0), (0, 1, 1.0), (1, 2, 1.0), (2, 2, 7.0)],
+            &[(0, 400.0), (2, 300.0)],
+        ),
+        net(3, &[(0, 1, 1e20), (1, 2, 1e20), (1, 1, 1.0)], &[(0, 400.0)]),
+        net(3, &[(0, 1, 0.1), (1, 1, 1e-17), (1, 2, 0.3)], &[(0, 400.0)]),
+        net(
+            4,
+            &[
+                (0, 1, 2.0),
+                (0, 1, 2.0),
+                (1, 0, 4.0),
+                (1, 2, 1.0),
+                (2, 3, 1.0),
+            ],
+            &[(0, 400.0), (3, 300.0)],
+        ),
+        net(
+            4,
+            &[(0, 3, 1.0), (0, 1, 1.0), (1, 2, 1.0), (2, 3, 1.0)],
+            &[(0, 400.0), (3, 300.0)],
+        ),
+        net(3, &[(1, 0, 1.0), (2, 1, 1.0)], &[(2, 300.0), (0, 400.0)]),
+        net(
+            5,
+            &[(4, 3, 1.0), (3, 2, 2.0), (2, 1, 3.0), (1, 0, 4.0)],
+            &[(4, 500.0)],
+        ),
+        // overflow: a conductance 1/R past f64::MAX, a right-hand side g·T past it, a subnormal conductance
+        series(1e-310, 1.0, 400.0, 300.0),
+        series(5e-324, 1.0, 400.0, 300.0),
+        series(f64::MIN_POSITIVE, 1.0, 400.0, 300.0),
+        series(0.5, 1.0, f64::MAX, 300.0),
+        series(0.5, 0.5, f64::MAX, f64::MAX),
+        series(1e308, 1.0, 400.0, 300.0),
+        series(f64::MAX, f64::MAX, 400.0, 300.0),
+        net(
+            3,
+            &[(0, 1, 6e-309), (0, 1, 6e-309), (1, 2, 1.0)],
+            &[(0, 400.0), (2, 300.0)],
+        ),
+        net(2, &[(0, 1, 1e-308)], &[(0, 400.0)]),
+        net(2, &[(0, 1, 1e-308)], &[(0, 1e300)]),
+        net(3, &[(0, 1, 1.0), (1, 2, 1.0)], &[(0, -0.0), (2, -0.0)]),
+        net(3, &[(0, 1, 1.0), (1, 2, 1.0)], &[(0, -0.0), (2, 0.0)]),
+    ];
+    let mut vals2 = edges();
+    vals2.extend([1e14, 1e15, 1e16, 1e-300, 5e-324, f64::MAX]);
+    for &r in &vals2 {
+        nets.push(series(r, 1.0, 400.0, 300.0));
+        nets.push(series(1.0, 1.0, r, 300.0));
+    }
+    let mut rng = Rng::new(0x006e_6574_776f_726b);
+    for k in 0..400 {
+        nets.push(seeded(
+            &mut rng,
+            if k % 8 == 0 { 120 } else { 40 },
+            k % 4 == 3,
+        ));
+    }
+    for x in &nets {
+        net_solve_row(m, x);
+    }
+}
+
 fn decode<T: for<'de> serde::Deserialize<'de>>(
     doc: &str,
     toks: impl Fn(&T) -> Vec<Tok>,
@@ -727,6 +981,67 @@ fn json_rows(m: &mut Module) {
             &decode::<ThermalGrid2D>(doc, g2_toks),
         );
     }
+    // ThermalNetwork
+    let nets = [
+        ThermalNetwork::new(0),
+        net(3, &[(0, 1, 1.0), (1, 2, 1.0)], &[(0, 400.0), (2, 300.0)]),
+        net(4, &[(0, 1, 2.5e-7), (3, 3, 1e14)], &[(1, -0.0)]),
+        net(
+            2,
+            &[(0, 5, f64::NAN), (1, 0, f64::INFINITY)],
+            &[(7, f64::NEG_INFINITY)],
+        ),
+    ];
+    let mut ndocs = Vec::new();
+    for x in &nets {
+        let doc = serde_json::to_string(x).expect("serialize");
+        m.row(
+            "numerical::ThermalNetwork::to_json",
+            Class::A,
+            &net_toks(x),
+            &[s(doc.clone())],
+        );
+        ndocs.push(doc);
+    }
+    let base = ndocs[1].clone();
+    add_variants(&mut ndocs, &base);
+    for body in [
+        r#""num_nodes":3,"resistances":[[0,1,1]],"fixed":[[0,300]]"#,
+        r#""num_nodes":3,"resistances":[[0,1]],"fixed":[]"#,
+        r#""num_nodes":3,"resistances":[[0,1,1.0,2]],"fixed":[]"#,
+        r#""num_nodes":3,"resistances":[[0,-1,1.0]],"fixed":[]"#,
+        r#""num_nodes":3,"resistances":[[0,1.0,1.0]],"fixed":[]"#,
+        r#""num_nodes":3,"resistances":[[0,1,"1"]],"fixed":[]"#,
+        r#""num_nodes":3,"resistances":[[0,1,null]],"fixed":[]"#,
+        r#""num_nodes":3,"resistances":[],"fixed":[[0]]"#,
+        r#""num_nodes":3,"resistances":[],"fixed":[[0,300,1]]"#,
+        r#""num_nodes":3,"resistances":[],"fixed":[{"0":300}]"#,
+        r#""num_nodes":3,"resistances":{},"fixed":[]"#,
+        r#""num_nodes":-1,"resistances":[],"fixed":[]"#,
+        r#""num_nodes":3.0,"resistances":[],"fixed":[]"#,
+        r#""num_nodes":3,"resistances":[]"#,
+        r#""num_nodes":3,"resistances":[],"fixed":[],"extra":1"#,
+        r#""num_nodes":9223372036854775807,"resistances":[[9223372036854775806,0,1e-300]],"fixed":[]"#,
+    ] {
+        ndocs.push(format!("{{{body}}}"));
+    }
+    ndocs.extend(
+        [
+            r#"[3,[[0,1,1.0]],[[0,300.0]]]"#,
+            r#"[3,[[0,1,1.0]]]"#,
+            "[]",
+            "null",
+        ]
+        .map(String::from),
+    );
+    for doc in &ndocs {
+        m.row(
+            "numerical::ThermalNetwork::from_json",
+            Class::A,
+            &[s(doc.clone())],
+            &decode::<ThermalNetwork>(doc, net_toks),
+        );
+    }
 }
 
 pub fn emit() -> Module {
@@ -734,6 +1049,7 @@ pub fn emit() -> Module {
     grid_rows(&mut m);
     step_rows(&mut m);
     grid2d_rows(&mut m);
+    network_rows(&mut m);
     json_rows(&mut m);
     m
 }

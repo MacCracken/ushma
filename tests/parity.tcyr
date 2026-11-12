@@ -576,8 +576,9 @@ fn _par_got_g1(g: *UsGrid1D) {
 
 var _par_g1 = 0;
 var _par_g2 = 0;
-# 1 when the current row's document is a ThermalGrid2D whose rows are not ny × nx: the flat grid refuses it at decode,
-# 1.4.0 at the first solve (ADR 0002 row 2).
+# 1 when the current row is accepted under an ADR 0002 row: a ThermalGrid2D document whose rows are not ny × nx (the
+# flat grid refuses it at decode, 1.4.0 at the first solve; row 2), or a network solve that overflows f64 (the port
+# refuses it, 1.4.0 returns NaN or ±∞ temperatures; row 16).
 var _par_adr2 = 0;
 
 # A 2D grid from input token `at` (`v:rows`, each `v:len` and its nodes; nx, ny, Δx, Δy; four conditions) into *g,
@@ -723,6 +724,160 @@ fn _par_grid2d(fp, fl): i64 {
     return 0;
 }
 
+var _par_net = 0;
+var _par_net_t = 0;
+const _PAR_NET_CAP = 4096;
+
+# A network from input token `at` (num_nodes; `v:` resistances, a, b and R each; `v:` fixed nodes, the node and T
+# each) into *net, whose vecs exist, its lists replaced unchecked: the index after it, or -1.
+fn _par_net_in(net: *UsNetwork, at): i64 {
+    if (at + 1 >= _par_in_n || load64(_par_in_k + (at + 1) * 8) != 118) { return 0 - 1; }
+    net.num_nodes = _par_in(at);
+    vec_truncate(net.resistances, 0);
+    vec_truncate(net.fixed, 0);
+    var nr = _par_in(at + 1);
+    var i = at + 2;
+    var k = 0;
+    while (k < nr) {
+        if (i + 2 >= _par_in_n) { return 0 - 1; }
+        var r: f64 = _par_in(i + 2);
+        var tr, vr = us_network_push_resistance(net, _par_in(i), _par_in(i + 1), r);
+        i = i + 3;
+        k = k + 1;
+    }
+    if (i >= _par_in_n || load64(_par_in_k + i * 8) != 118) { return 0 - 1; }
+    var nx = _par_in(i);
+    i = i + 1;
+    k = 0;
+    while (k < nx) {
+        if (i + 1 >= _par_in_n) { return 0 - 1; }
+        var t: f64 = _par_in(i + 1);
+        var tf, vf = us_network_push_fixed(net, _par_in(i), t);
+        i = i + 2;
+        k = k + 1;
+    }
+    return i;
+}
+
+# Appends *net as its golden tokens.
+fn _par_got_net(net: *UsNetwork) {
+    _par_got_i(net.num_nodes);
+    var nr = us_network_resistance_count(net);
+    _par_got_seq(nr);
+    var k = 0;
+    while (k < nr) {
+        var rr: UsResistance;
+        var hr = us_network_resistance(net, k, &rr);
+        var r: f64 = rr.r;
+        _par_got_i(rr.a);
+        _par_got_i(rr.b);
+        _par_got_f(r);
+        k = k + 1;
+    }
+    var nx = us_network_fixed_count(net);
+    _par_got_seq(nx);
+    k = 0;
+    while (k < nx) {
+        var ff: UsFixedTemperature;
+        var hf = us_network_fixed(net, k, &ff);
+        var t: f64 = ff.t;
+        _par_got_i(ff.node);
+        _par_got_f(t);
+        k = k + 1;
+    }
+    return 0;
+}
+
+# 1 when the oracle's outputs for this row are temperatures one of which is NaN or ±∞: a system that overflows f64,
+# which 1.4.0 returns as a success and the port refuses (ADR 0002 row 16).
+fn _par_net_overflowed(): i64 {
+    if (_par_want_n < 1 || load64(_par_want_k) != 118) { return 0; }
+    var k = 1;
+    while (k < _par_want_n) {
+        if (load64(_par_want_k + k * 8) == 102) {
+            if ((load64(_par_want_v + k * 8) & 0x7FF0000000000000) == 0x7FF0000000000000) { return 1; }
+        }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# One ThermalNetwork row: 1 when handled, 0 for none, -1 for unusable inputs.
+fn _par_network(fp, fl): i64 {
+    if (_par_net == 0) {
+        _par_net = alloc(sizeof(UsNetwork));
+        _par_net_t = alloc(8 * _PAR_NET_CAP);
+        var tn0, vn0 = us_network_new(_par_net, 0);
+    }
+    if (_par_eq(fp, fl, "numerical::ThermalNetwork::new") == 1) {
+        if (_par_in_n != 1) { return 0 - 1; }
+        reset_via(_par_mat_arena);
+        var nw: UsNetwork;
+        var tn, vn = us_network_new_a(_par_mat_arena, &nw, _par_in(0));
+        if (is_ok(tn) == 1) { _par_got_net(&nw); } else { _par_got_err(vn); }
+        return 1;
+    }
+    if (_par_eq(fp, fl, "numerical::ThermalNetwork::from_json") == 1) {
+        var dn[8];
+        var doc = _par_in_text(0, &dn);
+        if (doc == 0) { return 0 - 1; }
+        var n = load64(&dn);
+        reset_via(_par_mat_arena);
+        var h: UsNetwork;
+        var tj, vj = us_network_from_json_a(_par_mat_arena, doc, n, &h);
+        if (is_ok(tj) == 1) {
+            _par_got_net(&h);
+            if (_par_has_int_neg_zero(doc, n) == 1) { _par_adr5 = 1; }
+            return 1;
+        }
+        _par_got_err(vj);
+        if (_par_bayan_mapped_refusal(doc, n) == 1) { _par_adr5 = 1; }
+        return 1;
+    }
+    var op = 0;
+    if (_par_eq(fp, fl, "numerical::ThermalNetwork::add_resistance") == 1) { op = 1; }
+    if (_par_eq(fp, fl, "numerical::ThermalNetwork::set_fixed_temperature") == 1) { op = 2; }
+    if (_par_eq(fp, fl, "numerical::ThermalNetwork::solve") == 1) { op = 3; }
+    if (_par_eq(fp, fl, "numerical::ThermalNetwork::to_json") == 1) { op = 4; }
+    if (op == 0) { return 0; }
+    var ni = _par_net_in(_par_net, 0);
+    if (ni < 0) { return 0 - 1; }
+    if (op == 1) {
+        if (ni + 3 != _par_in_n) { return 0 - 1; }
+        var r: f64 = _par_in(ni + 2);
+        var ta, va = us_network_add_resistance(_par_net, _par_in(ni), _par_in(ni + 1), r);
+        if (is_ok(ta) == 1) { _par_got_net(_par_net); } else { _par_got_err(va); }
+        return 1;
+    }
+    if (op == 2) {
+        if (ni + 2 != _par_in_n) { return 0 - 1; }
+        var t: f64 = _par_in(ni + 1);
+        var tf, vf = us_network_set_fixed_temperature(_par_net, _par_in(ni), t);
+        if (is_ok(tf) == 1) { _par_got_net(_par_net); } else { _par_got_err(vf); }
+        return 1;
+    }
+    if (ni != _par_in_n) { return 0 - 1; }
+    if (op == 4) {
+        store64(_par_mat_sb + 8, 0);
+        us_network_to_json(_par_mat_sb, _par_net);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    var ts, vs = us_network_solve(_par_net, _par_net_t, _PAR_NET_CAP);
+    if (is_ok(ts) == 1) {
+        _par_got_seq(vs);
+        var k = 0;
+        while (k < vs) {
+            _par_got_f(load64(_par_net_t + 8 * k));
+            k = k + 1;
+        }
+        return 1;
+    }
+    _par_got_err(vs);
+    if (vs == US_ERR_INVALID_PARAMETER && _par_net_overflowed() == 1) { _par_adr2 = 1; }
+    return 1;
+}
+
 # One numerical row: 1 when handled, 0 for a function with no counterpart yet, -1 for unusable inputs.
 fn _par_numerical(fp, fl): i64 {
     if (_par_g1 == 0) {
@@ -737,6 +892,8 @@ fn _par_numerical(fp, fl): i64 {
     }
     var g2r = _par_grid2d(fp, fl);
     if (g2r != 0) { return g2r; }
+    var nwr = _par_network(fp, fl);
+    if (nwr != 0) { return nwr; }
     var bc: UsBoundaryCondition;
     if (_par_eq(fp, fl, "numerical::BoundaryCondition::to_json") == 1) {
         if (_par_bc_in(0, &bc) != _par_in_n) { return 0 - 1; }

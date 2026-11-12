@@ -52,6 +52,27 @@ M6 measures a local substitution over ganita's factors against `_lu_solve`, bit 
 same order. If the bits match, M6 uses it as a named stopgap, so that a consumer's repeated `solve` doesn't grow the
 heap.
 
+## Amendment, 2026-11-12 (M6c): the stopgap, measured
+
+`us_network_solve` factors with `ganita_mat_lu` and runs the forward and back substitution itself, over ganita's
+factors, in `_lu_solve`'s operations and order. The right-hand side, solution and forward vector live in the network's
+scratch:
+- **The measurement.** On 600 seeded networks (`tests/numerical.tcyr`, drawn as probe 9's), the network's own scaled
+  system and right-hand side went through `ganita_mat_lu` + `ganita_mat_lu_solve`. 537 solved, and all 10,221
+  unknowns matched the stopgap's bit for bit. Both refused the other 63. The golden corpus agrees: 398 solutions bit
+  for bit, 69 refusals alike. So the stopgap holds, and a repeated solve allocates nothing.
+- **ganita's checks.** `_lu_solve` refuses non-finite factors or a non-finite right-hand side. The stopgap catches
+  both in the back substitution instead, with the same outcome. A NaN or ±∞ there reaches the solution: ∞ times any
+  finite value is ±∞ or NaN, and each of U's diagonal entries is tested as it divides. So the solve is refused exactly
+  when `_lu_solve` would refuse it, or would return a non-finite temperature.
+- **Non-finite input is reachable.** The Decision above expected 1.4.0's validation to keep non-finite values out of
+  the solver. It doesn't. 1/R overflows for a subnormal R (finite and > 0, so valid), and g·T overflows for a large T.
+  1.4.0 then returns NaN or ±∞ temperatures as a success. The port refuses such a system (ADR 0002 row 16; 9 golden
+  rows accepted by name).
+
+When ganita ships an allocator-taking `_lu_solve_a` (port plan §8), the stopgap gives way to it. Its bits are the
+same, so no golden row moves.
+
 ## Consequences
 
 - **Positive** — no private solver to own; ushma uses the stdlib's, which is audited for

@@ -177,6 +177,7 @@ the target, so the integrand keeps it. The run was on a loaded machine.
 | numerical/crank_nicolson_1d | 888.85 | 2,104 | 100 nodes, dt = 1 s: the Thomas sweep and back substitution in the grid's own scratch, no allocation (Rust allocates its two vectors per step; 2,665 before) |
 | numerical/adaptive_1d_4substeps | 114.92 | 1,295 | 51 nodes, one convective end, 4 explicit sub-steps (1,739 before) |
 | numerical/gauss_seidel_2d_20x20 | 1,411,100 | 3,829,000 | the 20×20 grid (left 400 K, right 300 K) to 1e-4: Rust clones it per solve, the port copies its 400 nodes into a reused grid (no allocation); about 2.5× Rust, the sweeps' arithmetic in Rust's order (M6b) |
+| numerical/thermal_network_5 | 194.17 | 829 | the 5-node chain (four 1 K/W resistances, 400 K and 300 K ends): the checks, union-find, the 3 × 3 system row-scaled, `ganita_mat_lu` (about 290 ns of it) and the substitution in the network's scratch, no allocation (Rust allocates its matrix, index vectors and result per solve; 949 before M6c's review) |
 
 **M6a's review.** The first explicit step cost about 8 ns per node, and Crank–Nicolson about 26:
 - **Explicit update:** each pass loaded its node and the next one, recomputing both addresses. It now rolls the old
@@ -190,4 +191,15 @@ the target, so the integrand keeps it. The run was on a loaded machine.
 
 **M6b.** Gauss–Seidel is the one stepped kernel within 3× of Rust. Each node's update is four loads, a store and six
 flops, and the sweep's cost dominates the call overhead. Nothing measured worth changing.
+
+**M6c's review.** The first network solve cost 949 ns. Timing its parts showed `ganita_mat_lu` at about 290 ns, the
+rest of the system at 380, connectivity at 126 and the check at 81:
+- **The system:** each matrix and right-hand-side entry was updated through a helper call, and three passes scanned
+  the matrix, the right-hand side and the factors for non-finite values. The entries are now updated inline. The
+  scans became tests in the back substitution, which give the same refusals (ADR 0003's second amendment), and the
+  scratch is resized only when the free-node count changes. This took the system from 663 to 574 ns.
+- **The check** tests finiteness on the bits rather than calling the predicates.
+- **The result:** 949 → 829 ns, the minimum of the runs; the machine was loaded by other sessions. All 476 solve rows
+  and the 600-network comparison with `ganita_mat_lu_solve` are unchanged. The rest is ganita's LU and the port's
+  per-statement cost, so it stays about 4× Rust.
 

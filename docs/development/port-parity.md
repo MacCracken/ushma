@@ -675,8 +675,9 @@ At the end of M5 the harness's summary is `12 modules, 0 failing | rows: 144841 
 
 ## 9. M6 (2026-11-12)
 
-After M6b the harness's summary is `13 modules, 0 failing | rows: 146288 ok, 0 failed, 0 measured, 0 pending, 138
-accepted (ADR 4: 63)`, identical on x86_64 ELF, `--bounds`, PE and aarch64 (after M6a: 146,026 ok, 128 accepted).
+After M6c the harness's summary is `13 modules, 0 failing | rows: 147023 ok, 0 failed, 0 measured, 0 pending, 152
+accepted (ADR 4: 63)`, identical on x86_64 ELF, `--bounds`, PE and aarch64 (after M6a: 146,026 ok, 128 accepted;
+after M6b: 146,288 ok, 138 accepted).
 
 - **numerical, the 1D grid** (M6a): 1,190 rows (class B 1,073, A 117; 336 refusals). The parity is stateful: a step's
   row holds the grid before the step and the grid after it, so each of a trajectory's steps is checked from the
@@ -715,4 +716,29 @@ accepted (ADR 4: 63)`, identical on x86_64 ELF, `--bounds`, PE and aarch64 (afte
     2⁶³ and 2⁶⁴ − 1, which serde reads as a `usize` and bayan refuses. The oracle writes a `usize` past i64 as its
     decimal text.
   - **Surface parity:** probed as ported, numerical has 29 of its 36 items; the missing 7 are the network's (M6c).
+- **numerical, the thermal network** (M6c): 749 rows more, 2,211 in all (M6c's: class B 476, A 273; 236 refusals).
+  - **`solve`** (476 rows): 398 solutions bit for bit (9,202 temperatures at 0 ulp), 69 refusals alike, and 9 accepted
+    under ADR 0002 row 16. The networks:
+    - **Rust's six tests:** series, parallel, the unanchored triangle and island, R = 1e14 and garbage lists;
+    - **every structure edge:** every node fixed (a later entry winning), a lone free node, a free node with no edge,
+      self-loops on free and fixed nodes, repeated and reversed edges, an edge between two fixed nodes, and −0 K ends
+      (node 1 at +0);
+    - **every R and T edge** on the series network;
+    - **400 seeded networks** drawn as probe 9 draws them. 100 of them have self-loops and repeated edges, and 50 have
+      up to 120 nodes. Some are singular after row scaling, and those are refused alike.
+  - **Overflow** (ADR 0002 row 16): a subnormal R overflows 1/R, and a large T overflows g·T. 1.4.0 returns NaN or ±∞
+    temperatures for those 9 rows as a success, and the port refuses them. One of them is finite and wrong in 1.4.0:
+    R = 2.2e-308 K/W beside 1 K/W should put node 1 at ≈ 400 K, and 1.4.0 says +∞. R = 1e308 and f64::MAX (a subnormal
+    conductance) solve, bit for bit.
+  - **`add_resistance` and `set_fixed_temperature`** (210 rows): on an empty network, a 3-node one and one with
+    entries, every index edge (0, 1, n − 1, n, n + 1, 2⁶³ − 1) and every value edge.
+  - **The stopgap** (ADR 0003, second amendment): the substitution over `ganita_mat_lu`'s factors gives
+    `ganita_mat_lu_solve`'s bits on 600 seeded networks (537 solved, 10,221 unknowns, 0 bits apart; 63 refused by
+    both, `tests/numerical.tcyr`). `validate.py` solves every row by its own transcription of hisab 1.4.0's
+    elimination instead, and agrees on all 476.
+  - **JSON:** 4 `to_json` and 52 `from_json` rows. 5 are accepted under ADR 5: the decoder's mapped refusals, two of
+    them a `num_nodes` past 2⁶³. Malformed tuples (short, long, a float or negative index, a string or null R), both
+    serde forms and an unknown field are among them.
+  - **Surface parity:** numerical 36 of 36. **Tests:** all 27 of numerical's. The ledger has 428 of 479 ported, and the
+    51 left are M7's.
 
