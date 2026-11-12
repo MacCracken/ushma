@@ -573,7 +573,7 @@ Every std f64 method in non-test `src/`, 1.4.0, whole crate:
 | `exp_m1` (2) | **none** in math or ganita | `_us_cr_expm1` (P3) | class C |
 | `powf` (29) | `ganita_f64_pow` (note its `pow(−1, huge)` defect, tanmatra ADR 0007) | `_us_cr_pow`; exact-constant exponents reviewed (1/3 → `ganita_f64_cbrt`, correctly rounded; 1/6, 9/16, −8/27) | class C |
 | `atan` (11) | builtin `f64_atan`; `_f64_atan_polyfill` (≤1 ulp, same bits); `ganita_f64_atan2` | `_us_cr_atan2(x, 1.0)` (atan2 with x = 1 > 0 is atan exactly) | class C |
-| `tanh` (2) | `ganita_f64_tanh` | `ganita_f64_tanh` if step 8 shows it correctly rounded, else `_us_cr_tanh` | class C |
+| `tanh` (2) | `ganita_f64_tanh`: **not correctly rounded** (52 of 860 golden rows off, port-parity.md §2b) | `_us_cr_tanh`, ushma's own (ADR 0004 amendment) | class C |
 | `powi` (7) | — | repeated multiplication in Rust's order | class B |
 | `max` (11), `min` (6), `clamp` (9) | `f64_max`, `f64_min`, `f64_clamp` (math.cyr) | wrappers with Rust's NaN semantics (step 4) | exact |
 | `is_finite` (21), `is_nan` (5) | none | `x - x == 0`, `x != x` helpers | exact |
@@ -671,7 +671,7 @@ the gate is a warning-free `cyrius test`:
 
 | Milestone | Status | Golden rows | Reference tests | Benches | Notes |
 |---|---|---|---|---|---|
-| M0 Prep & initialize | 🟡 part 1 done 2026-11-11 (steps 0–3: tag verified, Rust bench baseline, `cyrius port`, repairs, manifest, ADRs 0001–0005; gates green on ELF, `--bounds`, PE, aarch64) | 15,738 (constants 9, math 15,687, table presets 42) | — | Rust baseline: 63 | Parts 2a (math check, generator, validate.py), 2b (table data, probe_tables.py), 2c-1 (parity harness: 3,374 ok, 0 failed) 2c-2a (MPFR corrected oracle: 26 rows) and 2c-2b (mathx vendored: 14,852 ok + 26 accepted at 0 ulp) done. Next: 2c-3 CR tanh + cr_verify |
+| M0 Prep & initialize | 🟡 part 1 done 2026-11-11 (steps 0–3: tag verified, Rust bench baseline, `cyrius port`, repairs, manifest, ADRs 0001–0005; gates green on ELF, `--bounds`, PE, aarch64) | 15,738 (constants 9, math 15,687, table presets 42) | — | Rust baseline: 63 | Parts 2a (math check, generator, validate.py), 2b (table data, probe_tables.py), 2c-1 (parity harness: 3,374 ok, 0 failed) 2c-2a (MPFR corrected oracle: 26 rows), 2c-2b (mathx vendored) and 2c-3 (CR tanh, cr_verify: every golden row gated, 15,712 ok + 26 accepted) done. Next: part 3 (baselines, probes 1–12, upstream filings) |
 | M1 Foundation, logging & transfer | ☐ | | | | |
 | M2 Equations of state & entropy | ☐ | | | | |
 | M3 Phase & steam | ☐ | | | | M3a/b/c |

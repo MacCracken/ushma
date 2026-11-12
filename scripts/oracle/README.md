@@ -134,6 +134,20 @@ pow and atan2. It is vendored from kimiya's generator with the same algorithms (
 closure reads. `--check` verifies the file is current. `--check-kimiya` also confirms every value is bit-identical
 to kimiya's `src/mathx_data.cyr` (the gates run it when kimiya's checkout is beside this one).
 
+## cr_verify.py
+
+Checks `src/mathx.cyr`'s correctly rounded exp, expm1, ln, pow, atan2 and tanh against MPFR, bit for bit, on
+x86_64 ELF, PE (wine) and aarch64 (qemu). Each primitive gets about 10^6 seeded arguments:
+- binade-uniform over its domain, plus the dense regions where the code changes path;
+- the known hard-to-round cases;
+- the accurate path forced on 100,000 of them;
+- a check that the fast path agrees with the full result wherever its test passes, and that every target gives the
+  same bits and flags.
+
+The families for the five vendored primitives are kimiya's, unchanged, and tanh's is ushma's own. It also checks
+x^2.5 over every binade, and the special values of pow, atan2 and tanh against MPFR and glibc. Options:
+`--only tanh,exp`, `--targets elf`, `--work DIR` (default `build/cr-verify`).
+
 ## probe_tables.py
 
 Compiles every generated constant and cell with the Cyrius compiler (`build/oracle-probe/`)

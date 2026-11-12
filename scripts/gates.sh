@@ -40,6 +40,7 @@ if [ -f scripts/oracle/Cargo.toml ]; then
                     [ -f ../kimiya/src/mathx_data.cyr ] && flag=--check-kimiya
                     PAT='STALE|DIFFERS|current' run python3 -I -B "scripts/oracle/$py" "$flag" ;;
                 probe_tables.py) PAT='FAIL|checked' run python3 -I -B "scripts/oracle/$py" . --all-targets ;;
+                cr_verify.py) PAT='MISMATCH|DIFFER|cr_verify:|special values' TAILN=6 run python3 -I -B "scripts/oracle/$py" ;;
                 *) PAT='FAIL|rows|ok|checked|mismatch' TAILN=6 run python3 -I -B "scripts/oracle/$py" . ;;
             esac
         fi

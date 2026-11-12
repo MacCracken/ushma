@@ -1,5 +1,5 @@
 """Generate src/mathx_data.cyr: the tables and constants of src/mathx.cyr's correctly rounded exp, expm1,
-ln, pow and atan2 (ADR 0004).
+ln, pow, atan2 and tanh (ADR 0004).
 
 Vendored from kimiya's scripts/oracle/mathx_tables.py (kimiya commit 5b14c85): the same algorithms and the
 same assertions, for the subset of kimiya's tables that ushma's primitives read (port plan P3; the closure is
@@ -26,6 +26,7 @@ Besides writing the values, the generator checks the properties the code's error
 - π: π/2's Cody–Waite parts P1, P2 have at most 33 bits, |P2| < 2^-32, |P3| < 2^-65 and the tail
   below 2^-225 (computed with the π constants atan2 reads).
 - atan: atan(j/256) as triple-doubles to 2^-158.
+- tanh (ushma's own, M0 part 2c-3): TANH_ONE in (19, 19.1).
 """
 from fractions import Fraction
 import ctypes
@@ -435,6 +436,16 @@ def limits():
     }
 
 
+def tanh_limits():
+    """ushma's own (not kimiya's): TANH_ONE, the largest double a with RN(tanh(a)) < 1. Above it tanh rounds to 1
+    (1 − tanh a = 2/(e^(2a) + 1) is then below 2^-54, half the gap under 1). No double is a tie: tanh is
+    transcendental at every algebraic x ≠ 0 (e^(2x) would otherwise be algebraic)."""
+    fb = _m_of_bits
+    one = _last_true(lambda b: mpfr_ref.tanh(fb(b)) < 1.0, bits(18.0), bits(20.0))
+    assert 19.0 < fb(one) < 19.1
+    return {"TANH_ONE": one}
+
+
 # ── output ───────────────────────────────────────────────────────────────────────────────────────
 
 def _hex(x):
@@ -539,7 +550,15 @@ def render():
     L += _table("_US_CR_ATAN_ACC", [_hex(v) for row in atan_acc() for v in row], [
         "(−1)^k/(2k + 1) for k = 1 … 8 as triple-doubles (index 3·(k − 1)): the accurate atan series.",
     ], per_line=3)
+    tl = {k: _m_of_bits(v) for k, v in tanh_limits().items()}
+    L += _scalars("", tl, ["TANH_ONE"], [
+        "ushma's own (not in kimiya): TANH_ONE, the largest double a with tanh(a) rounding below 1 (MPFR's",
+        "correctly rounded tanh, bisected over bit patterns); for |x| above it tanh rounds to ±1.",
+    ])
     return "\n".join(L).rstrip("\n") + "\n"
+
+
+USHMA_OWN = {"TANH_ONE"}   # the items this generator adds to kimiya's (tanh, M0 part 2c-3)
 
 
 def _items(text, prefix):
@@ -565,11 +584,12 @@ def main():
             kim = root.parent / "kimiya/src/mathx_data.cyr"
             ours = _items(text, "_US_CR_")
             theirs = _items(kim.read_text(), "_K" + "M_CR_")   # kimiya's prefix
-            bad = [n for n in ours if theirs.get(n) != ours[n]]
+            own = sorted(n for n in ours if n in USHMA_OWN)
+            bad = [n for n in ours if n not in USHMA_OWN and theirs.get(n) != ours[n]]
             if bad:
                 print(f"DIFFERS  from kimiya's {kim}: {bad}")
                 sys.exit(1)
-            msg += f"; all {len(ours)} items bit-identical to kimiya's"
+            msg += f"; all {len(ours) - len(own)} vendored items bit-identical to kimiya's, ushma's own: {own}"
         print(msg)
         return
     out.write_text(text)

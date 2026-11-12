@@ -250,8 +250,8 @@ fn _par_fill_species(i) {
 # - Class B: powi (`_us_powi`, compiler-builtins' square-and-multiply order).
 # - Class C (ADR 0004): exp, exp_m1, ln, powf, atan on src/mathx.cyr's correctly rounded primitives, compared at
 #   0 ulp against the corrected oracle (tests/golden/math.cr.tsv): a row glibc misrounds passes as "accepted (ADR
-#   4)", and one that matches glibc's misrounding instead fails. tanh is measured on ganita until its correctly
-#   rounded primitive (M0 part 2c-3).
+#   4)", and one that matches glibc's misrounding instead fails. tanh is ushma's own correctly rounded primitive
+#   (M0 part 2c-3), the rest are vendored from kimiya.
 fn _par_math(fp, fl): i64 {
     var x: f64 = _par_in(0);
     if (_par_eq(fp, fl, "f64::sqrt") == 1) { var r: f64 = f64_sqrt(x); _par_got_f(r); return 1; }
@@ -263,7 +263,7 @@ fn _par_math(fp, fl): i64 {
     if (_par_eq(fp, fl, "f64::exp_m1") == 1) { var r: f64 = _us_cr_expm1(x); _par_got_f(r); return 1; }
     if (_par_eq(fp, fl, "f64::ln") == 1) { var r: f64 = _us_cr_ln(x); _par_got_f(r); return 1; }
     if (_par_eq(fp, fl, "f64::atan") == 1) { var r: f64 = _us_cr_atan2(x, 1.0); _par_got_f(r); return 1; }
-    if (_par_eq(fp, fl, "f64::tanh") == 1) { var r: f64 = ganita_f64_tanh(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::tanh") == 1) { var r: f64 = _us_cr_tanh(x); _par_got_f(r); return 1; }
     if (_par_in_n < 2) { return 0; }
     if (_par_eq(fp, fl, "f64::powi") == 1) {
         var r: f64 = _us_powi(x, _par_in(1));
@@ -354,6 +354,13 @@ fn _par_shadows(mp, ml, fp, fl, cls) {
         _par_shadow_record("f64::atan ~ ganita_f64_atan2(x, 1)", cls);
         return 0;
     }
+    if (_par_eq(fp, fl, "f64::tanh") == 1) {
+        _par_got_n = 0;
+        var rt: f64 = ganita_f64_tanh(x);
+        _par_got_f(rt);
+        _par_shadow_record("f64::tanh ~ ganita_f64_tanh", cls);
+        return 0;
+    }
     if (_par_in_n < 2) { return 0; }
     var y: f64 = _par_in(1);
     if (_par_eq(fp, fl, "f64::powf") == 1) {
@@ -381,8 +388,8 @@ fn _par_shadows(mp, ml, fp, fl, cls) {
 }
 
 # The class-C bound for a function, in ulps; -1 when none is set yet (the rows are measured). Under ADR 0004 every
-# class-C function on a correctly rounded primitive is compared at 0 ulp against the corrected oracle. tanh is
-# measured until its primitive exists (M0 part 2c-3). A shadow line uses its row's function's bound.
+# class-C function on a correctly rounded primitive is compared at 0 ulp against the corrected oracle. A shadow line
+# is measured (its name has no bound).
 #must_use
 fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "f64::exp") == 1) { return 0; }
@@ -390,6 +397,7 @@ fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "f64::ln") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::powf") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::atan") == 1) { return 0; }
+    if (_par_eq(fp, fl, "f64::tanh") == 1) { return 0; }
     return 0 - 1;
 }
 

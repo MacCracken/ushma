@@ -42,6 +42,20 @@ bit-copying glibc's errors.
    exact rationals Rust misrepresents (`1.0/3.0`, `1.0/6.0` exponents). Each family gets an
    ADR 0002 row.
 
+## Amendment, 2026-11-11 (M0 part 2c-3): tanh
+
+Step 8 measured `ganita_f64_tanh` against the corrected oracle. It is off by 1 ulp on 52 of the 860 golden rows,
+where glibc is correctly rounded, so it is not used. `_us_cr_tanh` is ushma's own correctly rounded tanh, in
+`src/mathx.cyr` after the vendored code. It computes tanh a = E/(E + 2) with E = expm1(2a), on the vendored expm1's
+arithmetic. The fast path is a double-double with a proven bound and a rounding test (the map's relative
+sensitivity 2/(E + 2) ≤ 1 keeps E's error from growing). The accurate path is a triple-double to 2^-149, then RN3.
+- **Below 2^-27:** x itself.
+- **Above `TANH_ONE`:** ±1. 19.061547465398494, from MPFR, generated into `src/mathx_data.cyr`.
+
+tanh is transcendental at every nonzero algebraic argument, so there are no exact cases or ties.
+`scripts/oracle/cr_verify.py` checks it against MPFR on 1,082,051 arguments per target, the accurate path forced on
+100,045; the fast path falls back on 1.3·10^-5 of them.
+
 ## Consequences
 
 - **Positive** — results are the best a double can hold, and identical on x86_64 ELF, PE and

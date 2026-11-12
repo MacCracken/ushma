@@ -1417,3 +1417,7 @@ var _US_CR_ATAN_ACC: i64[24] = {
     0xBFB1111111111111, 0xBC31111111111111, 0xB8B1111111111111,
     0x3FAE1E1E1E1E1E1E, 0x3C2E1E1E1E1E1E1E, 0x38AE1E1E1E1E1E1E
 };
+
+# ushma's own (not in kimiya): TANH_ONE, the largest double a with tanh(a) rounding below 1 (MPFR's
+# correctly rounded tanh, bisected over bit patterns); for |x| above it tanh rounds to ±1.
+var _US_CR_TANH_ONE = 0x40330FC1931F09C9;   # 19.061547465398494

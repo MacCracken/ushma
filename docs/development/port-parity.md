@@ -131,6 +131,40 @@ PE and aarch64. The corpus is about 9,000 transcendental arguments. The dense MP
 `cr_verify.py`: ≥ 10⁶ arguments per primitive, hard cases, the accurate path forced, on every target) comes with
 the correctly rounded tanh in M0 part 2c-3.
 
+### 2d. tanh, and the dense MPFR sweep (M0 part 2c-3, 2026-11-11)
+
+`_us_cr_tanh` (ADR 0004 amendment) is exact on all 860 golden rows, where `ganita_f64_tanh` is off on 52. With it,
+every golden row is gated: `15712 ok, 0 failed, 0 measured, 0 pending, 26 accepted (ADR 4: 26)`.
+
+`python3 -I -B scripts/oracle/cr_verify.py` (vendored from kimiya, plus ushma's tanh family) checks every
+primitive against MPFR on about 10^6 seeded arguments per target, with the accurate path forced on 100,000 of
+them. It also checks that the fast path agrees with the full result wherever its test passes, and that every target
+gives the same bits and flags. The results are in §2e.
+
+### 2e. The MPFR sweep on three targets (2026-11-11)
+
+`python3 -I -B scripts/oracle/cr_verify.py` (MPFR 4.2.2; x86_64 ELF, x86_64 PE under wine, aarch64 under qemu):
+
+| Primitive | Arguments | Mismatches | Accurate path forced | Fast path falls back on |
+|---|---|---|---|---|
+| exp | 1,096,454 | 0 | 100,045, 0 mismatches | 2.86·10⁻⁴ (mostly tiny \|x\|) |
+| expm1 | 1,099,052 | 0 | 100,045, 0 | 5.78·10⁻³ (mostly the overflow end, which the fast path leaves to the accurate one) |
+| ln | 1,001,201 | 0 | 100,039, 0 | 6.19·10⁻⁵ (mostly near 1) |
+| pow | 1,306,099 | 0 | 100,537, 0 | 1.91·10⁻⁴ |
+| atan2 | 1,014,417 | 0 | 100,411, 0 | 1.87·10⁻⁵ |
+| tanh | 1,082,051 | 0 | 100,045, 0 | 1.29·10⁻⁵ (8 of the 14 at the 1 end) |
+
+- **Fast path vs full result:** wherever the fast path's test passes, its result equals the full one, on every
+  argument.
+- **Across targets:** bits and flags are identical on all three.
+- **x^2.5 (Redlich–Kwong's Tc^2.5):** 300,007 arguments, 0 mismatches.
+- **Special values:** pow 537, atan2 361 and tanh 31, all equal to MPFR's. glibc and MPFR differ on two of the
+  published hard pow cases (`pow(0.5951224589825083, 0.8256884680195185)`,
+  `pow(2.6430276526426257, 0.46875)`), where glibc misrounds and the port matches MPFR.
+
+So every class-C function ushma calls is correctly rounded and target-independent: exp, exp_m1, ln, powf, atan
+(through atan2) and tanh. The class-C bound is therefore 0 ulp against the corrected oracle everywhere (ADR 0004).
+
 ## 3. Probes 1–12 (M0 step 9)
 
 *Pending (M0 part 3).*
