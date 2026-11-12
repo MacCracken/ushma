@@ -526,12 +526,34 @@ fn us_superheated_lookup(temperature: f64, pressure: f64, out: *UsSuperheated): 
     return Ok(0);
 }
 
-# The entropy of us_superheated_lookup(T, P) into *s: Ok(0), or its refusal.
-fn _us_sh_s_at(t: f64, pressure: f64, s): Result {
-    var e: UsSuperheated;
-    var tr, vr = us_superheated_lookup(t, pressure, &e);
-    if (is_err_result(tr) == 1) { return Err(vr); }
-    var x: f64 = e.specific_entropy;
+# The entropy us_superheated_lookup(T, P) gives, into *s, for a P the caller has checked (> 0, within the tiers) whose
+# tier `hi` and placement (`on_tier` 1 at a tier pressure) it has found, and, between tiers, whose ln P weight `frac`
+# it computed once as the lookup computes it. Ok(0), or the lookup's refusal. The same bits as the lookup's
+# specific_entropy, without its volume's two ln and exp or the weight's two ln: the inversion's bisection probes the
+# entropy at one pressure about seven times (M4b's review).
+fn _us_sh_s_at(t: f64, pressure: f64, hi, on_tier, frac: f64, s): Result {
+    if (_us_finite_gt(t, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_superheated_lookup", "temperature", t));
+    }
+    var a: UsSuperheated;
+    var x: f64 = 0.0;
+    if (on_tier == 1) {
+        if (_us_sh_tier(hi, t, &a) == 0) {
+            return Err(_us_fail_ff(US_ERR_SUPERHEAT_OUT_OF_RANGE, "us_superheated_lookup", "state", "T", t, "P",
+                pressure));
+        }
+        x = a.specific_entropy;
+        store64(s, x);
+        return Ok(0);
+    }
+    var b: UsSuperheated;
+    if (_us_sh_tier(hi - 1, t, &a) == 0 || _us_sh_tier(hi, t, &b) == 0) {
+        return Err(_us_fail_ff(US_ERR_SUPERHEAT_OUT_OF_RANGE, "us_superheated_lookup", "state", "T", t, "P",
+            pressure));
+    }
+    var sa: f64 = a.specific_entropy;
+    var sb: f64 = b.specific_entropy;
+    x = calc_lerp(sa, sb, frac);
     store64(s, x);
     return Ok(0);
 }
@@ -620,18 +642,27 @@ fn us_superheated_by_entropy(pressure: f64, entropy: f64, out: *UsSuperheated): 
         store64(&bps + (8 * (j + 1)), x);
         i = i + 1;
     }
+    var on = 0;
+    if (on_tier) { on = 1; }
+    var frac: f64 = 0.0;
+    if (on == 0) {
+        var p_lo: f64 = _US_STEAM_SUPERHEAT_PRESSURES[hi - 1];
+        var ln1: f64 = _us_cr_ln(pressure / p_lo);
+        var ln2: f64 = _us_cr_ln(p_hi / p_lo);
+        frac = ln1 / ln2;
+    }
     var sw[8];
     var lo = 0;
     var hi_i = nb - 1;
     var b_lo: f64 = load64(&bps);
-    var t1, v1 = _us_sh_s_at(b_lo, pressure, &sw);
+    var t1, v1 = _us_sh_s_at(b_lo, pressure, hi, on, frac, &sw);
     if (is_err_result(t1) == 1) {
         _us_span_exit();
         return Err(v1);
     }
     var s_lo: f64 = load64(&sw);
     var b_hi: f64 = load64(&bps + (8 * hi_i));
-    var t2, v2 = _us_sh_s_at(b_hi, pressure, &sw);
+    var t2, v2 = _us_sh_s_at(b_hi, pressure, hi, on, frac, &sw);
     if (is_err_result(t2) == 1) {
         _us_span_exit();
         return Err(v2);
@@ -647,7 +678,7 @@ fn us_superheated_by_entropy(pressure: f64, entropy: f64, out: *UsSuperheated): 
     while (hi_i - lo > 1) {
         var mid = (lo + hi_i) / 2;
         var b_mid: f64 = load64(&bps + (8 * mid));
-        var t3, v3 = _us_sh_s_at(b_mid, pressure, &sw);
+        var t3, v3 = _us_sh_s_at(b_mid, pressure, hi, on, frac, &sw);
         if (is_err_result(t3) == 1) {
             _us_span_exit();
             return Err(v3);

@@ -558,8 +558,9 @@ The harness's summary at the end of M3 is `10 modules, 0 failing | rows: 132784 
 
 ## 7. M4 (2026-11-12)
 
-After M4a the harness's summary is `11 modules, 0 failing | rows: 135612 ok, 0 failed, 0 measured, 0 pending, 87
-accepted (ADR 4: 47)`. It is identical on x86_64 ELF, `--bounds`, PE and aarch64.
+After M4b the harness's summary is `11 modules, 0 failing | rows: 137941 ok, 0 failed, 0 measured, 0 pending, 92
+accepted (ADR 4: 47)`. It is identical on x86_64 ELF, `--bounds`, PE and aarch64 (after M4a: 135,612 ok, 87
+accepted).
 
 - **cycle, the ideal-gas part** (M4a): 2,839 rows (class A 144, B 747, C 1,948; 395 refusals).
   - **The helpers:** the isochoric and isobaric heats and the adiabatic work, on seeded grids and every argument at
@@ -583,3 +584,31 @@ accepted (ADR 4: 47)`. It is identical on x86_64 ELF, `--bounds`, PE and aarch64
     push accessors and every decoder allocation in turn. Each refusal is an Err, never an abort.
   - **Surface parity:** cycle is scheduled until M4c. Probed as ported, it has 29 of its 44 items, and the missing
     15 are M4b's and M4c's.
+- **cycle, the steam cycles** (M4b): 2,334 rows more, 5,173 in all (M4b's: class A 53, B 213, C 2,068; 1,140
+  refusals).
+  - **`rankine_cycle`** (1,482 rows): seven condenser pressures, from the table's first to 500 kPa, against every
+    tier, every midpoint between tiers, 20 MPa and the critical pressure. Each combination is tried saturated and at
+    six superheats. On top of that grid:
+    - each tier temperature ± 1 ulp on three tiers, and each tier's saturation temperature ± 1 ulp;
+    - the boiler at the condenser pressure ± 1 ulp, and the table's ends ± 1 ulp;
+    - the superheat where the turbine exhaust leaves the wet region (s₃ = s_g at the condenser, bisected) ± 2 ulps.
+      On four pairs the switch lies inside the table. At 100 kPa it goes from wet to superheated with continuous T₄.
+      At 47.39 kPa and 7.384 kPa the superheated side is 1.4.0's `SuperheatOutOfRange`, because that condenser
+      pressure lies between tiers or below them;
+    - seeded draws, and every argument at the edges, the superheat's `Option` among them (`n:` or `f:`).
+    Every row is 0 ulp against MPFR, and glibc misrounds none.
+  - **`refrigeration_cycle`** (586 rows): nine evaporator pressures against the tiers and six more condensers, the
+    condenser at the evaporator ± 1 ulp, the table's first pressure ± 1 ulp, and, on four condensers, the evaporator
+    where the compressor exit enters the superheated table (bisected) ± 2 ulps: two refusals, then three results.
+    Plus seeded draws and the edges. 0 ulp against MPFR.
+  - **`heat_pump_cop`** (213 rows, class B) and **`RefrigerationResult`'s JSON** (53 rows, 5 accepted under ADR 5's
+    mapped divergences).
+  - **Found in porting: the sign of zero.** The ulp line puts +0 and −0 at one point, so a class B or C row whose zero
+    had the other sign passed as 0 ulp. Six ports of Rust's f64 `sum` started at `0.0 - 0.0`, which is +0.0, while
+    Rust's starts at −0.0. That made 5 rows wrong (an empty series resistance; Kay's three rules over a −0.0 product),
+    all passing. The harness now compares a zero's sign in every class. The sums start at `_US_NEG_ZERO`, and `_us_neg`
+    is Rust's unary minus, which the refrigeration cycle's `net_work: -w_comp` needs.
+  - **Found in porting: a stale ADR 5 flag.** It was reset only on the material, state and phase routes, so a failing
+    row of another module after a JSON row would have been accepted as ADR 5. The tightened check showed it, by
+    accepting the two series rows; the flag is now reset per row.
+  - **Surface parity:** probed as ported, cycle has 35 of its 44 items. The missing 9 are M4c's.

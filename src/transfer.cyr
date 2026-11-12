@@ -106,7 +106,7 @@ fn us_thermal_resistance_convection(h: f64, area: f64): Result {
 # (so an empty list is −0.0).
 #must_use
 fn us_thermal_resistance_series(rs, n): f64 {
-    var s: f64 = 0.0 - 0.0;
+    var s: f64 = _US_NEG_ZERO;
     var k = 0;
     while (k < n) {
         var r: f64 = load64(rs + (8 * k));
@@ -129,7 +129,7 @@ fn us_thermal_resistance_parallel(rs, n): Result {
         }
         k = k + 1;
     }
-    var s: f64 = 0.0 - 0.0;
+    var s: f64 = _US_NEG_ZERO;
     k = 0;
     while (k < n) {
         var r2: f64 = load64(rs + (8 * k));

@@ -3906,6 +3906,20 @@ var _US_TINY: f64 = 0.000000000000000000000000000001;
 # −∞, a compile-time constant (_US_INF is +∞, src/mathx.cyr).
 const _US_NEG_INF = 0.0 - 1.0 / 0.0;
 
+# −0.0, Rust's `sum` start: an empty f64 sum is −0.0, and −0.0 + −0.0 stays −0.0. `0.0 - 0.0` is +0.0, so the sign
+# comes from a product (+0 × −1).
+const _US_NEG_ZERO = 0.0 * (0.0 - 1.0);
+
+# Rust's unary minus, −x: x with its sign bit flipped. `0.0 - x` differs at x = +0.0, where it gives +0.0 and −x gives
+# −0.0.
+#must_use
+#pure
+fn _us_neg(x: f64): f64 {
+    var b = load64(&x) ^ 0x8000000000000000;
+    var r: f64 = b;
+    return r;
+}
+
 # 1 when x is finite and strictly greater than `bound`, else 0, for any bound: `x > bound` is false for NaN and −∞,
 # `x < +∞` for NaN and +∞. One branch-free expression, so #inline takes it: three checks cost 6 ns instead of 21 (M1d's
 # review, docs/benchmarks-rust-v-cyrius.md).
@@ -4779,7 +4793,7 @@ fn us_thermal_resistance_convection(h: f64, area: f64): Result {
 # (so an empty list is −0.0).
 #must_use
 fn us_thermal_resistance_series(rs, n): f64 {
-    var s: f64 = 0.0 - 0.0;
+    var s: f64 = _US_NEG_ZERO;
     var k = 0;
     while (k < n) {
         var r: f64 = load64(rs + (8 * k));
@@ -4802,7 +4816,7 @@ fn us_thermal_resistance_parallel(rs, n): Result {
         }
         k = k + 1;
     }
-    var s: f64 = 0.0 - 0.0;
+    var s: f64 = _US_NEG_ZERO;
     k = 0;
     while (k < n) {
         var r2: f64 = load64(rs + (8 * k));
@@ -5891,7 +5905,7 @@ fn _us_mixture_check(ys, ny, vals, nv, fname): i64 {
         if (_us_is_finite(v) == 0) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, "value", v); }
         k = k + 1;
     }
-    var s: f64 = 0.0 - 0.0;
+    var s: f64 = _US_NEG_ZERO;
     k = 0;
     while (k < ny) {
         var y2: f64 = load64(ys + (8 * k));
@@ -5907,7 +5921,7 @@ fn _us_mixture_check(ys, ny, vals, nv, fname): i64 {
 fn _us_kays(ys, ny, vals, nv, fname): Result {
     var code = _us_mixture_check(ys, ny, vals, nv, fname);
     if (code != 0) { return Err(code); }
-    var s: f64 = 0.0 - 0.0;
+    var s: f64 = _US_NEG_ZERO;
     var k = 0;
     while (k < ny) {
         var y: f64 = load64(ys + (8 * k));
@@ -6093,7 +6107,7 @@ fn us_entropy_of_mixing(moles: f64, xs, n): Result {
         }
         k = k + 1;
     }
-    var fs: f64 = 0.0 - 0.0;
+    var fs: f64 = _US_NEG_ZERO;
     k = 0;
     while (k < n) {
         var x2: f64 = load64(xs + (8 * k));
@@ -6105,7 +6119,7 @@ fn us_entropy_of_mixing(moles: f64, xs, n): Result {
         _us_span_exit();
         return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_entropy_of_mixing", "fraction sum", fs));
     }
-    var s: f64 = 0.0 - 0.0;
+    var s: f64 = _US_NEG_ZERO;
     k = 0;
     while (k < n) {
         var x3: f64 = load64(xs + (8 * k));
@@ -8375,12 +8389,34 @@ fn us_superheated_lookup(temperature: f64, pressure: f64, out: *UsSuperheated): 
     return Ok(0);
 }
 
-# The entropy of us_superheated_lookup(T, P) into *s: Ok(0), or its refusal.
-fn _us_sh_s_at(t: f64, pressure: f64, s): Result {
-    var e: UsSuperheated;
-    var tr, vr = us_superheated_lookup(t, pressure, &e);
-    if (is_err_result(tr) == 1) { return Err(vr); }
-    var x: f64 = e.specific_entropy;
+# The entropy us_superheated_lookup(T, P) gives, into *s, for a P the caller has checked (> 0, within the tiers) whose
+# tier `hi` and placement (`on_tier` 1 at a tier pressure) it has found, and, between tiers, whose ln P weight `frac`
+# it computed once as the lookup computes it. Ok(0), or the lookup's refusal. The same bits as the lookup's
+# specific_entropy, without its volume's two ln and exp or the weight's two ln: the inversion's bisection probes the
+# entropy at one pressure about seven times (M4b's review).
+fn _us_sh_s_at(t: f64, pressure: f64, hi, on_tier, frac: f64, s): Result {
+    if (_us_finite_gt(t, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_superheated_lookup", "temperature", t));
+    }
+    var a: UsSuperheated;
+    var x: f64 = 0.0;
+    if (on_tier == 1) {
+        if (_us_sh_tier(hi, t, &a) == 0) {
+            return Err(_us_fail_ff(US_ERR_SUPERHEAT_OUT_OF_RANGE, "us_superheated_lookup", "state", "T", t, "P",
+                pressure));
+        }
+        x = a.specific_entropy;
+        store64(s, x);
+        return Ok(0);
+    }
+    var b: UsSuperheated;
+    if (_us_sh_tier(hi - 1, t, &a) == 0 || _us_sh_tier(hi, t, &b) == 0) {
+        return Err(_us_fail_ff(US_ERR_SUPERHEAT_OUT_OF_RANGE, "us_superheated_lookup", "state", "T", t, "P",
+            pressure));
+    }
+    var sa: f64 = a.specific_entropy;
+    var sb: f64 = b.specific_entropy;
+    x = calc_lerp(sa, sb, frac);
     store64(s, x);
     return Ok(0);
 }
@@ -8469,18 +8505,27 @@ fn us_superheated_by_entropy(pressure: f64, entropy: f64, out: *UsSuperheated): 
         store64(&bps + (8 * (j + 1)), x);
         i = i + 1;
     }
+    var on = 0;
+    if (on_tier) { on = 1; }
+    var frac: f64 = 0.0;
+    if (on == 0) {
+        var p_lo: f64 = _US_STEAM_SUPERHEAT_PRESSURES[hi - 1];
+        var ln1: f64 = _us_cr_ln(pressure / p_lo);
+        var ln2: f64 = _us_cr_ln(p_hi / p_lo);
+        frac = ln1 / ln2;
+    }
     var sw[8];
     var lo = 0;
     var hi_i = nb - 1;
     var b_lo: f64 = load64(&bps);
-    var t1, v1 = _us_sh_s_at(b_lo, pressure, &sw);
+    var t1, v1 = _us_sh_s_at(b_lo, pressure, hi, on, frac, &sw);
     if (is_err_result(t1) == 1) {
         _us_span_exit();
         return Err(v1);
     }
     var s_lo: f64 = load64(&sw);
     var b_hi: f64 = load64(&bps + (8 * hi_i));
-    var t2, v2 = _us_sh_s_at(b_hi, pressure, &sw);
+    var t2, v2 = _us_sh_s_at(b_hi, pressure, hi, on, frac, &sw);
     if (is_err_result(t2) == 1) {
         _us_span_exit();
         return Err(v2);
@@ -8496,7 +8541,7 @@ fn us_superheated_by_entropy(pressure: f64, entropy: f64, out: *UsSuperheated): 
     while (hi_i - lo > 1) {
         var mid = (lo + hi_i) / 2;
         var b_mid: f64 = load64(&bps + (8 * mid));
-        var t3, v3 = _us_sh_s_at(b_mid, pressure, &sw);
+        var t3, v3 = _us_sh_s_at(b_mid, pressure, hi, on, frac, &sw);
         if (is_err_result(t3) == 1) {
             _us_span_exit();
             return Err(v3);
@@ -8560,12 +8605,15 @@ fn us_superheated_from_json(buf, n, out: *UsSuperheated): Result {
 
 # --- cycle.cyr ---
 
-# cycle.cyr — thermodynamic cycles: the ideal-gas process heats and works, the Otto, Diesel and Brayton cycles (Rust
-# 1.4.0 `cycle`). All SI: kelvins, pascals, joules, moles; the ideal-gas cycles use the calorically perfect gas.
+# cycle.cyr — thermodynamic cycles (Rust 1.4.0 `cycle`): the ideal-gas process heats and works; the Otto, Diesel and
+# Brayton cycles; the Rankine and vapor-compression refrigeration cycles on the steam tables (src/steam.cyr), and the
+# heat-pump COP. All SI: kelvins, pascals, joules, moles; the ideal-gas cycles use the calorically perfect gas, and the
+# steam cycles work per kilogram of water.
 #
-# Each function computes in the order Rust 1.4.0 writes, so its arithmetic is bit-identical (class B), and its ln and
-# pow are correctly rounded (ADR 0004, class C). A refusal returns Err(US_ERR_*) and reports its value at DEBUG
-# (src/validate.cyr). The three cycles open a DEBUG span under Rust's span name.
+# Each function computes in the order Rust 1.4.0 writes, so its arithmetic is bit-identical (class B), and its ln, exp
+# and pow are correctly rounded (ADR 0004, class C). A refusal returns Err(US_ERR_*) and reports its value at DEBUG
+# (src/validate.cyr); a steam-table refusal inside a steam cycle is returned as Rust's `?` returns it. The five
+# cycles open a DEBUG span under Rust's span name.
 #
 # A process is a UsProcess code and a cycle kind a UsCycle code (Rust's variant order; append-only). A state point is
 # a UsStatePoint. A cycle's result is a UsCycleResult that the caller owns and the analyses fill: its state points
@@ -8618,6 +8666,14 @@ struct UsCycleResult {
     efficiency: f64;
     back_work_ratio: f64;
     gamma: f64;
+}
+
+# A refrigeration cycle's result: its cycle (the first field, so a *UsRefrigerationResult is also the address of its
+# UsCycleResult: us_refrigeration_result_cycle) and its two coefficients of performance.
+struct UsRefrigerationResult {
+    cycle: UsCycleResult;
+    cop_refrigeration: f64;
+    cop_heat_pump: f64;
 }
 
 # The byte offset of a UsCycleResult's six numbers (heat_in … gamma), after its kind, allocator and two vecs. Add it
@@ -8680,6 +8736,29 @@ fn us_cycle_result_init_a(a, r: *UsCycleResult): Result {
     r.gamma = 0.0;
     if (r.states == 0 || r.processes == 0) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_cycle_result_init")); }
     return Ok(0);
+}
+
+# Makes *rr an empty refrigeration result (its cycle as us_cycle_result_init makes one, both COPs 0), its vecs on the
+# global heap: Ok(0), or Err(US_ERR_OUT_OF_MEMORY) (*rr is then not usable).
+#must_use
+fn us_refrigeration_result_init(rr: *UsRefrigerationResult): Result {
+    return us_refrigeration_result_init_a(default_alloc(), rr);
+}
+
+# us_refrigeration_result_init with the cycle's vecs on allocator `a`.
+#must_use
+fn us_refrigeration_result_init_a(a, rr: *UsRefrigerationResult): Result {
+    rr.cop_refrigeration = 0.0;
+    rr.cop_heat_pump = 0.0;
+    return us_cycle_result_init_a(a, us_refrigeration_result_cycle(rr));
+}
+
+# The address of *rr's cycle, for the UsCycleResult accessors (`&rr.cycle` is no Cyrius expression; the cycle is the
+# struct's first field, so it is *rr's own address).
+#must_use
+fn us_refrigeration_result_cycle(rr: *UsRefrigerationResult): *UsCycleResult {
+    var c = rr;
+    return c;
 }
 
 # The number of state points in *r.
@@ -9082,6 +9161,223 @@ fn us_brayton_cycle(t1: f64, p1: f64, pressure_ratio: f64, t3: f64, gamma: f64, 
     return Ok(0);
 }
 
+# --- The steam cycles ---
+
+# Fills *r with the Rankine cycle (a steam power plant) per kilogram of water: 1→2 isentropic pumping of the condenser's
+# saturated liquid to the boiler pressure (incompressible: w = v_f·ΔP, T and v unchanged), 2→3 isobaric heating to
+# saturated vapor, or with `superheated` 1 to the superheated state at `t_superheat` K (Rust's `Option<f64>`, ADR
+# 0002 row 11: `superheated` 0 is None, and `t_superheat` is then unread), 3→4 isentropic expansion to the condenser
+# pressure (into the wet region, or superheated where s₃ > s_g there), 4→1 isobaric condensation. Ok(0), or
+# Err(US_ERR_INVALID_PRESSURE) unless both pressures are > 0, Err(US_ERR_INVALID_CYCLE_PARAMETER) unless the boiler's
+# is the higher, a steam lookup's refusal (US_ERR_STEAM_TABLE_OUT_OF_RANGE, US_ERR_SUPERHEAT_OUT_OF_RANGE,
+# US_ERR_INVALID_TEMPERATURE, US_ERR_INVALID_QUALITY, …), or Err(US_ERR_OUT_OF_MEMORY) when *r's vecs could not grow.
+#must_use
+fn us_rankine_cycle(p_condenser: f64, p_boiler: f64, superheated, t_superheat: f64, r: *UsCycleResult): Result {
+    _us_span_enter("rankine_cycle", 13);
+    if (_us_finite_gt(p_condenser, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE, "us_rankine_cycle", "p_condenser", p_condenser));
+    }
+    if (_us_finite_gt(p_boiler, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE, "us_rankine_cycle", "p_boiler", p_boiler));
+    }
+    if (_us_finite_gt(p_boiler, p_condenser) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_CYCLE_PARAMETER, "us_rankine_cycle", "p_boiler", p_boiler));
+    }
+    var sc: UsSaturated;
+    var tc, vc = us_saturated_by_pressure(p_condenser, &sc);
+    if (is_err_result(tc) == 1) {
+        _us_span_exit();
+        return Err(vc);
+    }
+    var h1: f64 = sc.h_f;
+    var s1: f64 = sc.s_f;
+    var v1: f64 = sc.v_f;
+    var t1: f64 = sc.temperature;
+    var w_pump: f64 = v1 * (p_boiler - p_condenser);
+    var h2: f64 = h1 + w_pump;
+    var h3: f64 = 0.0;
+    var s3: f64 = 0.0;
+    var t3: f64 = 0.0;
+    var v3: f64 = 0.0;
+    if (superheated != 0) {
+        var sh: UsSuperheated;
+        var tsh, vsh = us_superheated_lookup(t_superheat, p_boiler, &sh);
+        if (is_err_result(tsh) == 1) {
+            _us_span_exit();
+            return Err(vsh);
+        }
+        h3 = sh.specific_enthalpy;
+        s3 = sh.specific_entropy;
+        t3 = sh.temperature;
+        v3 = sh.specific_volume;
+    } else {
+        var sb: UsSaturated;
+        var tb, vb = us_saturated_by_pressure(p_boiler, &sb);
+        if (is_err_result(tb) == 1) {
+            _us_span_exit();
+            return Err(vb);
+        }
+        h3 = sb.h_g;
+        s3 = sb.s_g;
+        t3 = sb.temperature;
+        v3 = sb.v_g;
+    }
+    var s4: f64 = s3;
+    var sg: f64 = sc.s_g;
+    var h4: f64 = 0.0;
+    var t4: f64 = 0.0;
+    var v4: f64 = 0.0;
+    if (s4 <= sg) {
+        var tq, vq = us_quality_from_entropy(s4, &sc);
+        if (is_err_result(tq) == 1) {
+            _us_span_exit();
+            return Err(vq);
+        }
+        var x4: f64 = vq;
+        var w: UsWetSteam;
+        var tw, vw = us_wet_steam_properties(x4, &sc, &w);
+        if (is_err_result(tw) == 1) {
+            _us_span_exit();
+            return Err(vw);
+        }
+        h4 = w.specific_enthalpy;
+        t4 = sc.temperature;
+        v4 = w.specific_volume;
+    } else {
+        var sh4: UsSuperheated;
+        var t5, v5 = us_superheated_by_entropy(p_condenser, s4, &sh4);
+        if (is_err_result(t5) == 1) {
+            _us_span_exit();
+            return Err(v5);
+        }
+        h4 = sh4.specific_enthalpy;
+        t4 = sh4.temperature;
+        v4 = sh4.specific_volume;
+    }
+    var q_in: f64 = h3 - h2;
+    var w_turbine: f64 = h3 - h4;
+    var q_out: f64 = h4 - h1;
+    var w_net: f64 = w_turbine - w_pump;
+    var eff: f64 = w_net / q_in;
+    var bwr: f64 = w_pump / w_turbine;
+    var st = _us_cycle_begin(r, US_CYCLE_RANKINE, US_PROCESS_ISENTROPIC, US_PROCESS_ISOBARIC, US_PROCESS_ISENTROPIC,
+      US_PROCESS_ISOBARIC);
+    if (st == 0) {
+        _us_span_exit();
+        return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_rankine_cycle"));
+    }
+    _us_sp_store(st, 0, t1, p_condenser, v1, s1, h1);
+    _us_sp_store(st, 1, t1, p_boiler, v1, s1, h2);
+    _us_sp_store(st, 2, t3, p_boiler, v3, s3, h3);
+    _us_sp_store(st, 3, t4, p_condenser, v4, s4, h4);
+    _us_cycle_nums(r, q_in, q_out, w_net, eff, bwr, 0.0);
+    _us_span_exit();
+    return Ok(0);
+}
+
+# Fills *out with the vapor-compression refrigeration cycle on water per kilogram: 1→2 isentropic compression of the
+# evaporator's saturated vapor to the condenser pressure (its exit found by entropy in the superheated table), 2→3
+# isobaric rejection to saturated liquid, 3→4 isenthalpic throttling back to the evaporator, 4→1 isobaric absorption.
+# Its cycle's heat_in is Q_cold, heat_out Q_hot, net_work −W (work consumed), efficiency COP_ref, back_work_ratio 1 (no
+# expander) and gamma 0; COP_ref = Q_cold / W and COP_hp = Q_hot / W. Ok(0), or Err(US_ERR_INVALID_PRESSURE) unless
+# both pressures are > 0, Err(US_ERR_INVALID_CYCLE_PARAMETER) unless the condenser's is the higher, a steam lookup's
+# refusal (the compressor exit off the superheated table is Err(US_ERR_SUPERHEAT_OUT_OF_RANGE)), or
+# Err(US_ERR_OUT_OF_MEMORY) when the cycle's vecs could not grow.
+#must_use
+fn us_refrigeration_cycle(p_evaporator: f64, p_condenser: f64, out: *UsRefrigerationResult): Result {
+    _us_span_enter("refrigeration_cycle", 19);
+    if (_us_finite_gt(p_evaporator, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE, "us_refrigeration_cycle", "p_evaporator", p_evaporator));
+    }
+    if (_us_finite_gt(p_condenser, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE, "us_refrigeration_cycle", "p_condenser", p_condenser));
+    }
+    if (_us_finite_gt(p_condenser, p_evaporator) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_CYCLE_PARAMETER, "us_refrigeration_cycle", "p_condenser", p_condenser));
+    }
+    var se: UsSaturated;
+    var te, ve = us_saturated_by_pressure(p_evaporator, &se);
+    if (is_err_result(te) == 1) {
+        _us_span_exit();
+        return Err(ve);
+    }
+    var sc: UsSaturated;
+    var tc, vc = us_saturated_by_pressure(p_condenser, &sc);
+    if (is_err_result(tc) == 1) {
+        _us_span_exit();
+        return Err(vc);
+    }
+    var h1: f64 = se.h_g;
+    var s1: f64 = se.s_g;
+    var t1: f64 = se.temperature;
+    var v1: f64 = se.v_g;
+    var sh2: UsSuperheated;
+    var t2r, v2r = us_superheated_by_entropy(p_condenser, s1, &sh2);
+    if (is_err_result(t2r) == 1) {
+        _us_span_exit();
+        return Err(v2r);
+    }
+    var t2: f64 = sh2.temperature;
+    var h2: f64 = sh2.specific_enthalpy;
+    var v2: f64 = sh2.specific_volume;
+    var h3: f64 = sc.h_f;
+    var s3: f64 = sc.s_f;
+    var t3: f64 = sc.temperature;
+    var v3: f64 = sc.v_f;
+    var h4: f64 = h3;
+    var tq, vq = us_quality_from_enthalpy(h4, &se);
+    if (is_err_result(tq) == 1) {
+        _us_span_exit();
+        return Err(vq);
+    }
+    var x4: f64 = vq;
+    var w4: UsWetSteam;
+    var tw, vw = us_wet_steam_properties(x4, &se, &w4);
+    if (is_err_result(tw) == 1) {
+        _us_span_exit();
+        return Err(vw);
+    }
+    var t4: f64 = se.temperature;
+    var v4: f64 = w4.specific_volume;
+    var s4: f64 = w4.specific_entropy;
+    var q_evap: f64 = h1 - h4;
+    var q_cond: f64 = h2 - h3;
+    var w_comp: f64 = h2 - h1;
+    var cop_ref: f64 = q_evap / w_comp;
+    var cop_hp: f64 = q_cond / w_comp;
+    var c = us_refrigeration_result_cycle(out);
+    var st = _us_cycle_begin(c, US_CYCLE_REFRIGERATION, US_PROCESS_ISENTROPIC, US_PROCESS_ISOBARIC,
+      US_PROCESS_ISENTHALPIC, US_PROCESS_ISOBARIC);
+    if (st == 0) {
+        _us_span_exit();
+        return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_refrigeration_cycle"));
+    }
+    _us_sp_store(st, 0, t1, p_evaporator, v1, s1, h1);
+    _us_sp_store(st, 1, t2, p_condenser, v2, s1, h2);
+    _us_sp_store(st, 2, t3, p_condenser, v3, s3, h3);
+    _us_sp_store(st, 3, t4, p_evaporator, v4, s4, h4);
+    var neg_w: f64 = _us_neg(w_comp);
+    _us_cycle_nums(c, q_evap, q_cond, neg_w, cop_ref, 1.0, 0.0);
+    out.cop_refrigeration = cop_ref;
+    out.cop_heat_pump = cop_hp;
+    _us_span_exit();
+    return Ok(0);
+}
+
+# A heat pump's COP from the refrigeration COP of the same cycle: COP_hp = COP_ref + 1 (Q_hot = Q_cold + W).
+#must_use
+#pure
+fn us_heat_pump_cop(cop_refrigeration: f64): f64 {
+    var c: f64 = cop_refrigeration + 1.0;
+    return c;
+}
+
 # --- JSON ---
 
 # The field names of a StatePoint, in declaration order.
@@ -9235,42 +9531,39 @@ fn _us_jr_state_point(v, w): i64 {
     return 1;
 }
 
-# Reads a `CycleResult` document (`n` bytes at `buf`) into *out, its two vecs (which then grow on `a`) and the parse
-# tree on allocator `a`: Ok(0), or Err(US_ERR_DESERIALIZE) for a malformed document (an allocation bayan's parser was
-# refused included) and Err(US_ERR_OUT_OF_MEMORY) for a refused vec, leaving *out unchanged.
-#must_use
-fn us_cycle_result_from_json_a(a, buf, n, out: *UsCycleResult): Result {
-    var v = _us_jr_parse(a, buf, n);
+# A CycleResult node `v` (object or 9-element sequence) into *out, its vecs on allocator `a`: 0, or the refusal's code
+# (US_ERR_DESERIALIZE, or US_ERR_OUT_OF_MEMORY for a refused vec), leaving *out unchanged.
+fn _us_jr_cycle_result(a, v, out: *UsCycleResult): i64 {
     var form = _us_jr_form(v, 9);
-    if (form == 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_cycle_result_from_json")); }
+    if (form == 0) { return US_ERR_DESERIALIZE; }
     var kind = _us_jr_unit_enum(_us_jr_at(v, form, 0, "kind"), &us_cycle_name, US_CYCLE_COUNT);
     var sps = _us_jr_at(v, form, 1, "state_points");
     var prs = _us_jr_at(v, form, 2, "processes");
     if (kind < 0 || sps == 0 || prs == 0 || bayan_json_v_tag(sps) != JTAG_ARR || bayan_json_v_tag(prs) != JTAG_ARR) {
-        return Err(_us_fail(US_ERR_DESERIALIZE, "us_cycle_result_from_json"));
+        return US_ERR_DESERIALIZE;
     }
     var nums[48];
     var k = 0;
     while (k < 6) {
         if (_us_jr_f64(_us_jr_at(v, form, k + 3, _us_cr_field(k + 3)), &nums + (8 * k)) == 0) {
-            return Err(_us_fail(US_ERR_DESERIALIZE, "us_cycle_result_from_json"));
+            return US_ERR_DESERIALIZE;
         }
         k = k + 1;
     }
     var states = vec_new_a(a);
     var processes = vec_new_a(a);
-    if (states == 0 || processes == 0) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_cycle_result_from_json")); }
+    if (states == 0 || processes == 0) { return US_ERR_OUT_OF_MEMORY; }
     var w[40];
     var ns = bayan_json_v_arr_len(sps);
     var i = 0;
     while (i < ns) {
         if (_us_jr_state_point(bayan_json_v_arr_get(sps, i), &w) == 0) {
-            return Err(_us_fail(US_ERR_DESERIALIZE, "us_cycle_result_from_json"));
+            return US_ERR_DESERIALIZE;
         }
         k = 0;
         while (k < 5) {
             if (vec_push_a(a, states, load64(&w + (8 * k))) < 0) {
-                return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_cycle_result_from_json"));
+                return US_ERR_OUT_OF_MEMORY;
             }
             k = k + 1;
         }
@@ -9280,9 +9573,9 @@ fn us_cycle_result_from_json_a(a, buf, n, out: *UsCycleResult): Result {
     i = 0;
     while (i < np) {
         var pk = _us_jr_unit_enum(bayan_json_v_arr_get(prs, i), &us_process_name, US_PROCESS_COUNT);
-        if (pk < 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_cycle_result_from_json")); }
+        if (pk < 0) { return US_ERR_DESERIALIZE; }
         if (vec_push_a(a, processes, pk) < 0) {
-            return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_cycle_result_from_json"));
+            return US_ERR_OUT_OF_MEMORY;
         }
         i = i + 1;
     }
@@ -9292,6 +9585,16 @@ fn us_cycle_result_from_json_a(a, buf, n, out: *UsCycleResult): Result {
     out.processes = processes;
     var ob = out;
     memcpy(ob + _US_CR_NUMS, &nums, 48);
+    return 0;
+}
+
+# Reads a `CycleResult` document (`n` bytes at `buf`) into *out, its two vecs (which then grow on `a`) and the parse
+# tree on allocator `a`: Ok(0), or Err(US_ERR_DESERIALIZE) for a malformed document (an allocation bayan's parser was
+# refused included) and Err(US_ERR_OUT_OF_MEMORY) for a refused vec, leaving *out unchanged.
+#must_use
+fn us_cycle_result_from_json_a(a, buf, n, out: *UsCycleResult): Result {
+    var code = _us_jr_cycle_result(a, _us_jr_parse(a, buf, n), out);
+    if (code != 0) { return Err(_us_fail(code, "us_cycle_result_from_json")); }
     return Ok(0);
 }
 
@@ -9299,4 +9602,49 @@ fn us_cycle_result_from_json_a(a, buf, n, out: *UsCycleResult): Result {
 #must_use
 fn us_cycle_result_from_json(buf, n, out: *UsCycleResult): Result {
     return us_cycle_result_from_json_a(default_alloc(), buf, n, out);
+}
+
+# Appends *rr as serde_json writes a `RefrigerationResult`: its cycle's document, then the two COPs.
+fn us_refrigeration_result_to_json(sb, rr: *UsRefrigerationResult) {
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "cycle", 1);
+    us_cycle_result_to_json(sb, us_refrigeration_result_cycle(rr));
+    _us_jw_key(sb, "cop_refrigeration", 0);
+    var cr: f64 = rr.cop_refrigeration;
+    _us_jw_f64(sb, cr);
+    _us_jw_key(sb, "cop_heat_pump", 0);
+    var ch: f64 = rr.cop_heat_pump;
+    _us_jw_f64(sb, ch);
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# Reads a `RefrigerationResult` document (`n` bytes at `buf`; an object, or a 3-element sequence) into *out, its
+# cycle's vecs (which then grow on `a`) and the parse tree on allocator `a`: Ok(0), Err(US_ERR_DESERIALIZE) or
+# Err(US_ERR_OUT_OF_MEMORY) as us_cycle_result_from_json_a, leaving *out unchanged.
+#must_use
+fn us_refrigeration_result_from_json_a(a, buf, n, out: *UsRefrigerationResult): Result {
+    var v = _us_jr_parse(a, buf, n);
+    var form = _us_jr_form(v, 3);
+    if (form == 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_refrigeration_result_from_json")); }
+    var cops[16];
+    if (_us_jr_f64(_us_jr_at(v, form, 1, "cop_refrigeration"), &cops) == 0
+      || _us_jr_f64(_us_jr_at(v, form, 2, "cop_heat_pump"), &cops + 8) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_refrigeration_result_from_json"));
+    }
+    var c: UsCycleResult;
+    var code = _us_jr_cycle_result(a, _us_jr_at(v, form, 0, "cycle"), &c);
+    if (code != 0) { return Err(_us_fail(code, "us_refrigeration_result_from_json")); }
+    memcpy(out, &c, sizeof(UsCycleResult));
+    var cr: f64 = load64(&cops);
+    var ch: f64 = load64(&cops + 8);
+    out.cop_refrigeration = cr;
+    out.cop_heat_pump = ch;
+    return Ok(0);
+}
+
+# us_refrigeration_result_from_json_a on the global heap: for a one-off read (its tree and vecs stay allocated).
+#must_use
+fn us_refrigeration_result_from_json(buf, n, out: *UsRefrigerationResult): Result {
+    return us_refrigeration_result_from_json_a(default_alloc(), buf, n, out);
 }

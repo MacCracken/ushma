@@ -117,6 +117,8 @@ generated table, so it is left as measured. `superheated_by_entropy` is about se
 | cycle/otto | 64.26 | 510 | six checks; two correctly rounded pow and one ln (about 340 ns, ADR 0004); four state points stored into the reused result; the span |
 | cycle/diesel | 77.29 | 513 | seven checks (r_c < r among them), then as Otto |
 | cycle/brayton | 60.20 | 516 | seven checks (T₃ > T₂ among them), then as Otto |
+| cycle/rankine | 114.63 | 497 | the condenser's saturated state, the boiler exit on the 2 MPa tier, the wet exhaust's quality and properties (M4b; minimum of three runs) |
+| cycle/refrigeration | 890.21 | 2,698 | two saturated states, the compressor exit by entropy between the 10 and 50 kPa tiers (about 2.2 µs of it), the throttle's quality (M4b; 5,085 before its review, in the probe's run) |
 
 Each analysis fills one result, reused across the batch, as a caller reusing it would. Rust builds and drops two
 `Vec`s per call. In the gates' run the three measured 490–501 ns.
@@ -127,3 +129,15 @@ and copying them was no better: the stdlib `memcpy` copies one byte per iteratio
 45 ns for a word loop (cyrius's open `memcpy` issue, port plan §8). A word-loop copy brought the commit to 92 ns and
 Otto to 557. Then each analysis sized the result's vecs (a truncate, once they are big enough) and stored its points
 in place, with no staging at all: 510 ns. Every row is unchanged.
+
+**M4b's review.** Refrigeration's first measurement was about 5.1 µs, 4.6 of it in `superheated_by_entropy` between
+tiers: about eight full lookups at 540 ns, each paying the volume's ln, ln and exp and the ln-P weight's two ln (some
+285 ns). The bisection compares only entropies, which are linear in that weight, and the weight is constant at one
+pressure. So the inversion now computes the weight once and probes with an entropy-only `_us_sh_s_at`, with the same
+operands to `calc_lerp` and so the same bits. The final state still comes from the full lookup. Between tiers the
+inversion went from 4.6 to 2.2 µs and refrigeration from 5.1 to 2.6 µs, measured back to back in one run. On a tier
+there is no ln to save, but the probe skips the lookup's checks and its byte-loop copy: `steam/superheated_by_entropy`
+went from 1,498 ns (M3's record) to 1,005. All 6,037 inversion rows, and every steam-cycle row, are unchanged.
+
+The machine was not quiet for M4b's runs: another session's processes were busy. Each Cyrius number here is the
+minimum of three runs.

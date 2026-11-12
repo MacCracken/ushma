@@ -1439,20 +1439,20 @@ def _sh_out(r):
     return E(e) if e else [fbits(x) for x in v]
 
 
-def m_sh_by_s(a, p):
-    pr, s = a
+def _sh_by_s(pr, s, p):
+    """superheated_by_entropy: (error name, None) or (None, the five values)."""
     tiers, sh = STEAM["tiers"], STEAM["sh"]
     if not fgt(pr, 0.0):
-        return E("InvalidPressure")
+        return "InvalidPressure", None
     if not math.isfinite(s):
-        return E("InvalidParameter")
+        return "InvalidParameter", None
     if pr < tiers[0] or pr > tiers[-1]:
-        return E("SuperheatOutOfRange")
+        return "SuperheatOutOfRange", None
     hi = sum(1 for x in tiers if x < pr)
     on_tier = tiers[hi] <= pr
     sat = _sat_by_p_vals(tiers[hi])
     if sat is None:
-        return E("SteamTableOutOfRange")
+        return "SteamTableOutOfRange", None
     t_min = sat[0]
     t_max = sh[hi * 8 + 7][0]
     if not on_tier:
@@ -1469,24 +1469,28 @@ def m_sh_by_s(a, p):
     lo, hi_i = 0, len(bps) - 1
     e1, s_lo = s_at(bps[lo])
     if e1:
-        return E(e1)
+        return e1, None
     e2, s_hi = s_at(bps[hi_i])
     if e2:
-        return E(e2)
+        return e2, None
     if s < s_lo or s > s_hi:
-        return E("SuperheatOutOfRange")
+        return "SuperheatOutOfRange", None
     while hi_i - lo > 1:
         mid = (lo + hi_i) // 2
         em, s_mid = s_at(bps[mid])
         if em:
-            return E(em)
+            return em, None
         if s_mid <= s:
             lo, s_lo = mid, s_mid
         else:
             hi_i, s_hi = mid, s_mid
     ds = s_hi - s_lo
     tt = bps[lo] + fdiv(s - s_lo, ds) * (bps[hi_i] - bps[lo]) if ds > 0.0 else bps[lo]
-    return _sh_out(_sh_lookup(rust_clamp(tt, t_min, t_max), pr, p))
+    return _sh_lookup(rust_clamp(tt, t_min, t_max), pr, p)
+
+
+def m_sh_by_s(a, p):
+    return _sh_out(_sh_by_s(a[0], a[1], p))
 
 
 def _cycle_toks(kind, states, procs, nums):
@@ -1496,6 +1500,95 @@ def _cycle_toks(kind, states, procs, nums):
     toks += [f"v:{len(procs)}"] + [f"e:ProcessKind.{k}" for k in procs]
     return toks + [fbits(x) for x in nums]
 
+
+
+def _q_check(x):
+    """validate_quality: (error name, None) or (None, the clamped quality)."""
+    if not (-1e-9 <= x <= 1.0 + 1e-9):
+        return "InvalidQuality", None
+    return None, rust_clamp(x, 0.0, 1.0)
+
+
+def _wet(x, e):
+    """wet_steam_properties(x, e)'s (v, h, s) for a quality already in [0, 1]."""
+    return e[2] + x * (e[3] - e[2]), e[4] + x * e[5], e[7] + x * (e[8] - e[7])
+
+
+def m_rankine(a, p):
+    pc, pb, tsh = a
+    if not fgt(pc, 0.0) or not fgt(pb, 0.0):
+        return E("InvalidPressure")
+    if not fgt(pb, pc):
+        return E("InvalidCycleParameter")
+    sc = _sat_by_p_vals(pc)
+    if sc is None:
+        return E("SteamTableOutOfRange")
+    t1, v1, h1, s1 = sc[0], sc[2], sc[4], sc[7]
+    w_pump = v1 * (pb - pc)
+    h2 = h1 + w_pump
+    if tsh is not None:
+        e, sh = _sh_lookup(tsh, pb, p)
+        if e:
+            return E(e)
+        t3, v3, h3, s3 = sh[0], sh[2], sh[3], sh[4]
+    else:
+        sb = _sat_by_p_vals(pb)
+        if sb is None:
+            return E("SteamTableOutOfRange")
+        t3, v3, h3, s3 = sb[0], sb[3], sb[6], sb[8]
+    s4 = s3
+    if s4 <= sc[8]:
+        ds = sc[8] - sc[7]
+        if not fge(abs(ds), TINY):
+            return E("DivisionByZero")
+        e, x = _q_check(fdiv(s4 - sc[7], ds))
+        if e:
+            return E(e)
+        v4, h4, _ = _wet(x, sc)
+        t4 = sc[0]
+    else:
+        e, sh4 = _sh_by_s(pc, s4, p)
+        if e:
+            return E(e)
+        t4, v4, h4 = sh4[0], sh4[2], sh4[3]
+    q_in, w_t, q_out = h3 - h2, h3 - h4, h4 - h1
+    w_net = w_t - w_pump
+    st = [[t1, pc, v1, s1, h1], [t1, pb, v1, s1, h2], [t3, pb, v3, s3, h3], [t4, pc, v4, s4, h4]]
+    procs = ["Isentropic", "Isobaric", "Isentropic", "Isobaric"]
+    return _cycle_toks("Rankine", st, procs, [q_in, q_out, w_net, fdiv(w_net, q_in), fdiv(w_pump, w_t), 0.0])
+
+
+def m_refrig(a, p):
+    pe, pc = a
+    if not fgt(pe, 0.0) or not fgt(pc, 0.0):
+        return E("InvalidPressure")
+    if not fgt(pc, pe):
+        return E("InvalidCycleParameter")
+    se = _sat_by_p_vals(pe)
+    if se is None:
+        return E("SteamTableOutOfRange")
+    sc = _sat_by_p_vals(pc)
+    if sc is None:
+        return E("SteamTableOutOfRange")
+    t1, v1, h1, s1 = se[0], se[3], se[6], se[8]
+    e, sh2 = _sh_by_s(pc, s1, p)
+    if e:
+        return E(e)
+    t2, v2, h2 = sh2[0], sh2[2], sh2[3]
+    t3, v3, h3, s3 = sc[0], sc[2], sc[4], sc[7]
+    h4 = h3
+    if not fge(abs(se[5]), TINY):
+        return E("DivisionByZero")
+    e, x = _q_check(fdiv(h4 - se[4], se[5]))
+    if e:
+        return E(e)
+    v4, _, s4 = _wet(x, se)
+    q_evap, q_cond, w = h1 - h4, h2 - h3, h2 - h1
+    cop_r, cop_h = fdiv(q_evap, w), fdiv(q_cond, w)
+    st = [[t1, pe, v1, s1, h1], [t2, pc, v2, s1, h2], [t3, pc, v3, s3, h3], [se[0], pe, v4, s4, h4]]
+    procs = ["Isentropic", "Isobaric", "Isenthalpic", "Isobaric"]
+    toks = _cycle_toks("Refrigeration", st, procs, [q_evap, q_cond, -w, cop_r, 1.0, 0.0])
+    return toks + [fbits(cop_r), fbits(cop_h)]
 
 def _gas_ok(g, n):
     return fgt(g, 1.0) and fgt(n, 0.0)
@@ -1630,6 +1723,9 @@ MODELS = {
         "cycle::otto_cycle": m_otto,
         "cycle::diesel_cycle": m_diesel,
         "cycle::brayton_cycle": m_brayton,
+        "cycle::rankine_cycle": m_rankine,
+        "cycle::refrigeration_cycle": m_refrig,
+        "cycle::heat_pump_cop": lambda a, p: F(a[0] + 1.0),
     },
     "steam": {
         "steam::saturation_pressure": m_sat_p,
@@ -1735,6 +1831,9 @@ def model_args(ins):
             n = int(ins[i][2:])
             out.append([tok_f(t) for t in ins[i + 1 : i + 1 + n]])
             i += 1 + n
+        elif ins[i] == "n:":
+            out.append(None)  # Option::None (rankine_cycle's superheat)
+            i += 1
         elif ins[i].startswith(("s:", "e:")):
             out.append(ins[i])  # a name (a substance's) or an enum value, as its token
             i += 1

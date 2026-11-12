@@ -378,6 +378,20 @@ fn b_brayton(r: *UsCycleResult): i64 {
     return e;
 }
 
+# rankine_cycle(10 kPa, 2 MPa, superheated to 573.15 K), into one reused result.
+fn b_rankine(r: *UsCycleResult): i64 {
+    var t, v = us_rankine_cycle(10000.0, 2000000.0, 1, 573.15, r);
+    var e: f64 = r.efficiency;
+    return e;
+}
+
+# refrigeration_cycle(7.384 kPa, 47.39 kPa), into one reused result.
+fn b_refrigeration(rr: *UsRefrigerationResult): i64 {
+    var t, v = us_refrigeration_cycle(7384.0, 47390.0, rr);
+    var c: f64 = rr.cop_refrigeration;
+    return c;
+}
+
 # Fills the two resistance lists the benchmarks use.
 fn bn_lists() {
     _bn_series = alloc(40);
@@ -489,6 +503,10 @@ fn main(): i64 {
     bn_run("cycle/otto", &b_otto, &cr, 1000000);
     bn_run("cycle/diesel", &b_diesel, &cr, 1000000);
     bn_run("cycle/brayton", &b_brayton, &cr, 1000000);
+    bn_run("cycle/rankine", &b_rankine, &cr, 1000000);
+    var rr: UsRefrigerationResult;
+    var trr, vrr = us_refrigeration_result_init(&rr);
+    bn_run("cycle/refrigeration", &b_refrigeration, &rr, 100000);
     return 0;
 }
 

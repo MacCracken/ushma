@@ -15,6 +15,20 @@ var _US_TINY: f64 = 0.000000000000000000000000000001;
 # −∞, a compile-time constant (_US_INF is +∞, src/mathx.cyr).
 const _US_NEG_INF = 0.0 - 1.0 / 0.0;
 
+# −0.0, Rust's `sum` start: an empty f64 sum is −0.0, and −0.0 + −0.0 stays −0.0. `0.0 - 0.0` is +0.0, so the sign
+# comes from a product (+0 × −1).
+const _US_NEG_ZERO = 0.0 * (0.0 - 1.0);
+
+# Rust's unary minus, −x: x with its sign bit flipped. `0.0 - x` differs at x = +0.0, where it gives +0.0 and −x gives
+# −0.0.
+#must_use
+#pure
+fn _us_neg(x: f64): f64 {
+    var b = load64(&x) ^ 0x8000000000000000;
+    var r: f64 = b;
+    return r;
+}
+
 # 1 when x is finite and strictly greater than `bound`, else 0, for any bound: `x > bound` is false for NaN and −∞,
 # `x < +∞` for NaN and +∞. One branch-free expression, so #inline takes it: three checks cost 6 ns instead of 21 (M1d's
 # review, docs/benchmarks-rust-v-cyrius.md).

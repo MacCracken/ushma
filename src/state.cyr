@@ -505,7 +505,7 @@ fn _us_mixture_check(ys, ny, vals, nv, fname): i64 {
         if (_us_is_finite(v) == 0) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, "value", v); }
         k = k + 1;
     }
-    var s: f64 = 0.0 - 0.0;
+    var s: f64 = _US_NEG_ZERO;
     k = 0;
     while (k < ny) {
         var y2: f64 = load64(ys + (8 * k));
@@ -521,7 +521,7 @@ fn _us_mixture_check(ys, ny, vals, nv, fname): i64 {
 fn _us_kays(ys, ny, vals, nv, fname): Result {
     var code = _us_mixture_check(ys, ny, vals, nv, fname);
     if (code != 0) { return Err(code); }
-    var s: f64 = 0.0 - 0.0;
+    var s: f64 = _US_NEG_ZERO;
     var k = 0;
     while (k < ny) {
         var y: f64 = load64(ys + (8 * k));

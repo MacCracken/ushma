@@ -5,14 +5,14 @@
 > (`# rust <file>: <test>`), at its module's milestone. Nothing is deferred: a test not ported yet is one whose
 > milestone hasn't come. The golden corpus (`tests/golden/`) checks every ported function on its grid besides.
 
-**479 Rust tests:** 305 ported; 34 at M4, 62 at M5, 27 at M6, 51 at M7.
+**479 Rust tests:** 322 ported; 17 at M4, 62 at M5, 27 at M6, 51 at M7.
 
 | Rust file | Tests | Ported | Due, unported | Later (milestone) |
 |---|---:|---:|---:|---|
 | `src/ai.rs` | 7 | 0 | 0 | 7 (M7) |
 | `src/bridge.rs` | 31 | 0 | 0 | 31 (M7) |
 | `src/chem.rs` | 23 | 0 | 0 | 23 (M5) |
-| `src/cycle.rs` | 59 | 30 | 0 | 29 (M4) |
+| `src/cycle.rs` | 59 | 45 | 0 | 14 (M4) |
 | `src/entropy.rs` | 23 | 23 | 0 | — |
 | `src/error.rs` | 18 | 18 | 0 | — |
 | `src/integration/soorat.rs` | 13 | 0 | 0 | 13 (M7) |
@@ -25,8 +25,8 @@
 | `src/steam.rs` | 46 | 46 | 0 | — |
 | `src/transfer.rs` | 67 | 67 | 0 | — |
 | `src/validate.rs` | 2 | 2 | 0 | — |
-| `tests/integration.rs` | 30 | 19 | 0 | 5 (M4), 6 (M5) |
-| **Total** | **479** | **305** | **0** | |
+| `tests/integration.rs` | 30 | 21 | 0 | 3 (M4), 6 (M5) |
+| **Total** | **479** | **322** | **0** | |
 
 ## Where each is ported
 
@@ -43,10 +43,12 @@
 | `src/cycle.rs` `test_brayton_t3_must_exceed_t2` | `tests/cycle.tcyr` `test_brayton` |
 | `src/cycle.rs` `test_cycle_kind_serde_roundtrip` | `tests/cycle.tcyr` `test_types` |
 | `src/cycle.rs` `test_cycle_kind_traits` | `tests/cycle.tcyr` `test_types` |
+| `src/cycle.rs` `test_cycles_reject_nan_and_inf` | `tests/cycle.tcyr` `test_nan_inf` |
 | `src/cycle.rs` `test_diesel_efficiency_analytical` | `tests/cycle.tcyr` `test_diesel` |
 | `src/cycle.rs` `test_diesel_energy_conservation` | `tests/cycle.tcyr` `test_diesel` |
 | `src/cycle.rs` `test_diesel_invalid_inputs` | `tests/cycle.tcyr` `test_diesel` |
 | `src/cycle.rs` `test_diesel_isobaric_pressures` | `tests/cycle.tcyr` `test_diesel` |
+| `src/cycle.rs` `test_heat_pump_cop_identity` | `tests/cycle.tcyr` `test_refrigeration` |
 | `src/cycle.rs` `test_ideal_gas_cycles_first_law` | `tests/cycle.tcyr` `test_brayton` |
 | `src/cycle.rs` `test_isobaric_heat` | `tests/cycle.tcyr` `test_helpers` |
 | `src/cycle.rs` `test_isochoric_heat` | `tests/cycle.tcyr` `test_helpers` |
@@ -60,8 +62,21 @@
 | `src/cycle.rs` `test_otto_temperature_ordering` | `tests/cycle.tcyr` `test_otto` |
 | `src/cycle.rs` `test_process_kind_serde_roundtrip` | `tests/cycle.tcyr` `test_types` |
 | `src/cycle.rs` `test_process_kind_traits` | `tests/cycle.tcyr` `test_types` |
+| `src/cycle.rs` `test_rankine_at_exact_tier_pressure` | `tests/cycle.tcyr` `test_rankine` |
+| `src/cycle.rs` `test_rankine_basic` | `tests/cycle.tcyr` `test_rankine` |
+| `src/cycle.rs` `test_rankine_energy_conservation` | `tests/cycle.tcyr` `test_rankine` |
+| `src/cycle.rs` `test_rankine_invalid_pressures` | `tests/cycle.tcyr` `test_rankine` |
+| `src/cycle.rs` `test_rankine_low_back_work_ratio` | `tests/cycle.tcyr` `test_rankine` |
+| `src/cycle.rs` `test_rankine_superheated_better_than_saturated` | `tests/cycle.tcyr` `test_rankine` |
+| `src/cycle.rs` `test_rankine_superheated_turbine_exhaust` | `tests/cycle.tcyr` `test_rankine` |
+| `src/cycle.rs` `test_refrigeration_basic` | `tests/cycle.tcyr` `test_refrigeration` |
+| `src/cycle.rs` `test_refrigeration_cop_hp_identity` | `tests/cycle.tcyr` `test_refrigeration` |
+| `src/cycle.rs` `test_refrigeration_energy_balance` | `tests/cycle.tcyr` `test_refrigeration` |
+| `src/cycle.rs` `test_refrigeration_invalid` | `tests/cycle.tcyr` `test_refrigeration` |
+| `src/cycle.rs` `test_refrigeration_respects_carnot_limit` | `tests/cycle.tcyr` `test_refrigeration` |
 | `src/cycle.rs` `test_state_point_construction` | `tests/cycle.tcyr` `test_types` |
 | `src/cycle.rs` `test_state_point_serde_roundtrip` | `tests/cycle.tcyr` `test_types` |
+| `src/cycle.rs` `test_steam_cycles_reject_nan` | `tests/cycle.tcyr` `test_nan_inf` |
 | `src/entropy.rs` `test_carnot_cop` | `tests/entropy.tcyr` `test_carnot` |
 | `src/entropy.rs` `test_carnot_cop_invalid` | `tests/entropy.tcyr` `test_carnot` |
 | `src/entropy.rs` `test_carnot_efficiency` | `tests/entropy.tcyr` `test_carnot` |
@@ -331,6 +346,8 @@
 | `tests/integration.rs` `nusselt_to_h_to_convection_chain` | `tests/integration.tcyr` `nusselt_to_h_to_convection_chain` |
 | `tests/integration.rs` `phase_lookup_agrees_with_steam_table` | `tests/integration.tcyr` `phase_lookup_agrees_with_steam_table` |
 | `tests/integration.rs` `quality_consistency_across_methods` | `tests/integration.tcyr` `quality_consistency_across_methods` |
+| `tests/integration.rs` `rankine_with_steam_tables_end_to_end` | `tests/integration.tcyr` `rankine_with_steam_tables_end_to_end` |
+| `tests/integration.rs` `refrigeration_vs_carnot_cop` | `tests/integration.tcyr` `refrigeration_vs_carnot_cop` |
 | `tests/integration.rs` `simple_rankine_cycle_energy_balance` | `tests/integration.tcyr` `simple_rankine_cycle_energy_balance` |
 | `tests/integration.rs` `thermal_equilibrium_lumped_capacitance` | `tests/integration.tcyr` `thermal_equilibrium_lumped_capacitance` |
 | `tests/integration.rs` `van_der_waals_vs_ideal_gas` | `tests/integration.tcyr` `van_der_waals_vs_ideal_gas` |

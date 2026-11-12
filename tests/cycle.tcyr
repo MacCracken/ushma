@@ -1,9 +1,10 @@
-# cycle tests (M4a: the types, the process helpers, the Otto, Diesel and Brayton cycles).
+# cycle tests (M4a: the types, the process helpers, the Otto, Diesel and Brayton cycles; M4b: the Rankine and
+# refrigeration cycles, the heat-pump COP).
 #
-# Rust 1.4.0's cycle.rs tests for these, one for one (30 of its 59; the steam cycles, comparison and diagrams join
-# with M4b and M4c), each also checking the refusal's code. Then reference tests of a result's document, of the three
-# cycles' spans, of a result reused across calls (its vecs refilled, no allocation after the first), and of every
-# allocation refused in turn.
+# Rust 1.4.0's cycle.rs tests for these, one for one (45 of its 59; comparison and the diagrams join with M4c), each
+# also checking the refusal's code. Then reference tests of the results' documents, of the five cycles' spans, of
+# results reused across calls (their vecs refilled, no allocation after the first), and of every allocation refused
+# in turn.
 
 include "src/constants.cyr"
 include "src/error.cyr"
@@ -13,6 +14,8 @@ include "src/fmtf.cyr"
 include "src/validate.cyr"
 include "src/logging.cyr"
 include "src/json.cyr"
+include "src/steam_data.cyr"
+include "src/steam.cyr"
 include "src/cycle.cyr"
 
 # |a − b| as an f64.
@@ -303,6 +306,178 @@ fn test_result_json() {
     assert(n == load64(sb2 + 8) && memeq(load64(sb), load64(sb2), n) == 1, "written again, the same bytes");
 }
 
+# The Rankine cycle: its efficiency and net work, the first law, superheat against saturated, the back-work ratio, the
+# refusals, the superheated turbine exhaust (IAPWS-IF97: T₄ 391.95 K, h₄ 2714.2 kJ/kg, η 13.22 %, the port plan's
+# 13.2 % reference case), and a boiler state on an exact tier row.
+# rust src/cycle.rs: test_rankine_basic, test_rankine_energy_conservation
+# rust src/cycle.rs: test_rankine_superheated_better_than_saturated, test_rankine_low_back_work_ratio
+# rust src/cycle.rs: test_rankine_invalid_pressures, test_rankine_superheated_turbine_exhaust
+# rust src/cycle.rs: test_rankine_at_exact_tier_pressure
+fn test_rankine() {
+    test_group("Rankine");
+    var r: UsCycleResult;
+    var ti, vi = us_cycle_result_init(&r);
+    var t, v = us_rankine_cycle(10000.0, 2000000.0, 1, 573.15, &r);
+    assert_eq(is_ok(t), 1, "10 kPa / 2 MPa / 573.15 K is Ok");
+    var eta: f64 = r.efficiency;
+    var w: f64 = r.net_work;
+    assert(eta > 0.15 && eta < 0.4 && w > 0.0, "15-40 %, net work out");
+    var bwr: f64 = r.back_work_ratio;
+    assert(bwr < 0.05, "a back-work ratio under 5 %");
+    var t1, v1 = us_rankine_cycle(10000.0, 1000000.0, 1, 573.15, &r);
+    var b: f64 = balance(&r);
+    var qi: f64 = r.heat_in;
+    assert(b / qi < 0.01, "the first law within 1 %");
+    var sup: f64 = r.efficiency;
+    var t2, v2 = us_rankine_cycle(10000.0, 1000000.0, 0, 0.0, &r);
+    var sat: f64 = r.efficiency;
+    assert(is_ok(t2) == 1 && sup > sat, "superheat beats saturated vapor");
+    var e1, f1 = us_rankine_cycle(0.0, 1000000.0, 0, 0.0, &r);
+    errc(e1, f1, US_ERR_INVALID_PRESSURE, "condenser 0");
+    var e2, f2 = us_rankine_cycle(10000.0, 0.0, 0, 0.0, &r);
+    errc(e2, f2, US_ERR_INVALID_PRESSURE, "boiler 0");
+    var e3, f3 = us_rankine_cycle(1000000.0, 10000.0, 0, 0.0, &r);
+    errc(e3, f3, US_ERR_INVALID_CYCLE_PARAMETER, "boiler below condenser");
+    var t3, v3 = us_rankine_cycle(100000.0, 500000.0, 1, 573.15, &r);
+    var t4: f64 = spf(&r, 3, 0);
+    var h4: f64 = spf(&r, 3, 32);
+    var e4: f64 = r.efficiency;
+    var dt: f64 = absdiff(t4, 391.95);
+    var dh: f64 = absdiff(h4, 2714200.0);
+    var de: f64 = absdiff(e4, 0.1322);
+    assert(is_ok(t3) == 1 && dt < 1.0, "a superheated exhaust: T4 = 391.95 K within 1 K");
+    assert(dh < 3000.0 && de < 0.002, "h4 = 2714.2 kJ/kg within 3, eta = 13.22 % within 0.2");
+    var t5, v5 = us_rankine_cycle(10000.0, 2000000.0, 1, 523.15, &r);
+    var e5: f64 = r.efficiency;
+    assert(is_ok(t5) == 1 && e5 > 0.25 && e5 < 0.4, "a boiler state on a tier row: 25-40 %");
+}
+
+# The refrigeration cycle: positive COPs, COP_hp = COP_ref + 1, the first law with negative net work, the refusals, the
+# Carnot limit (IAPWS-IF97: T₂ 677.0 K, COP 2.877), and the heat-pump COP.
+# rust src/cycle.rs: test_refrigeration_basic, test_refrigeration_cop_hp_identity, test_refrigeration_energy_balance
+# rust src/cycle.rs: test_refrigeration_invalid, test_refrigeration_respects_carnot_limit
+# rust src/cycle.rs: test_heat_pump_cop_identity
+fn test_refrigeration() {
+    test_group("refrigeration");
+    var rr: UsRefrigerationResult;
+    var ti, vi = us_refrigeration_result_init(&rr);
+    var c: *UsCycleResult = us_refrigeration_result_cycle(&rr);
+    var t, v = us_refrigeration_cycle(7384.0, 47390.0, &rr);
+    assert_eq(is_ok(t), 1, "7.384 / 47.39 kPa is Ok");
+    var cr: f64 = rr.cop_refrigeration;
+    var ch: f64 = rr.cop_heat_pump;
+    assert(cr > 0.0 && ch > cr, "COP_ref > 0, COP_hp above it");
+    var di: f64 = absdiff(ch, cr + 1.0);
+    assert(di < 0.1, "COP_hp = COP_ref + 1 within 0.1");
+    var w: f64 = c.net_work;
+    var qi: f64 = c.heat_in;
+    var qo: f64 = c.heat_out;
+    var bal: f64 = absdiff(qi - qo, w);
+    assert(w < 0.0 && bal / qo < 0.000000001, "work consumed, and Q_in - Q_out = W_net within 1e-9");
+    var e1, f1 = us_refrigeration_cycle(0.0, 47390.0, &rr);
+    errc(e1, f1, US_ERR_INVALID_PRESSURE, "evaporator 0");
+    var e2, f2 = us_refrigeration_cycle(47390.0, 7384.0, &rr);
+    errc(e2, f2, US_ERR_INVALID_CYCLE_PARAMETER, "condenser below evaporator");
+    var t3, v3 = us_refrigeration_cycle(3169.0, 100000.0, &rr);
+    var t2: f64 = spf(c, 1, 0);
+    var cop: f64 = rr.cop_refrigeration;
+    var d2: f64 = absdiff(t2, 677.0);
+    var dc: f64 = absdiff(cop, 2.877);
+    assert(is_ok(t3) == 1 && d2 < 2.0 && dc < 0.03, "T2 = 677.0 K within 2, COP = 2.877 within 0.03");
+    var tc: f64 = spf(c, 0, 0);
+    var th: f64 = spf(c, 2, 0);
+    var carnot: f64 = tc / (th - tc);
+    assert(cop < carnot, "below the Carnot COP");
+    var h3: f64 = us_heat_pump_cop(3.0);
+    var h0: f64 = us_heat_pump_cop(0.0);
+    var d3: f64 = absdiff(h3, 4.0);
+    var d0: f64 = absdiff(h0, 1.0);
+    assert(d3 < 0.0000000001 && d0 < 0.0000000001, "heat_pump_cop: 3 -> 4, 0 -> 1");
+}
+
+# Every cycle refuses NaN and infinite inputs, with the code of the input's own check.
+# rust src/cycle.rs: test_cycles_reject_nan_and_inf, test_steam_cycles_reject_nan
+fn test_nan_inf() {
+    test_group("NaN and infinity");
+    var nan: f64 = 0.0 / 0.0;
+    var inf: f64 = 1.0 / 0.0;
+    var r: UsCycleResult;
+    var ti, vi = us_cycle_result_init(&r);
+    var e1, f1 = us_otto_cycle(nan, 101325.0, 8.0, 50000.0, 1.4, 1.0, &r);
+    errc(e1, f1, US_ERR_INVALID_TEMPERATURE, "Otto, T1 NaN");
+    var e2, f2 = us_otto_cycle(300.0, 101325.0, inf, 50000.0, 1.4, 1.0, &r);
+    errc(e2, f2, US_ERR_INVALID_COMPRESSION_RATIO, "Otto, r infinite");
+    var e3, f3 = us_diesel_cycle(300.0, 101325.0, 18.0, nan, 1.4, 1.0, &r);
+    errc(e3, f3, US_ERR_INVALID_CUTOFF_RATIO, "Diesel, rc NaN");
+    var e4, f4 = us_brayton_cycle(300.0, 101325.0, 10.0, 1400.0, nan, 1.0, &r);
+    errc(e4, f4, US_ERR_INVALID_PARAMETER, "Brayton, gamma NaN");
+    var e5, f5 = us_rankine_cycle(nan, 1000000.0, 0, 0.0, &r);
+    errc(e5, f5, US_ERR_INVALID_PRESSURE, "Rankine, condenser NaN");
+    var e6, f6 = us_rankine_cycle(10000.0, 1000000.0, 1, nan, &r);
+    errc(e6, f6, US_ERR_INVALID_TEMPERATURE, "Rankine, superheat NaN (the lookup's refusal)");
+    var rr: UsRefrigerationResult;
+    var tr, vr = us_refrigeration_result_init(&rr);
+    var e7, f7 = us_refrigeration_cycle(nan, 100000.0, &rr);
+    errc(e7, f7, US_ERR_INVALID_PRESSURE, "refrigeration, evaporator NaN");
+}
+
+# A refrigeration result's document reads back on the global heap, and the same bytes come out again.
+fn test_refrigeration_json() {
+    test_group("a refrigeration result's document");
+    var rr: UsRefrigerationResult;
+    var ti, vi = us_refrigeration_result_init(&rr);
+    var t, v = us_refrigeration_cycle(3169.0, 100000.0, &rr);
+    var sb = str_builder_new();
+    us_refrigeration_result_to_json(sb, &rr);
+    var back: UsRefrigerationResult;
+    var tb, vb = us_refrigeration_result_from_json(load64(sb), load64(sb + 8), &back);
+    assert_eq(is_ok(tb), 1, "it reads back");
+    var c1: f64 = rr.cop_refrigeration;
+    var c2: f64 = back.cop_refrigeration;
+    assert(c1 == c2, "its COP, exactly");
+    var bc: *UsCycleResult = us_refrigeration_result_cycle(&back);
+    assert_eq(bc.kind, US_CYCLE_REFRIGERATION, "its cycle's kind");
+    assert_eq(us_cycle_process(bc, 2), US_PROCESS_ISENTHALPIC, "the throttle");
+    var sb2 = str_builder_new();
+    us_refrigeration_result_to_json(sb2, &back);
+    var n = load64(sb + 8);
+    assert(n == load64(sb2 + 8) && memeq(load64(sb), load64(sb2), n) == 1, "written again, the same bytes");
+}
+
+# The steam cycles' spans: each opens under Rust's name, around the superheated inversion's own, and closes on a
+# refusal too.
+fn test_steam_spans() {
+    test_group("steam-cycle spans");
+    var r: UsCycleResult;
+    var ti, vi = us_cycle_result_init(&r);
+    var rr: UsRefrigerationResult;
+    var tr, vr = us_refrigeration_result_init(&rr);
+    sakshi_output_buffer();
+    sakshi_set_level(SK_DEBUG);
+    sakshi_ring_clear();
+    var t1, v1 = us_rankine_cycle(100000.0, 500000.0, 1, 573.15, &r);
+    assert_eq(ring_has("rankine_cycle"), 1, "rankine_cycle's span");
+    assert_eq(ring_has("superheated_by_entropy"), 1, "the exhaust's inversion inside it");
+    sakshi_ring_clear();
+    var t2, v2 = us_refrigeration_cycle(7384.0, 47390.0, &rr);
+    assert_eq(ring_has("refrigeration_cycle"), 1, "refrigeration_cycle's span");
+    assert_eq(sakshi_ring_event_count(), 4, "its pair around the compressor exit's");
+    sakshi_ring_clear();
+    var t3, v3 = us_rankine_cycle(0.0, 500000.0, 0, 0.0, &r);
+    assert_eq(ring_has("rankine_cycle"), 1, "a refused Rankine's span");
+    assert_eq(sakshi_span_depth(), 0, "every span closed");
+    sakshi_set_level(SK_INFO);
+    sakshi_ring_clear();
+    var before = alloc_used();
+    var k = 0;
+    while (k < 1000) {
+        var tk, vk = us_rankine_cycle(10000.0, 2000000.0, 1, 573.15, &r);
+        var tj, vj = us_refrigeration_cycle(7384.0, 47390.0, &rr);
+        k = k + 1;
+    }
+    assert_eq(alloc_used() - before, 0, "1,000 of each into reused results: 0 heap bytes");
+}
+
 # A result reused across calls refills its vecs: no heap after the first; and the three cycles' spans.
 fn test_reuse_and_spans() {
     test_group("reuse and spans");
@@ -409,6 +584,22 @@ fn test_out_of_memory() {
     assert_eq(ooms, 5, "its two vecs and the state vec's grow: OutOfMemory");
     var t8, v8 = us_cycle_result_from_json_a(ta, doc, dn, &out);
     assert(is_ok(t8) == 1 && us_cycle_state_count(&out) == 4, "allowed again, the document reads");
+    var r3: UsCycleResult;
+    var t9, v9 = us_cycle_result_init_a(ta, &r3);
+    test_allocator_fail_after(ta, test_allocator_alloc_count(ta));
+    var ta1, va1 = us_rankine_cycle(10000.0, 2000000.0, 1, 573.15, &r3);
+    errc(ta1, va1, US_ERR_OUT_OF_MEMORY, "Rankine, its first grow refused");
+    var rr: UsRefrigerationResult;
+    var ta2, va2 = us_refrigeration_result_init_a(ta, &rr);
+    errc(ta2, va2, US_ERR_OUT_OF_MEMORY, "a refrigeration result's init refused");
+    test_allocator_fail_after(ta, 0 - 1);
+    var ta3, va3 = us_refrigeration_result_init_a(ta, &rr);
+    test_allocator_fail_after(ta, test_allocator_alloc_count(ta));
+    var ta4, va4 = us_refrigeration_cycle(7384.0, 47390.0, &rr);
+    errc(ta4, va4, US_ERR_OUT_OF_MEMORY, "refrigeration, its first grow refused");
+    test_allocator_fail_after(ta, 0 - 1);
+    var ta5, va5 = us_refrigeration_cycle(7384.0, 47390.0, &rr);
+    assert(is_ok(ta5) == 1 && us_cycle_state_count(us_refrigeration_result_cycle(&rr)) == 4, "allowed, it fills");
 }
 
 # Runs every group and returns the failure count.
@@ -419,8 +610,13 @@ fn main() {
     test_otto();
     test_diesel();
     test_brayton();
+    test_rankine();
+    test_refrigeration();
+    test_nan_inf();
     test_result_json();
+    test_refrigeration_json();
     test_reuse_and_spans();
+    test_steam_spans();
     test_out_of_memory();
     return assert_summary();
 }

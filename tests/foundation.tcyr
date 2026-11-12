@@ -139,7 +139,15 @@ fn test_validate_predicates() {
     var nan: f64 = 0.0 / 0.0;
     var inf: f64 = 1.0 / 0.0;
     var ninf: f64 = 0.0 - inf;
-    var nz: f64 = 0.0 - 0.0;
+    var nz: f64 = _US_NEG_ZERO;
+    var pz: f64 = 0.0;
+    assert_eq(load64(&nz), 0x8000000000000000, "_US_NEG_ZERO is -0.0 (0.0 - 0.0 is +0.0)");
+    var n1: f64 = _us_neg(pz);
+    var n2: f64 = _us_neg(nz);
+    var n3: f64 = _us_neg(1.5);
+    assert_eq(load64(&n1), 0x8000000000000000, "_us_neg(+0) is -0, as Rust's -x");
+    assert_eq(load64(&n2), 0, "_us_neg(-0) is +0");
+    assert(n3 == 0.0 - 1.5, "_us_neg(1.5) is -1.5");
     assert_eq(_us_finite_gt(1.0, 0.0), 1, "1 > 0");
     assert_eq(_us_finite_gt(0.0, 0.0), 0, "0 is not > 0");
     assert_eq(_us_finite_gt(nz, 0.0), 0, "-0 is not > 0");

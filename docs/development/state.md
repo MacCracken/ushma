@@ -20,7 +20,7 @@ Plan of record: [`ushma-port-plan.md`](ushma-port-plan.md). Decisions P2–P8 we
 | M1 Foundation, logging & transfer | ✅ done 2026-11-12. **M1a (2026-11-11):** `src/error.cyr` (US_ERR_* codes, Rust variant names, fixed messages; ADR 0002 row 1, Cyrius-native), `src/validate.cyr` (finite predicates, refusals that report their value to sakshi at DEBUG), `src/fmtf.cyr` (vendored from impetus by `scripts/vendor_fmtf.py`; 26,088 golden rows), `src/logging.cyr` (USHMA_LOG, level-gated spans), `[lib]` / `[lib.ai]` and both bundles, the fuzz harness. **M1b (2026-11-11):** `src/json.cyr` (serde-compatible helpers on bayan's tree, caller's allocator), `src/material.cyr` (`UsMaterial`, presets, the two methods, its JSON); 2,927 golden rows (5 accepted under ADR 5's mapped divergences); the decoder fuzzed; the first benchmarks. **M1c (2026-11-11):** transfer's first 18 functions. **M1d (2026-11-12):** the other 14 (fins, LMTD, ε-NTU, view factors), so 32 of 32 and 15,100 golden rows (B bit-identical, C 0 ulp against the corrected oracle, 8 glibc misrounds in `transfer.cr.tsv`); `validate.py` models all 32; the review (inlined branch-free finite checks, powi as products; every checked function 1.1–2× faster, rows unchanged); spans under Rust's span names with a reference test; `scripts/surface_parity.py` (0 missing) and `scripts/rust_test_ledger.py` (102 of 102 due tests ported) in the gates and CI; coverage 44/44 public functions executed |
 | M2 Equations of state & entropy | ✅ done 2026-11-12. **M2a:** state's first 10 functions, `UsGas` and its JSON, the GasData fuzz target. **M2b:** the other 11 state functions (21 of 21; surface 36/36), the 6 state integration tests. **M2c:** `src/entropy.cyr` (9 of 9; surface 9/9), 3,454 golden rows (1 glibc log misround in `entropy.cr.tsv`), `tests/entropy.tcyr` (85; all 23 Rust tests), the 2 entropy integration tests, 6 benchmarks, the review (nothing to change), the M2 gates |
 | M3 Phase & steam | ✅ done 2026-11-12. **M3a:** phase (10 of 10, surface 29/29), 27,333 rows. **M3b:** steam's Region 4, saturated lookups, quality and wet steam, 14,025 rows, the review (R4 coefficients as generated consts: 174 → 141 ns). **M3c:** superheated steam (`us_superheated_lookup`, `us_superheated_by_entropy`, `UsSuperheated`), 31,113 steam rows in all (10 glibc misrounds in `steam.cr.tsv`), `tests/steam.tcyr` (169; all 46 Rust tests), the Rankine integration test, the superheated fuzz target, 3 benchmarks; surface 19/19 |
-| M4 Cycles | 🟡 in progress. **M4a (2026-11-12):** the cycle types (`UsStatePoint`, `UsProcess`, `UsCycle`, `UsCycleResult`, which the caller owns and the analyses fill in place: ADR 0002 row 10) and their JSON, the four process helpers, and Otto, Diesel and Brayton. That is 15 functions (surface 29 of cycle's 44 items; M4b and M4c have the rest) and 2,839 golden rows (1 glibc log misround in `cycle.cr.tsv`). `tests/cycle.tcyr` has 104 assertions (30 of the 59 Rust tests). Also: 3 benchmarks (review: 746 → 510 ns), 4 fuzz targets, and `US_ERR_OUT_OF_MEMORY` for a refused allocation. **M4b:** Rankine, refrigeration, `heat_pump_cop`. **M4c:** `compare_cycles`, the T-s and P-v diagrams, the M4 gates |
+| M4 Cycles | 🟡 in progress. **M4a (2026-11-12):** the cycle types (`UsStatePoint`, `UsProcess`, `UsCycle`, `UsCycleResult`, which the caller owns and the analyses fill in place: ADR 0002 row 10) and their JSON, the four process helpers, and Otto, Diesel and Brayton. That is 15 functions (surface 29 of cycle's 44 items; M4b and M4c have the rest) and 2,839 golden rows (1 glibc log misround in `cycle.cr.tsv`). `tests/cycle.tcyr` has 104 assertions (30 of the 59 Rust tests). Also: 3 benchmarks (review: 746 → 510 ns), 4 fuzz targets, and `US_ERR_OUT_OF_MEMORY` for a refused allocation. **M4b (2026-11-12):** `us_rankine_cycle` (Rust's `Option<f64>` superheat as a flag and a value: ADR 0002 row 11), `us_refrigeration_cycle` with `UsRefrigerationResult` and its JSON, and `us_heat_pump_cop`: 2,334 rows more, 5,173 in all, every switch tried either side. `tests/cycle.tcyr` has 162 assertions (45 of the 59 Rust tests) and the 2 steam-cycle integration tests are ported. The review gave the superheated inversion an entropy-only probe (refrigeration about 3× faster, every row unchanged). Two harness gaps were closed on the way: a zero's sign is now compared, which found six ports of Rust's `sum` starting at +0.0, and the ADR 5 flag is reset per row. **M4c:** `compare_cycles`, the T-s and P-v diagrams, the M4 gates |
 | M5–M8 | ☐ |
 
 ## Golden corpus
@@ -36,7 +36,7 @@ Plan of record: [`ushma-port-plan.md`](ushma-port-plan.md). Decisions P2–P8 we
 | `tests/golden/state.tsv` | 11,136 (9 presets, 21 functions, 96 JSON) | A, B, C |
 | `tests/golden/entropy.tsv` | 3,454 (9 functions) | A, B, C |
 | `tests/golden/phase.tsv` | 27,333 (9 presets, 10 functions, 109 JSON) | A, B, C |
-| `tests/golden/cycle.tsv` | 2,839 (7 functions, 144 JSON; M4a) | A, B, C |
+| `tests/golden/cycle.tsv` | 5,173 (10 functions, 197 JSON; M4a, M4b) | A, B, C |
 | `tests/golden/chem.tsv` | 13 (table presets; module rows from M5) | A |
 | `tests/golden/math.cr.tsv` | 26 corrections (ADR 0004, MPFR 4.2.2) | — |
 | `tests/golden/transfer.cr.tsv` | 8 corrections (pow 4, exp 3, atan 1) | — |
@@ -45,38 +45,40 @@ Plan of record: [`ushma-port-plan.md`](ushma-port-plan.md). Decisions P2–P8 we
 | `tests/golden/steam.cr.tsv` | 10 corrections (log 5, exp 5) | — |
 | `tests/golden/cycle.cr.tsv` | 1 correction (log) | — |
 
-Recorded on glibc 2.44 x86_64 fma (ushma 1.4.0, hisab 1.4.0). `--check`, `validate.py` (FAILURES 0; 122,457 rows
+Recorded on glibc 2.44 x86_64 fma (ushma 1.4.0, hisab 1.4.0). `--check`, `validate.py` (FAILURES 0; 124,738 rows
 re-derived independently) and `probe_tables.py --all-targets` (1,052 compiled values) are clean.
 
 ## Parity harness
 
 `cyrius test` runs `tests/parity.tcyr` with the other test files, warning-free on every target:
 
-`=== parity summary: 11 modules, 0 failing | rows: 135612 ok, 0 failed, 0 measured, 0 pending, 87 accepted (ADR 4: 47), 0 glibc-matching (failed) ===`
+`=== parity summary: 11 modules, 0 failing | rows: 137941 ok, 0 failed, 0 measured, 0 pending, 92 accepted (ADR 4: 47), 0 glibc-matching (failed) ===`
 
 - **ok / accepted:** every row, identically on x86_64 ELF, `--bounds`, PE (wine) and aarch64 (qemu). 47 rows are
-  accepted under ADR 4 (glibc misrounds; the port gives the correctly rounded value) and 40 under ADR 5 (bayan's
-  mapped JSON divergences, 5 in each of the eight struct decoders).
+  accepted under ADR 4 (glibc misrounds; the port gives the correctly rounded value) and 45 under ADR 5 (bayan's
+  mapped JSON divergences, 5 in each of the nine struct decoders).
+- **Zeros:** a zero must carry the oracle's sign in every class (from M4b). The ulp distance alone treats ±0 as
+  one point.
 - Nothing is measured or pending. The stdlib candidates remain as ungated shadow lines.
 
 ## Tests
 
 | File | Assertions | Rust tests it ports |
 |---|---|---|
-| `tests/foundation.tcyr` | 121 | error.rs 18, validate.rs 2, logging.rs 1 |
+| `tests/foundation.tcyr` | 125 | error.rs 18, validate.rs 2, logging.rs 1 |
 | `tests/material.tcyr` | 54 | material.rs 8 |
 | `tests/transfer.tcyr` | 260 | transfer.rs 67 |
 | `tests/state.tcyr` | 181 | state.rs 47 |
 | `tests/entropy.tcyr` | 85 | entropy.rs 23 |
 | `tests/phase.tcyr` | 171 | phase.rs 44 |
 | `tests/steam.tcyr` | 169 | steam.rs 46 |
-| `tests/cycle.tcyr` | 104 | cycle.rs 30 of 59 (M4a's) |
-| `tests/integration.tcyr` | 74 | integration.rs 19 (every one due through M3) |
+| `tests/cycle.tcyr` | 162 | cycle.rs 45 of 59 (M4a's and M4b's) |
+| `tests/integration.tcyr` | 82 | integration.rs 21 (every one due through M4b) |
 | `tests/parity.tcyr` | the corpus | — |
 
-`docs/development/rust-test-ledger.md`: 479 Rust tests, 305 ported (every one due), 174 at M4b–M7.
-`cyrius coverage --exec`: 146 of 146 public functions executed. `cyrius fuzz --poison --bounds`: USHMA_LOG parsing and
-the material, GasData, SubstanceData, Phase, three steam and four cycle decoders, 50,000 seeded inputs.
+`docs/development/rust-test-ledger.md`: 479 Rust tests, 322 ported (every one due), 157 at M4c–M7.
+`cyrius coverage --exec`: 155 of 155 public functions executed. `cyrius fuzz --poison --bounds`: USHMA_LOG parsing and
+the material, GasData, SubstanceData, Phase, three steam and five cycle decoders, 50,000 seeded inputs.
 
 ## Toolchain
 
@@ -88,11 +90,11 @@ the material, GasData, SubstanceData, Phase, three steam and four cycle decoders
 - **Rust reference**: `rust-old/`, 11,046 lines in total (`LINES_OF_SOURCE.txt`); ≈5,400 code
   lines in `src/`, 155 public functions, 449 unit + 30 integration tests, 63 benchmarks,
   5 examples. Frozen.
-- **Cyrius port** (`src/`, at M4a): error 97 lines, validate 139, logging 100, json 231, material 149, transfer 606,
-  state 553, entropy 179, phase 523, steam 710, cycle 740; vendored mathx 1,842 and fmtf 408; generated mathx_data 1,423, constants
-  47, constants_private 41, and the table data (material 148, state 101, phase 202, chem 145, steam 876). Public: 146
+- **Cyrius port** (`src/`, at M4b): error 97 lines, validate 153, logging 100, json 231, material 149, transfer 606,
+  state 553, entropy 179, phase 523, steam 741, cycle 1,043; vendored mathx 1,842 and fmtf 408; generated mathx_data 1,423, constants
+  47, constants_private 41, and the table data (material 148, state 101, phase 202, chem 145, steam 876). Public: 155
   functions (`us_*`), the `US_*` constants, codes and enum members. Surface parity: error 19/19, logging 2/2, material
-  16/16, transfer 34/34, state 36/36, entropy 9/9, phase 29/29, steam 19/19; cycle (scheduled to M4c) 29/44.
+  16/16, transfer 34/34, state 36/36, entropy 9/9, phase 29/29, steam 19/19; cycle (scheduled to M4c) 35/44.
 
 ## Rust baseline (tag 1.4.0, 2026-11-11)
 
@@ -141,4 +143,4 @@ crates.io for "ushma" and waits on the maintainer.
 
 ## Next
 
-M4b: the steam cycles. `rankine_cycle` (the turbine exit by entropy inversion through the steam tables), `refrigeration_cycle` with its `RefrigerationResult` and that type's JSON, and `heat_pump_cop`. Then M4c: `compare_cycles` (`CycleComparisonEntry`), the T-s and P-v diagrams (`DiagramPoint`, into caller buffers), the M4 integration tests, the review and the M4 gates.
+M4c: `compare_cycles` (`CycleComparisonEntry`, with its JSON), the T-s and P-v diagrams (`DiagramPoint` and its JSON, into caller buffers), the remaining M4 integration tests, the review and the M4 gates.

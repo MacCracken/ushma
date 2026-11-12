@@ -2,7 +2,9 @@
 #
 # Copied from kimiya's tests/parity_core.cyr (its working copy with the corrected oracle, kimiya ADR 0006), itself
 # tanmatra's (same format, same outcomes). The changes: an error code is named through the harness's
-# `_par_error_name` hook (as impetus), and the corrected oracle is ushma's ADR 0004 (labels "ADR 4").
+# `_par_error_name` hook (as impetus), the corrected oracle is ushma's ADR 0004 (labels "ADR 4"), and a zero must carry
+# the oracle's sign in every class (M4b): +0 and -0 are one point on the ulp line, so the distance alone passed a
+# port that summed from +0.0 where Rust sums from -0.0.
 # tests/parity.tcyr includes the src modules it needs, then this file, and defines:
 # - `_par_error_name(code)`: the Rust variant name of a `US_ERR_*` code, as a C string;
 # - `_par_dispatch(mp, ml, fp, fl)`: fill the got list for one row (1 handled, 0 pending, -1 unusable);
@@ -399,6 +401,8 @@ fn _par_compare(slot, cls, fp, fl): i64 {
             } else {
                 if (ulp_rel_match(gv, wv, 0.000000000001) != 1) { result = 0; }
             }
+            # A zero of the other sign: 0 ulp apart, but not the oracle's value.
+            if (d == 0 && gv != wv && ulp_is_nan(gv) == 0) { result = 0; }
         } elif (wk == 105 || wk == 118) {
             if (gv != wv) { result = 0; }
         } elif (wk != 110) {

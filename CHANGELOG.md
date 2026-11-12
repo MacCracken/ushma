@@ -42,6 +42,19 @@ ADRs 0001–0005.
 - **scripts/oracle** — serde_json is built with `float_roundtrip`: its default float parse reads 35,970 of 160,320 of its own shortest texts back 1–2 ulp off (probe 11). Writing is unchanged, and the golden corpus is unaffected
 
 ### Added
+- **M4b, the steam cycles** (port plan §6): `us_rankine_cycle`, `us_refrigeration_cycle` and `us_heat_pump_cop`, with `UsRefrigerationResult` and its JSON. cycle has 10 of its 13 functions.
+  - **Rankine:** Rust's `Option<f64>` superheat is a flag and a value (`superheated`, `t_superheat`; ADR 0002 row 11). The boiler exit is the saturated vapor or the superheated state. The turbine exhaust is wet, or superheated by entropy inversion where s₃ > s_g at the condenser.
+  - **Refrigeration:** `UsRefrigerationResult` nests its `UsCycleResult` as the first field and adds the two COPs. `us_refrigeration_result_init` / `_init_a` make one, and `us_refrigeration_result_cycle` gives the cycle's address for the cycle accessors. Its `net_work` is Rust's `-w_comp`, a sign flip (`_us_neg`, new).
+  - **Behaviour:** Rust's operation order. A steam lookup's refusal is returned as Rust's `?` returns it. Both cycles open spans under Rust's names, around the inversion's own.
+  - **Golden rows:** `tests/golden/cycle.tsv` grows to 5,173. M4b adds 2,334 (A 53, B 213, C 2,068; 1,140 refusals):
+    - Rankine: 1,482 rows over condenser × boiler pressures × superheats. Each tier temperature and each tier's saturation temperature runs ± 1 ulp, the boiler at the condenser pressure ± 1 ulp, the table's ends ± 1 ulp, and the superheat where the exhaust leaves the wet region (bisected) ± 2 ulps.
+    - Refrigeration: 586 rows, with the condenser at the evaporator ± 1 ulp and the evaporator where the compressor exit enters the superheated table (bisected) ± 2 ulps.
+    - `heat_pump_cop`: 213 rows. `RefrigerationResult`'s JSON: 53 rows.
+    - Every row passes. 5 JSON rows are accepted under ADR 5, and glibc misrounds none.
+  - **`validate.py`** models the three functions (`model_args` reads `n:` as `None`) and reproduces their 2,281 rows.
+  - **Tests:** `tests/cycle.tcyr` grows to 162 assertions. It ports 15 more Rust tests, 45 of 59 in all (every one due), with the 13.2 % turbine-exhaust and the 677 K / 2.877 COP reference cases among them. The 2 steam-cycle integration tests are ported (82 assertions in `tests/integration.tcyr`). Reference tests cover a refrigeration result's document, the steam spans, reuse (1,000 analyses of each, 0 heap bytes) and refused allocations. The fuzz harness reads `RefrigerationResult` documents (618 read and round-tripped).
+  - **Benches:** Rust's `cycle/rankine` and `cycle/refrigeration`, recorded against Rust's.
+  - **`scripts/surface_parity.py`:** `RefrigerationResult` is in TYPES. Probed as ported, cycle has 35 of its 44 items, and the 9 missing are M4c's.
 - **M4a, the cycle types and the ideal-gas cycles** (port plan §6): `src/cycle.cyr`'s first 15 functions and its first 4 types.
   - **Types:** `UsProcess` and `UsCycle` hold Rust's `ProcessKind` and `CycleKind` (`US_PROCESS_ISENTROPIC` …, `US_CYCLE_OTTO` …, append-only), with `us_process_name` / `us_cycle_name`. `UsStatePoint` holds a `StatePoint`, and `UsCycleResult` a `CycleResult`. All four have JSON.
   - **Functions:** the process helpers (`us_isochoric_heat`, `us_isobaric_heat`, `us_adiabatic_work`, `us_adiabatic_temp_from_pressure`) and the ideal-gas cycles (`us_otto_cycle`, `us_diesel_cycle`, `us_brayton_cycle`).
@@ -163,7 +176,14 @@ ADRs 0001–0005.
 - **scripts/probes/p0_math.cyr** — the math-counterpart probe: `f64_max`/`f64_min` return NaN for a NaN second operand where Rust returns the other value, so the port wraps them; `ganita_f64_pow(2, 0.5)` is 1 ulp off √2 (`docs/development/port-parity.md` §1)
 - **scripts/gates.sh** — the full gate run (oracle, ELF / `--bounds` / PE / aarch64 tests, bench, fmt / lint / doc, vet, lock, audit)
 
+### Fixed
+- **transfer, state, entropy** — every port of Rust's f64 `sum` now starts at −0.0, as Rust's does (`_US_NEG_ZERO`, new in `src/validate.cyr`). Six sums had started at `0.0 - 0.0`, which is +0.0. So an empty series resistance, and Kay's rules over a −0.0 product, gave +0.0 where 1.4.0 gives −0.0. The other four (the parallel resistance, the mixture check and `entropy_of_mixing`'s two sums) differ only where no output shows it. Found at M4b
+- **tests/parity_core.cyr** — a zero must now carry the oracle's sign in every class. +0 and −0 are one point on the ulp line, so the distance alone had passed the 5 rows above as 0 ulp, and the port's "class B bit-identical" was not quite true. The 8 decoder rows that read the integer `-0` stay accepted under ADR 5 (bayan's open `-0` issue), as before
+- **tests/parity.tcyr** — the ADR 5 flag is reset for every row. It had been reset only for the material, state and phase routes, so a failing transfer, entropy, steam or cycle row after a JSON row would have been accepted as ADR 5. The tightened check showed it: it accepted the two series rows until this fix
+- **tests/foundation.tcyr** — the predicates' "−0" cases tested +0 (`0.0 - 0.0`), and now use −0.0. `_us_neg` (new: Rust's unary minus as a sign flip, which `0.0 - x` is not at +0.0) is tested beside it
+
 ### Performance
+- **steam** (M4b's review) — `superheated_by_entropy` probes the entropy alone during its bisection: the ln-P weight is computed once per inversion, and the volume's ln, ln and exp are skipped until the final lookup. Every bit is unchanged. Between tiers the inversion went from 4.6 to 2.2 µs, and `cycle/refrigeration` from 5.1 to 2.6 µs (Rust 890 ns). On a tier, `steam/superheated_by_entropy` went from 1,498 ns to 1,005 (Rust 342.05). All 6,037 inversion rows and every steam-cycle row are unchanged
 - **steam** (M3b's review) — Region 4's coefficients are generated as scalar consts (immediates) instead of an indexed array, and the saturated interpolation reads its columns directly: `saturated_by_temp` 174 → 141 ns (Rust 18.19), `saturated_by_pressure` 189 → 159 (43.89), `saturation_pressure` 68 → 59 (6.45). Every golden row is unchanged; hisab's `calc_lerp` stays (an inlined lerp measured 3 ns faster)
 - **validate** — `_us_finite_gt` / `_us_finite_ge` are one branch-free expression, `(x > bound) & (x < +∞)`, so `#inline` takes them; they were an `if` around a call. Three checks went from 21 ns to 6. Transfer, before → after, against Rust 1.4.0: diffusivity 33 → 16 ns (Rust 4.49), Biot 29 → 15 (3.99), parallel resistance 47 → 31 (9.28), conduction 31 → 23 (13.1), Reynolds 16 → 10 (2.57), fin heat 180 → 157 (89.76), coaxial disks 65 → 44 (8.19). Every golden row is unchanged (`docs/benchmarks-rust-v-cyrius.md`)
 - **transfer** — Rust's `powi(4)` and `powi(2)` are written as the products `__powidf2` forms, (x·x)·(x·x) and x·x, instead of the loop. Radiation went from 40 to 25 ns (Rust 9.95), with the same bits on every row

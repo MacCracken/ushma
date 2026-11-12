@@ -151,7 +151,7 @@ fn us_entropy_of_mixing(moles: f64, xs, n): Result {
         }
         k = k + 1;
     }
-    var fs: f64 = 0.0 - 0.0;
+    var fs: f64 = _US_NEG_ZERO;
     k = 0;
     while (k < n) {
         var x2: f64 = load64(xs + (8 * k));
@@ -163,7 +163,7 @@ fn us_entropy_of_mixing(moles: f64, xs, n): Result {
         _us_span_exit();
         return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_entropy_of_mixing", "fraction sum", fs));
     }
-    var s: f64 = 0.0 - 0.0;
+    var s: f64 = _US_NEG_ZERO;
     k = 0;
     while (k < n) {
         var x3: f64 = load64(xs + (8 * k));

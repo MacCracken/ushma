@@ -1076,7 +1076,8 @@ fn _par_got_cycle(r: *UsCycleResult) {
     return 0;
 }
 
-# A UsCycleResult from the row's input tokens (as _par_got_cycle writes them) into *r: 1, or 0.
+# A UsCycleResult from the row's input tokens (as _par_got_cycle writes them) into *r: the index of the token after
+# them, or 0.
 fn _par_cycle_in(r: *UsCycleResult): i64 {
     var kind = _par_in_enum(0, &_par_cycle_text, US_CYCLE_COUNT);
     if (kind < 0) { return 0; }
@@ -1103,10 +1104,32 @@ fn _par_cycle_in(r: *UsCycleResult): i64 {
     at = at + m;
     var base = r;
     _par_in_words(at, 6, base + _US_CR_NUMS);
+    return at + 6;
+}
+
+# Appends *rr as its golden tokens: its cycle's, then the two COPs.
+fn _par_got_refr(rr: *UsRefrigerationResult) {
+    _par_got_cycle(us_refrigeration_result_cycle(rr));
+    var cr: f64 = rr.cop_refrigeration;
+    var ch: f64 = rr.cop_heat_pump;
+    _par_got_f(cr);
+    _par_got_f(ch);
+    return 0;
+}
+
+# A UsRefrigerationResult from the row's input tokens into *rr: 1, or 0.
+fn _par_refr_in(rr: *UsRefrigerationResult): i64 {
+    var at = _par_cycle_in(us_refrigeration_result_cycle(rr));
+    if (at == 0 || _par_in_n != at + 2) { return 0; }
+    var cr: f64 = _par_in(at);
+    var ch: f64 = _par_in(at + 1);
+    rr.cop_refrigeration = cr;
+    rr.cop_heat_pump = ch;
     return 1;
 }
 
 var _par_cyc = 0;
+var _par_rr = 0;
 
 # One cycle JSON row: 1 when handled, 0 for none, -1 for unusable inputs.
 fn _par_cycle_json(fp, fl): i64 {
@@ -1147,11 +1170,19 @@ fn _par_cycle_json(fp, fl): i64 {
         _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
         return 1;
     }
+    if (_par_eq(fp, fl, "cycle::RefrigerationResult::to_json") == 1) {
+        if (_par_refr_in(_par_rr) == 0) { return 0 - 1; }
+        store64(_par_mat_sb + 8, 0);
+        us_refrigeration_result_to_json(_par_mat_sb, _par_rr);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
     var kind = 0;
     if (_par_eq(fp, fl, "cycle::StatePoint::from_json") == 1) { kind = 1; }
     if (_par_eq(fp, fl, "cycle::ProcessKind::from_json") == 1) { kind = 2; }
     if (_par_eq(fp, fl, "cycle::CycleKind::from_json") == 1) { kind = 3; }
     if (_par_eq(fp, fl, "cycle::CycleResult::from_json") == 1) { kind = 4; }
+    if (_par_eq(fp, fl, "cycle::RefrigerationResult::from_json") == 1) { kind = 5; }
     if (kind == 0) { return 0; }
     var doc = _par_in_text(0, &dn);
     if (doc == 0) { return 0 - 1; }
@@ -1179,6 +1210,12 @@ fn _par_cycle_json(fp, fl): i64 {
         if (is_ok(t4) == 1) { _par_got_cycle(&r); } else { _par_got_err(v4); }
         ok = is_ok(t4);
     }
+    if (kind == 5) {
+        var rr: UsRefrigerationResult;
+        var t5, v5 = us_refrigeration_result_from_json_a(_par_mat_arena, doc, n, &rr);
+        if (is_ok(t5) == 1) { _par_got_refr(&rr); } else { _par_got_err(v5); }
+        ok = is_ok(t5);
+    }
     if (ok == 0 && _par_bayan_mapped_refusal(doc, n) == 1) { _par_adr5 = 1; }
     if (ok == 1 && _par_has_int_neg_zero(doc, n) == 1) { _par_adr5 = 1; }
     return 1;
@@ -1195,6 +1232,8 @@ fn _par_cycle(fp, fl): i64 {
     if (_par_cyc == 0) {
         _par_cyc = alloc(sizeof(UsCycleResult));
         var ti, vi = us_cycle_result_init(_par_cyc);
+        _par_rr = alloc(sizeof(UsRefrigerationResult));
+        var tr, vr = us_refrigeration_result_init(_par_rr);
     }
     var j = _par_cycle_json(fp, fl);
     if (j != 0) { return j; }
@@ -1237,6 +1276,24 @@ fn _par_cycle(fp, fl): i64 {
     if (_par_eq(fp, fl, "cycle::brayton_cycle") == 1) {
         var t3, v3 = us_brayton_cycle(a, b, c, d, e, g, _par_cyc);
         _par_got_cycle_res(t3, v3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "cycle::rankine_cycle") == 1) {
+        # Rust's Option<f64> superheat: `n:` (None, token kind 110) or `f:` (Some).
+        var sup = 1;
+        if (_par_in_n < 3 || load64(_par_in_k + 16) == 110) { sup = 0; }
+        var t4, v4 = us_rankine_cycle(a, b, sup, c, _par_cyc);
+        _par_got_cycle_res(t4, v4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "cycle::refrigeration_cycle") == 1) {
+        var t5, v5 = us_refrigeration_cycle(a, b, _par_rr);
+        if (is_ok(t5) == 1) { _par_got_refr(_par_rr); } else { _par_got_err(v5); }
+        return 1;
+    }
+    if (_par_eq(fp, fl, "cycle::heat_pump_cop") == 1) {
+        var hp: f64 = us_heat_pump_cop(a);
+        _par_got_f(hp);
         return 1;
     }
     return 0;
@@ -1501,6 +1558,7 @@ fn _par_transfer(fp, fl): i64 {
 # chem, material, phase and state other than their presets arrive at M1–M5.
 fn _par_dispatch(mp, ml, fp, fl): i64 {
     _par_got_n = 0;
+    _par_adr5 = 0;   # per row: a stale flag would accept a later failing row in any module
     if (_par_eq(mp, ml, "constants") == 1) { return _par_constants(fp, fl); }
     if (_par_eq(mp, ml, "math") == 1) { return _par_math(fp, fl); }
     if (_par_eq(mp, ml, "fmtf") == 1) { return _par_fmtf(fp, fl); }
@@ -1508,7 +1566,6 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "entropy") == 1) { return _par_entropy(fp, fl); }
     if (_par_eq(mp, ml, "steam") == 1) { return _par_steam(fp, fl); }
     if (_par_eq(mp, ml, "cycle") == 1) { return _par_cycle(fp, fl); }
-    _par_adr5 = 0;
     if (_par_eq(mp, ml, "material") == 1 && _par_in_n != 0) { return _par_material(fp, fl); }
     if (_par_eq(mp, ml, "state") == 1 && _par_in_n != 0) { return _par_state(fp, fl); }
     if (_par_eq(mp, ml, "phase") == 1 && _par_in_n != 0) { return _par_phase(fp, fl); }

@@ -1,9 +1,9 @@
 # ushma fuzz harness: every reader of untrusted input (port plan §6). Run with `cyrius fuzz --poison --bounds`.
 #
 # The targets so far: USHMA_LOG parsing (`us_log_parse`), and the `ThermalMaterial`, `GasData`, `SubstanceData`,
-# `Phase`, `SaturatedEntry`, `WetSteamProperties`, `SuperheatedEntry`, `StatePoint`, `ProcessKind`, `CycleKind` and
-# `CycleResult` decoders, which must also round-trip: what one accepts re-encodes, reads back, and re-encodes to the
-# same bytes. The other JSON decoders and the daimon response
+# `Phase`, `SaturatedEntry`, `WetSteamProperties`, `SuperheatedEntry`, `StatePoint`, `ProcessKind`, `CycleKind`,
+# `CycleResult` and `RefrigerationResult` decoders, which must also round-trip: what one accepts re-encodes, reads
+# back, and re-encodes to the same bytes. The other JSON decoders and the daimon response
 # handling join as they port. Each target must accept any bytes: return a defined result, never crash, never write
 # outside its buffers (the poisoning allocator and --bounds check that).
 #
@@ -39,6 +39,7 @@ var _fz_sub_read = 0;
 var _fz_enum_read = 0;
 var _fz_f64_read = 0;
 var _fz_cycle_read = 0;
+var _fz_refr_read = 0;
 
 # xorshift64*: the next pseudo-random word.
 fn fz_next(): i64 {
@@ -322,6 +323,40 @@ fn fz_cycle(data, len) {
     return 0;
 }
 
+# The RefrigerationResult decoder on one input: a refusal is Deserialize; an accepted result has a cycle as
+# fz_cycle's, and round-trips.
+fn fz_refr(data, len) {
+    var rr: UsRefrigerationResult;
+    reset_via(_fz_arena);
+    var t, v = us_refrigeration_result_from_json_a(_fz_arena, data, len, &rr);
+    if (is_ok(t) == 0) {
+        if (v != US_ERR_DESERIALIZE) { _fz_bad = _fz_bad + 1; }
+        return 0;
+    }
+    _fz_refr_read = _fz_refr_read + 1;
+    var c: *UsCycleResult = us_refrigeration_result_cycle(&rr);
+    if (c.kind < 0 || c.kind >= US_CYCLE_COUNT || vec_len(c.states) % 5 != 0) {
+        _fz_bad = _fz_bad + 1;
+        return 0;
+    }
+    store64(_fz_sb + 8, 0);
+    us_refrigeration_result_to_json(_fz_sb, &rr);
+    var r2: UsRefrigerationResult;
+    var t2, v2 = us_refrigeration_result_from_json_a(_fz_arena, load64(_fz_sb), load64(_fz_sb + 8), &r2);
+    if (is_ok(t2) == 0) {
+        # A non-finite number writes as null, which reads back as no f64 (as fz_material).
+        var cr: f64 = rr.cop_refrigeration;
+        var ch: f64 = rr.cop_heat_pump;
+        if (fz_cycle_finite(c) == 1 && _us_is_finite(cr) == 1 && _us_is_finite(ch) == 1) { _fz_bad = _fz_bad + 1; }
+        return 0;
+    }
+    store64(_fz_sb2 + 8, 0);
+    us_refrigeration_result_to_json(_fz_sb2, &r2);
+    var n1 = load64(_fz_sb + 8);
+    if (n1 != load64(_fz_sb2 + 8) || memeq(load64(_fz_sb), load64(_fz_sb2), n1) == 0) { _fz_bad = _fz_bad + 1; }
+    return 0;
+}
+
 # A builder's text as a fresh C string.
 fn fz_text(sb): i64 {
     var n = load64(sb + 8);
@@ -346,6 +381,7 @@ fn fuzz_main(data, len) {
     fz_f64(3, data, len);
     fz_f64(4, data, len);
     fz_cycle(data, len);
+    fz_refr(data, len);
     return 0;
 }
 
@@ -402,7 +438,7 @@ fn main() {
     _fz_sb2 = str_builder_new();
     var cap = 2048;
     var buf = alloc(cap + 1);
-    var seeds = alloc(8 * 34);
+    var seeds = alloc(8 * 36);
     store64(seeds, "trace");
     store64(seeds + 8, "debug");
     store64(seeds + 16, "info");
@@ -455,6 +491,13 @@ fn main() {
     store64(sbc + 8, 0);
     us_cycle_result_to_json(sbc, &cr);
     store64(seeds + 264, fz_text(sbc));
+    var rr: UsRefrigerationResult;
+    var trr, vrr = us_refrigeration_result_init(&rr);
+    var tf, vf = us_refrigeration_cycle(7384.0, 47390.0, &rr);
+    store64(sbc + 8, 0);
+    us_refrigeration_result_to_json(sbc, &rr);
+    store64(seeds + 272, fz_text(sbc));
+    store64(seeds + 280, "[[\"Refrigeration\",[[1,2,3,4,5]],[\"Isenthalpic\"],1,2,-3,4,1,0],1.5,2.5]");
     var i = 0;
     while (i < 50000) {
         var n = 0;
@@ -463,7 +506,7 @@ fn main() {
             var k = 0;
             while (k < n) { store8(buf + k, fz_below(256)); k = k + 1; }
         } else {
-            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(34)));
+            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(36)));
         }
         fuzz_main(buf, n);
         i = i + 1;
@@ -485,6 +528,8 @@ fn main() {
     fmt_int(_fz_f64_read);
     print(", cycle results read: ", 22);
     fmt_int(_fz_cycle_read);
+    print(", refrigeration results read: ", 30);
+    fmt_int(_fz_refr_read);
     println(")");
     return 0;
 }

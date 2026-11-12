@@ -1,6 +1,6 @@
 # Rust 1.4.0's integration tests (rust-old/tests/integration.rs), cross-module, each ported at the milestone of the
-# last module it calls: M1's six on transfer and material, M2's eight on state and entropy, then M3's on phase and
-# steam.
+# last module it calls: M1's six on transfer and material, M2's eight on state and entropy, M3's on phase and steam,
+# then M4's on the cycles.
 
 include "src/constants.cyr"
 include "src/error.cyr"
@@ -20,6 +20,7 @@ include "src/steam_data.cyr"
 include "src/steam.cyr"
 include "src/state.cyr"
 include "src/entropy.cyr"
+include "src/cycle.cyr"
 
 # |a − b| as an f64.
 fn absdiff(a: f64, b: f64): f64 {
@@ -390,6 +391,52 @@ fn simple_rankine_cycle_energy_balance() {
     assert(eta > 0.15 && eta < 0.4, "efficiency 15-40%");
 }
 
+# The Rankine cycle at 10 kPa / 2 MPa superheated to 573.15 K: four state points, 15 % or better, net work out, and
+# below the Carnot efficiency between its hottest and coldest states.
+# rust tests/integration.rs: rankine_with_steam_tables_end_to_end
+fn rankine_with_steam_tables_end_to_end() {
+    test_group("Rankine end to end");
+    var r: UsCycleResult;
+    var ti, vi = us_cycle_result_init(&r);
+    var t, v = us_rankine_cycle(10000.0, 2000000.0, 1, 573.15, &r);
+    assert_eq(is_ok(t), 1, "Ok");
+    assert_eq(us_cycle_state_count(&r), 4, "four state points");
+    var eta: f64 = r.efficiency;
+    var w: f64 = r.net_work;
+    assert(eta > 0.15 && w > 0.0, "15 % or better, net work out");
+    var hot: UsStatePoint;
+    var cold: UsStatePoint;
+    us_cycle_state(&r, 2, &hot);
+    us_cycle_state(&r, 0, &cold);
+    var th: f64 = hot.temperature;
+    var tc: f64 = cold.temperature;
+    var tcar, vcar = us_carnot_efficiency(th, tc);
+    var carnot: f64 = okv(tcar, vcar, "Carnot between the same limits");
+    assert(eta < carnot, "below Carnot");
+}
+
+# The refrigeration cycle at 7.384 / 47.39 kPa: its COP is below the Carnot COP between the evaporator and the
+# condenser.
+# rust tests/integration.rs: refrigeration_vs_carnot_cop
+fn refrigeration_vs_carnot_cop() {
+    test_group("refrigeration against Carnot");
+    var rr: UsRefrigerationResult;
+    var ti, vi = us_refrigeration_result_init(&rr);
+    var t, v = us_refrigeration_cycle(7384.0, 47390.0, &rr);
+    assert_eq(is_ok(t), 1, "Ok");
+    var c = us_refrigeration_result_cycle(&rr);
+    var cold: UsStatePoint;
+    var hot: UsStatePoint;
+    us_cycle_state(c, 0, &cold);
+    us_cycle_state(c, 2, &hot);
+    var th: f64 = hot.temperature;
+    var tc: f64 = cold.temperature;
+    var tcar, vcar = us_carnot_cop_refrigeration(th, tc);
+    var carnot: f64 = okv(tcar, vcar, "the Carnot COP");
+    var cop: f64 = rr.cop_refrigeration;
+    assert(cop < carnot, "COP below Carnot's");
+}
+
 # Runs every test and returns the failure count.
 fn main() {
     alloc_init();
@@ -412,6 +459,8 @@ fn main() {
     quality_consistency_across_methods();
     phase_lookup_agrees_with_steam_table();
     simple_rankine_cycle_energy_balance();
+    rankine_with_steam_tables_end_to_end();
+    refrigeration_vs_carnot_cop();
     return assert_summary();
 }
 
