@@ -157,6 +157,20 @@ Ushma does NOT own:
 - [x] Explicit FD stability with convective boundaries (Fo·(1+Bi) ≤ 0.5); adaptive-step round-off; 2D convective BC; network connectivity check
 - [x] Debye Cv at low T; equilibrium-constant overflow (`ln_equilibrium_constant`); Pitzer Z validity; exact R
 
+## V2.0 — Cyrius port (planned)
+
+Rust 1.4.0 is the final Rust feature release and becomes the frozen parity oracle in `rust-old/`;
+the Cyrius port ships as 2.0.0. Plan of record: [ushma-port-plan.md](ushma-port-plan.md).
+
+- [ ] M0 — tag 1.4.0, `cyrius port`, oracle generator, parity harness, probes, upstream filings
+- [ ] M1 — foundation & transfer
+- [ ] M2 — equations of state & entropy
+- [ ] M3 — phase & steam
+- [ ] M4 — cycles
+- [ ] M5 — chemical & statistical
+- [ ] M6 — numerical
+- [ ] M7 — release 2.0.0
+
 ## Backlog (from the 1.4 audit, demand-gated)
 
 - [ ] 2D boundary nodes: second-order ghost-node treatment (insulated/convective are first-order at the wall; 1D is second-order)
