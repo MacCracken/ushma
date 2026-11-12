@@ -46,6 +46,15 @@ dropped or deferred.
   read-only. `rust-old/Cargo.lock` is committed, so the oracle always builds against hisab 1.4.0,
   serde_json 1.0.154 and reqwest 0.13.
 
+## Amendment, 2026-11-11 (M0 probe 6): the written prefix
+
+`mod us;` is unusable for a bundle. Its scope runs past the included file to the end of the compilation unit, so
+it mangles the consumer's own functions (`main` became `us_main`). No form ends it, globals aren't mangled, and a
+bare call between the module's own functions doesn't resolve without a `use`. So public names carry a **written
+`us_` prefix**: `us_*` functions, and `US_*` constants, enum members and error codes. Private helpers use `_us_`.
+The collision is real: kimiya's bundle defines `ideal_gas_pressure`, and including it beside an unprefixed ushma
+is a duplicate-fn error, or a silent last-definition-wins when the signatures match.
+
 ## Consequences
 
 - **Positive**

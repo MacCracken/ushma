@@ -1,0 +1,109 @@
+# Probe 5 (port plan §4 step 9.5): the raw cost of the steam lookups on the generated column tables
+# (src/steam_data.cyr), against Rust 1.4.0's whole functions (rust-old/bench-history.csv on the 1.4.0 tag:
+# steam/saturated_by_temp 18.2 ns, steam/superheated_lookup 31.4 ns). Measured, over 10^6 lookups each:
+# - saturated by T: the bracketing row by binary search over the 42 temperatures, then all 9 columns lerped;
+# - superheated by (T, P): the tier by binary search over the 9 pressures, the row within the tier's 8 temperatures,
+#   then the 3 property columns lerped in T.
+# Only the search and the interpolation, not the IF97 Region 4 equation or the ln-P tier blend the real functions
+# add, so these are lower bounds for the port's functions.
+#
+#   cyrius bench scripts/probes/p5_table_lookup.bcyr
+include "src/steam_data.cyr"
+
+var _p5_sink: f64 = 0.0;
+
+# The index i with T[i] ≤ t < T[i + 1] in the saturated temperatures (clamped to the last interval).
+#must_use
+fn p5_sat_row(t: f64): i64 {
+    var lo = 0;
+    var hi = _US_STEAM_SATURATED_COUNT - 1;
+    while (hi - lo > 1) {
+        var mid = (lo + hi) / 2;
+        var tm: f64 = _US_STEAM_SAT_TEMPERATURE[mid];
+        if (t < tm) { hi = mid; } else { lo = mid; }
+    }
+    return lo;
+}
+
+# a + (b − a)·f.
+#must_use
+fn p5_lerp(a: f64, b: f64, f: f64): f64 {
+    var r: f64 = a + ((b - a) * f);
+    return r;
+}
+
+# All 9 saturated properties at t, summed into the sink (so none is eliminated).
+fn p5_sat(t: f64) {
+    var i = p5_sat_row(t);
+    var t0: f64 = _US_STEAM_SAT_TEMPERATURE[i];
+    var t1: f64 = _US_STEAM_SAT_TEMPERATURE[i + 1];
+    var f: f64 = (t - t0) / (t1 - t0);
+    var s: f64 = p5_lerp(_US_STEAM_SAT_PRESSURE[i], _US_STEAM_SAT_PRESSURE[i + 1], f);
+    s = s + p5_lerp(_US_STEAM_SAT_V_F[i], _US_STEAM_SAT_V_F[i + 1], f);
+    s = s + p5_lerp(_US_STEAM_SAT_V_G[i], _US_STEAM_SAT_V_G[i + 1], f);
+    s = s + p5_lerp(_US_STEAM_SAT_H_F[i], _US_STEAM_SAT_H_F[i + 1], f);
+    s = s + p5_lerp(_US_STEAM_SAT_H_FG[i], _US_STEAM_SAT_H_FG[i + 1], f);
+    s = s + p5_lerp(_US_STEAM_SAT_H_G[i], _US_STEAM_SAT_H_G[i + 1], f);
+    s = s + p5_lerp(_US_STEAM_SAT_S_F[i], _US_STEAM_SAT_S_F[i + 1], f);
+    s = s + p5_lerp(_US_STEAM_SAT_S_G[i], _US_STEAM_SAT_S_G[i + 1], f);
+    _p5_sink = _p5_sink + s;
+    return 0;
+}
+
+# The superheated properties at (t, p) within p's tier (the tier at or below p), summed into the sink.
+fn p5_sh(t: f64, p: f64) {
+    var lo = 0;
+    var hi = _US_STEAM_SUPERHEAT_TIER_COUNT - 1;
+    while (hi - lo > 1) {
+        var mid = (lo + hi) / 2;
+        var pm: f64 = _US_STEAM_SUPERHEAT_PRESSURES[mid];
+        if (p < pm) { hi = mid; } else { lo = mid; }
+    }
+    var base = lo * _US_STEAM_TEMPS_PER_TIER;
+    var j = base;
+    var last = base + _US_STEAM_TEMPS_PER_TIER - 2;
+    while (j < last) {
+        var tn: f64 = _US_STEAM_SH_TEMPERATURE[j + 1];
+        if (t < tn) { break; }
+        j = j + 1;
+    }
+    var t0: f64 = _US_STEAM_SH_TEMPERATURE[j];
+    var t1: f64 = _US_STEAM_SH_TEMPERATURE[j + 1];
+    var f: f64 = (t - t0) / (t1 - t0);
+    var s: f64 = p5_lerp(_US_STEAM_SH_SPECIFIC_VOLUME[j], _US_STEAM_SH_SPECIFIC_VOLUME[j + 1], f);
+    s = s + p5_lerp(_US_STEAM_SH_SPECIFIC_ENTHALPY[j], _US_STEAM_SH_SPECIFIC_ENTHALPY[j + 1], f);
+    s = s + p5_lerp(_US_STEAM_SH_SPECIFIC_ENTROPY[j], _US_STEAM_SH_SPECIFIC_ENTROPY[j + 1], f);
+    _p5_sink = _p5_sink + s;
+    return 0;
+}
+
+# Times both lookups over arguments spread across the tables.
+fn main(): i64 {
+    alloc_init();
+    var n = 1000000;
+    var b1 = bench_new("saturated by T (search + 9 lerps)");
+    bench_batch_start(b1);
+    var i = 0;
+    while (i < n) {
+        var t: f64 = 280.0 + f64_from(i % 360);
+        p5_sat(t);
+        i = i + 1;
+    }
+    bench_batch_stop(b1, n);
+    bench_report(b1);
+    var b2 = bench_new("superheated by (T, P) (tier + row + 3 lerps)");
+    bench_batch_start(b2);
+    i = 0;
+    while (i < n) {
+        var ts: f64 = 480.0 + f64_from(i % 300);
+        var ps: f64 = 15000.0 + (f64_from(i % 9) * 1000000.0);
+        p5_sh(ts, ps);
+        i = i + 1;
+    }
+    bench_batch_stop(b2, n);
+    bench_report(b2);
+    return 0;
+}
+
+var rr = main();
+sys_exit_group(rr);

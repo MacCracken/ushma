@@ -1,0 +1,67 @@
+# Probe 12 (port plan §4 step 9.12): which f64 traps the compiler flags. Each fn holds one trap from the guide
+# (port plan §7.3); building this file lists the diagnostics, and port-parity.md §3 records which trap gets one.
+# The guide says they are warnings, not errors, so the warning-free `cyrius test` gate is what catches them.
+#
+#   cyrius build scripts/probes/p12_f64_hygiene.cyr build/p12 2>&1 | grep -v '^note'
+
+# Trap 1: `0 - x`, an integer operation on an f64's bits (the left operand types the operator).
+fn t1_zero_minus(x: f64): f64 {
+    var r: f64 = 0 - x;
+    return r;
+}
+
+# Trap 2: `2 * x`.
+fn t2_int_times(x: f64): f64 {
+    var r: f64 = 2 * x;
+    return r;
+}
+
+# Trap 3: an integer literal passed to an f64 parameter keeps its bits (3 is a subnormal).
+fn t3_callee(x: f64): f64 {
+    var r: f64 = x * 1.0;
+    return r;
+}
+
+# The caller of trap 3.
+fn t3_int_arg(): f64 {
+    var r: f64 = t3_callee(3);
+    return r;
+}
+
+# Trap 4: a builtin's result bound untyped, then compared as if it were an f64.
+fn t4_untyped_cmp(u: f64): i64 {
+    var r = f64_sqrt(u);
+    if (r < 1.0) { return 1; }
+    return 0;
+}
+
+# Trap 5: an integer stored into a typed f64 local.
+fn t5_int_store(): f64 {
+    var r: f64 = 7;
+    return r;
+}
+
+# Trap 6: f64 compared with an integer.
+fn t6_mixed_cmp(x: f64): i64 {
+    if (x < 1) { return 1; }
+    return 0;
+}
+
+# Trap 7: `if (x)` on an f64 tests the raw bits (true for -0.0).
+fn t7_truthy(x: f64): i64 {
+    if (x) { return 1; }
+    return 0;
+}
+
+# Calls every trap so none is eliminated as unreachable.
+fn main(): i64 {
+    alloc_init();
+    var a: f64 = 1.5;
+    var s: f64 = t1_zero_minus(a) + t2_int_times(a) + t3_int_arg() + t5_int_store();
+    var k = t4_untyped_cmp(a) + t6_mixed_cmp(a) + t7_truthy(a);
+    if (s > 0.0) { k = k + 1; }
+    return k;
+}
+
+var r = main();
+sys_exit_group(r);

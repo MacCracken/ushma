@@ -163,6 +163,16 @@ each one is a bug:
   - Never put hex in a `const`: it is an integer.
   - No exponent notation in literals; generated files write decimals positionally.
   - Use the canonical `ganita_f64_*` names, not the deprecated aliases.
+- **Never test an f64 for truth** (`if (x)`, `!x`): it tests the raw bits (−0.0 is true) and the compiler doesn't
+  flag it (probe 12). Compare explicitly.
+- **Spans are level-gated.** `sakshi_span_enter` has no level check (192 ns per call even into its ring buffer,
+  probe 8), so instrumented functions use `_us_span_enter` / `_us_span_exit`, which test the level first (+1.6 ns
+  with DEBUG off).
+- **Results through out-pointers.** A wide result fills the caller's `out: *T` and the function returns a value-form
+  `Result` (Ok(0) / Err(code)). Never a freshly allocated record in the payload, which leaks 56 B per call (probe 3).
+- **No per-call allocation on repeated paths.** Point lists go into a caller buffer or caller vecs that are refilled
+  (`vec_truncate`); stepped state keeps its scratch, or resets an arena each step (probes 2, 4). The global heap
+  never frees.
 - **Toolchain workarounds** (open issues at the pin; port plan §2.8).
   - Bind a struct-returning call to a local before storing it into a field (`s.f = g(t.e)` miscompiles).
   - Never put an attribute (`#must_use`, `#inline`) directly before a `var` or `const`; it

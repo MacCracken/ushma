@@ -1,0 +1,10 @@
+include "scripts/probes/p6_names/lib_us.cyr"
+
+fn main(): i64 {
+    alloc_init();
+    var x = GLOBALV;
+    var y = us_GLOBALV;
+    return 0;
+}
+var r = main();
+sys_exit_group(r);

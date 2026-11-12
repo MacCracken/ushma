@@ -1,0 +1,66 @@
+# Probe 8 (port plan §4 step 9.8): what a sakshi span costs around a 1–2 ns function. Rust's
+# `#[tracing::instrument(level = "debug")]` costs almost nothing when DEBUG is filtered out; sakshi_span_enter and
+# _exit have no level check (they read the clock, push the span stack and emit every time), so ushma's spans must be
+# gated by a level test of its own. Three variants of ideal_gas_volume's arithmetic, n·R·T/P:
+# - plain;
+# - gated: `if (_p8_level >= SK_DEBUG)` around the enter and the exit, with the level at SK_INFO (filtered out);
+# - sakshi: enter and exit every call, into sakshi's ring buffer (sakshi_output_buffer, its cheapest output).
+#
+#   cyrius bench scripts/probes/p8_span_cost.bcyr
+
+var _p8_sink: f64 = 0.0;
+var _p8_level = 3;   # SK_INFO: DEBUG spans filtered out
+
+# n·R·T/P with no span.
+fn p8_plain(n: f64, t: f64, p: f64): f64 {
+    var r: f64 = ((n * 8.31446261815324) * t) / p;
+    return r;
+}
+
+# The same, inside a level-gated span (the shape ushma's spans take).
+fn p8_gated(n: f64, t: f64, p: f64): f64 {
+    if (_p8_level >= 4) { sakshi_span_enter("ideal_gas_volume", 16); }
+    var r: f64 = ((n * 8.31446261815324) * t) / p;
+    if (_p8_level >= 4) { sakshi_span_exit(); }
+    return r;
+}
+
+# The same, inside a sakshi span on every call.
+fn p8_sakshi(n: f64, t: f64, p: f64): f64 {
+    sakshi_span_enter("ideal_gas_volume", 16);
+    var r: f64 = ((n * 8.31446261815324) * t) / p;
+    sakshi_span_exit();
+    return r;
+}
+
+# Times each variant over a million calls.
+fn main(): i64 {
+    alloc_init();
+    sakshi_output_buffer();
+    var n = 1000000;
+    var a: f64 = 1.0;
+    var t: f64 = 300.0;
+    var p: f64 = 101325.0;
+    var b1 = bench_new("plain n*R*T/P");
+    bench_batch_start(b1);
+    var i = 0;
+    while (i < n) { var r1: f64 = p8_plain(a, t, p); _p8_sink = _p8_sink + r1; i = i + 1; }
+    bench_batch_stop(b1, n);
+    bench_report(b1);
+    var b2 = bench_new("gated span, DEBUG filtered");
+    bench_batch_start(b2);
+    i = 0;
+    while (i < n) { var r2: f64 = p8_gated(a, t, p); _p8_sink = _p8_sink + r2; i = i + 1; }
+    bench_batch_stop(b2, n);
+    bench_report(b2);
+    var b3 = bench_new("sakshi span, ring buffer");
+    bench_batch_start(b3);
+    i = 0;
+    while (i < n) { var r3: f64 = p8_sakshi(a, t, p); _p8_sink = _p8_sink + r3; i = i + 1; }
+    bench_batch_stop(b3, n);
+    bench_report(b3);
+    return 0;
+}
+
+var r = main();
+sys_exit_group(r);

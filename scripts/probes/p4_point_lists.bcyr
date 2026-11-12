@@ -1,0 +1,151 @@
+# Probe 4 (port plan §4 step 9.4): how a diagram's point list (Rust's Vec<DiagramPoint>, two f64 each) comes back.
+# A diagram of 4 processes × 50 points = 200 points, built 10^4 times by each shape, timed, with the heap it grows:
+# - structs: a vec of pointers to 16-byte point records (one allocation per point);
+# - parallel: two f64 vecs (x, y), fresh per diagram;
+# - reused: the same two vecs, emptied with vec_truncate between diagrams (the bounded-memory primitive);
+# - flat: a caller-provided f64 buffer of 2·n words, with the count returned.
+#
+#   cyrius bench scripts/probes/p4_point_lists.bcyr
+
+struct P4Pt { x: f64; y: f64; }
+
+var _p4_sink: f64 = 0.0;
+
+# An untyped word as a *P4Pt (impetus's cast-helper idiom).
+#must_use
+fn p4_as_pt(p): *P4Pt { return p; }
+
+# The k-th point of the test diagram: a smooth path, as T·(Tb/Ta)^f would be.
+#must_use
+fn p4_x(k): f64 {
+    var kf: f64 = f64_from(k);
+    var r: f64 = 300.0 + (kf * 2.5);
+    return r;
+}
+
+# The same point's y.
+#must_use
+fn p4_y(k): f64 {
+    var kf: f64 = f64_from(k);
+    var r: f64 = 1000.0 - (kf * 0.75);
+    return r;
+}
+
+# The diagram as a vec of point records.
+#must_use
+fn p4_structs(n): i64 {
+    var v = vec_new();
+    var k = 0;
+    while (k < n) {
+        var p: *P4Pt = p4_as_pt(alloc(sizeof(P4Pt)));
+        p.x = p4_x(k);
+        p.y = p4_y(k);
+        vec_push(v, p);
+        k = k + 1;
+    }
+    return v;
+}
+
+# The diagram into the parallel vecs xs, ys (appended).
+fn p4_parallel(n, xs, ys) {
+    var k = 0;
+    while (k < n) {
+        var x: f64 = p4_x(k);
+        var y: f64 = p4_y(k);
+        vec_push(xs, x);
+        vec_push(ys, y);
+        k = k + 1;
+    }
+    return 0;
+}
+
+# The diagram into a flat buffer of cap points; returns the count written.
+#must_use
+fn p4_flat(n, out: *f64, cap): i64 {
+    var m = n;
+    if (m > cap) { m = cap; }
+    var k = 0;
+    while (k < m) {
+        out[2 * k] = p4_x(k);
+        out[(2 * k) + 1] = p4_y(k);
+        k = k + 1;
+    }
+    return m;
+}
+
+# Times each shape and reports its heap growth.
+fn main(): i64 {
+    alloc_init();
+    var reps = 10000;
+    var n = 200;
+    var h0 = alloc_used();
+    var b1 = bench_new("vec of point records");
+    bench_batch_start(b1);
+    var i = 0;
+    while (i < reps) {
+        var v = p4_structs(n);
+        var last: *P4Pt = p4_as_pt(vec_get(v, n - 1));
+        _p4_sink = _p4_sink + last.x;
+        i = i + 1;
+    }
+    bench_batch_stop(b1, reps);
+    bench_report(b1);
+    var h1 = alloc_used();
+    var b2 = bench_new("parallel f64 vecs, fresh");
+    bench_batch_start(b2);
+    i = 0;
+    while (i < reps) {
+        var xs = vec_new();
+        var ys = vec_new();
+        p4_parallel(n, xs, ys);
+        var lx: f64 = vec_get(xs, n - 1);
+        _p4_sink = _p4_sink + lx;
+        i = i + 1;
+    }
+    bench_batch_stop(b2, reps);
+    bench_report(b2);
+    var h2 = alloc_used();
+    var rx = vec_new();
+    var ry = vec_new();
+    var b3 = bench_new("parallel f64 vecs, reused");
+    bench_batch_start(b3);
+    i = 0;
+    while (i < reps) {
+        vec_truncate(rx, 0);
+        vec_truncate(ry, 0);
+        p4_parallel(n, rx, ry);
+        var lr: f64 = vec_get(rx, n - 1);
+        _p4_sink = _p4_sink + lr;
+        i = i + 1;
+    }
+    bench_batch_stop(b3, reps);
+    bench_report(b3);
+    var h3 = alloc_used();
+    var buf: f64[400];
+    var b4 = bench_new("caller's flat buffer");
+    bench_batch_start(b4);
+    i = 0;
+    while (i < reps) {
+        var m = p4_flat(n, &buf, 200);
+        _p4_sink = _p4_sink + buf[(2 * m) - 2];
+        i = i + 1;
+    }
+    bench_batch_stop(b4, reps);
+    bench_report(b4);
+    var h4 = alloc_used();
+    print("heap bytes per diagram: records ", 32);
+    fmt_int((h1 - h0) / reps);
+    print(", parallel fresh ", 17);
+    fmt_int((h2 - h1) / reps);
+    print(", parallel reused ", 18);
+    fmt_int((h3 - h2) / reps);
+    print(", flat ", 7);
+    fmt_int((h4 - h3) / reps);
+    println("");
+    var want: f64 = 4.0 * 797.5 * 10000.0;
+    if (f64_eq(_p4_sink, want) == 1) { println("values: all four correct"); } else { println("values: WRONG"); }
+    return 0;
+}
+
+var rr = main();
+sys_exit_group(rr);

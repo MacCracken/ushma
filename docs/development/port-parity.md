@@ -165,6 +165,99 @@ gives the same bits and flags. The results are in §2e.
 So every class-C function ushma calls is correctly rounded and target-independent: exp, exp_m1, ln, powf, atan
 (through atan2) and tanh. The class-C bound is therefore 0 ulp against the corrected oracle everywhere (ADR 0004).
 
-## 3. Probes 1–12 (M0 step 9)
+## 3. Probes (M0 step 9)
 
-*Pending (M0 part 3).*
+Each probe is a small program in `scripts/probes/`, run on 6.7.18 (x86_64) on 2026-11-11. Batch 3a holds probes
+2, 3, 4, 5, 6, 8 and 12; probes 1, 7, 9, 10 and 11 follow in batch 3b.
+
+### Probe 12: f64 hygiene and the field-store miscompile (`p12_f64_hygiene.cyr`)
+
+| Trap | Diagnosed |
+|---|---|
+| `0 - x`, `2 * x` | yes: *integer arithmetic with an f64 right operand* |
+| an integer argument to an f64 parameter (`f(3)`) | yes: *an integer stored into an f64/f32 slot keeps its integer bits* |
+| an integer stored into an f64 local | yes, the same |
+| an untyped builtin result compared as an f64 | yes: *comparison mixes f64 and integer operands* |
+| an f64 compared with an integer | yes, the same |
+| `if (x)` on an f64 (true for −0.0) | **no**: CLAUDE.md now forbids it |
+
+So the warning-free `cyrius test` gate catches six of the seven. The open
+`field-store-of-struct-call-copies-a-field-argument` miscompile still reproduces at the pin (7 of 12 forms wrong, no
+diagnostic). The workaround (bind the call to a local, then store) is a CLAUDE.md rule.
+
+### Probe 6: names (`p6_names/`)
+
+- **`mod us;` is unusable for a bundle.** Its scope runs to the end of the compilation unit, past the included file,
+  so it mangled the consumer's own `main` into `us_main` and the build failed. No form ends it, and the compiler's
+  own tests only ever use it at the end of a file. Inside the module a bare call to another of its fns doesn't
+  resolve without a `use`, and globals aren't mangled (`us_GLOBALV` is undefined).
+- **A collision with kimiya's bundle** (`include "../kimiya/dist/kimiya.cyr"` plus a ushma-style
+  `ideal_gas_pressure`): *duplicate fn 'ideal_gas_pressure' (last definition wins)*, and here a hard error because
+  kimiya's returns a `Result` and this one an f64. With matching signatures it would have compiled, and the last
+  definition would silently have won.
+- **The stdlib shares the namespace too.** cr_verify's probe had to rename its `run`, which collided with
+  `lib/process.cyr`'s `run` (pulled in by sandhi's dependencies).
+
+So P6 is a **written `us_` prefix** on every public function, with `US_` on constants, enum members and error codes
+(ADR 0001 amendment).
+
+### Probe 8: span cost (`p8_span_cost.bcyr`)
+
+`sakshi_span_enter` / `_exit` have **no level check**: they read the clock, push the span stack and emit every call
+(by default a formatted line to stderr). Around `n·R·T/P`:
+
+| Variant | ns per call |
+|---|---|
+| plain | 8.1 (Rust 1.4.0's `state/ideal_gas_volume`: 3.7) |
+| level-gated span (`if (level >= SK_DEBUG)` around enter and exit), DEBUG filtered out | 9.7 |
+| sakshi span into its ring buffer (its cheapest output) | 192 |
+
+So ushma's spans go through a level-gated `_us_span_enter` / `_us_span_exit`, the Cyrius form of Rust's filtered
+`#[tracing::instrument(level = "debug")]`: about 1.6 ns when DEBUG is off.
+
+### Probe 3: wide results (`p3_wide_results.bcyr`)
+
+A CycleResult-shaped record (a kind and six f64s), 10^6 calls:
+
+| Shape | ns per call | heap per call | error channel |
+|---|---|---|---|
+| `fn f(…, out: *R): Result`, Ok(0) / Err(code) | 14 | 0 | yes |
+| `fn f(…): Result`, Ok(a fresh record) | 25–29 | **56 B, never freed** | yes |
+| `fn f(…): R` by value | 13–14 | 0 | no |
+
+So results come back through a caller's out-pointer with a value-form `Result`. All three gave correct values. (An
+untyped word becomes a typed pointer through a one-line cast helper, impetus's idiom; a bare assignment warns.)
+
+### Probe 4: point lists (`p4_point_lists.bcyr`)
+
+A 200-point diagram, built 10^4 times:
+
+| Shape | µs per diagram | heap per diagram |
+|---|---|---|
+| vec of 16-byte point records | 7.0 | 7,192 B |
+| two f64 vecs, fresh | 6.6 | 7,984 B |
+| two f64 vecs, reused (`vec_truncate(v, 0)`) | 5.3 | 0 |
+| caller's flat f64 buffer, count returned | 2.0 | 0 |
+
+So `cycle_ts_diagram` / `cycle_pv_diagram` take a caller buffer (with a too-small error) or caller vecs they
+refill; a fresh allocation per call leaks about 8 KB.
+
+### Probe 2: memory (`p2_memory.cyr`)
+
+| Per call | Heap |
+|---|---|
+| hisab `calc_integral_simpson`, 200 steps (debye_cv's integral) | 0 B |
+| hisab `calc_lerp` | 0 B |
+| a 100-node explicit grid step, fresh scratch | 800 B, never freed |
+| the same, a growable arena reset each step | 0 B |
+| the same, scratch allocated once | 0 B |
+
+So the open `no-scoped-allocator-for-alloc` issue (hisab allocating per call) doesn't reach ushma's two hisab calls,
+which are scalar. Stepped state keeps its scratch in the object, or in an arena it resets each step.
+
+### Probe 5: steam lookups (`p5_table_lookup.bcyr`)
+
+On the generated column tables, the search and interpolation alone: saturated by T (binary search over 42 rows, 9
+lerps) 77 ns; superheated by (T, P) (tier and row search, 3 lerps) 43 ns. Rust's whole functions take 18.2 ns and
+31.4 ns. Cyrius doesn't inline, so the lerp calls dominate; this is M3's optimisation target (inline the lerps,
+read each row pair once). Speed is measured, not gated.

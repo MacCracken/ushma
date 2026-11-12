@@ -1,0 +1,119 @@
+# Probe 3 (port plan §4 step 9.3): how a wide result with an error channel comes back. CycleResult has a kind, two
+# vecs and six f64 fields. Three shapes, each timed over 10^6 calls and checked for value and heap growth (the global
+# allocator never frees):
+# - out: `fn f(…, out: *R): Result`, Ok(0) / Err(code), the caller's struct filled through the pointer;
+# - handle: `fn f(…): Result`, Ok(a freshly allocated R) — one allocation per call;
+# - value: `fn f(…): R`, returned by value (hidden pointer), no error channel.
+# The vec fields are left out here (probe 4 measures point lists); this is the scalar part of the record.
+#
+#   cyrius bench scripts/probes/p3_wide_results.bcyr
+
+struct P3R { kind; heat_in: f64; heat_out: f64; net_work: f64; efficiency: f64; back_work_ratio: f64; gamma: f64; }
+
+var _p3_sink: f64 = 0.0;
+
+# An untyped word (an allocation, a Result payload) as a *P3R: impetus's cast-helper idiom.
+#must_use
+fn p3_as_r(p): *P3R { return p; }
+
+# Fills *out with an Otto-like result for compression ratio r; Err(1) for r ≤ 1.
+fn p3_out(r: f64, out: *P3R): Result {
+    if (r <= 1.0) { return Err(1); }
+    var q: f64 = 1000.0 * r;
+    out.kind = 1;
+    out.heat_in = q;
+    out.heat_out = q * 0.4;
+    out.net_work = q * 0.6;
+    out.efficiency = 0.6;
+    out.back_work_ratio = 0.0;
+    out.gamma = 1.4;
+    return Ok(0);
+}
+
+# The same record, freshly allocated and returned as the Ok payload.
+fn p3_handle(r: f64): Result {
+    if (r <= 1.0) { return Err(1); }
+    var p: *P3R = p3_as_r(alloc(sizeof(P3R)));
+    var q: f64 = 1000.0 * r;
+    p.kind = 1;
+    p.heat_in = q;
+    p.heat_out = q * 0.4;
+    p.net_work = q * 0.6;
+    p.efficiency = 0.6;
+    p.back_work_ratio = 0.0;
+    p.gamma = 1.4;
+    return Ok(p);
+}
+
+# The same record returned by value.
+fn p3_value(r: f64): P3R {
+    var o: P3R;
+    var q: f64 = 1000.0 * r;
+    o.kind = 1;
+    o.heat_in = q;
+    o.heat_out = q * 0.4;
+    o.net_work = q * 0.6;
+    o.efficiency = 0.6;
+    o.back_work_ratio = 0.0;
+    o.gamma = 1.4;
+    return o;
+}
+
+# Times each shape and reports the heap it used.
+fn main(): i64 {
+    alloc_init();
+    var n = 1000000;
+    var r: f64 = 8.0;
+    var res: P3R;
+    var h0 = alloc_used();
+    var b1 = bench_new("out-pointer + Result");
+    bench_batch_start(b1);
+    var i = 0;
+    while (i < n) {
+        var t1, v1 = p3_out(r, &res);
+        if (is_ok(t1) == 1) { _p3_sink = _p3_sink + res.net_work; }
+        i = i + 1;
+    }
+    bench_batch_stop(b1, n);
+    bench_report(b1);
+    var h1 = alloc_used();
+    var b2 = bench_new("handle in the Ok payload");
+    bench_batch_start(b2);
+    i = 0;
+    while (i < n) {
+        var t2, v2 = p3_handle(r);
+        if (is_ok(t2) == 1) {
+            var hp: *P3R = p3_as_r(v2);
+            _p3_sink = _p3_sink + hp.net_work;
+        }
+        i = i + 1;
+    }
+    bench_batch_stop(b2, n);
+    bench_report(b2);
+    var h2 = alloc_used();
+    var b3 = bench_new("by value");
+    bench_batch_start(b3);
+    i = 0;
+    while (i < n) {
+        var vr: P3R = p3_value(r);
+        _p3_sink = _p3_sink + vr.net_work;
+        i = i + 1;
+    }
+    bench_batch_stop(b3, n);
+    bench_report(b3);
+    var h3 = alloc_used();
+    print("heap bytes per call: out ", 25);
+    fmt_int((h1 - h0) / n);
+    print(", handle ", 9);
+    fmt_int((h2 - h1) / n);
+    print(", value ", 8);
+    fmt_int((h3 - h2) / n);
+    println("");
+    var want: f64 = 3.0 * 4800.0 * 1000000.0;
+    var tw: f64 = want * 1.0;
+    if (f64_eq(_p3_sink, tw) == 1) { println("values: all three correct"); } else { println("values: WRONG"); }
+    return 0;
+}
+
+var rr = main();
+sys_exit_group(rr);

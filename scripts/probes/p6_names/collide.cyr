@@ -1,0 +1,20 @@
+# Probe 6b: a ushma-style function with kimiya's public name, included after kimiya's bundle.
+include "../kimiya/dist/kimiya.cyr"
+
+# ushma's state::ideal_gas_pressure(n, T, V) under kimiya's name (kimiya's takes (n, T, V) too).
+fn ideal_gas_pressure(n: f64, t: f64, v: f64): f64 {
+    var r: f64 = 12345.0;
+    return r;
+}
+
+# Calls the bare name: which definition does a kimiya consumer get?
+fn main(): i64 {
+    alloc_init();
+    var a: f64 = ideal_gas_pressure(1.0, 300.0, 1.0);
+    fmt_hex0x(load64(&a));
+    println("");
+    return 0;
+}
+
+var r = main();
+sys_exit_group(r);

@@ -1,0 +1,114 @@
+# Probe 2 (port plan §4 step 9.2): what the per-call paths cost the heap. The global allocator is a bump with no free,
+# and a library must never alloc_reset (it wipes the consumer's heap too), so anything allocated per call leaks for
+# the life of the process (the open no-scoped-allocator-for-alloc issue). Measured:
+# - one hisab calc_integral_simpson call (debye_cv's integral, 200 steps, the correctly rounded expm1 integrand);
+# - one hisab calc_lerp call (every steam interpolation);
+# - 10^5 explicit steps of a 100-node 1D grid three ways: a fresh scratch array per step, a growable arena reset
+#   each step, and scratch allocated once.
+#
+#   cyrius build scripts/probes/p2_memory.cyr build/p2 && ./build/p2
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+
+# Debye's integrand x⁴eˣ/(eˣ − 1)², as 1.4.0 writes it: x⁴·e^(−x)/expm1(−x)².
+#must_use
+fn p2_debye(x: f64): f64 {
+    if (x == 0.0) { return 0.0; }
+    var nx: f64 = 0.0 - x;
+    var em: f64 = _us_cr_expm1(nx);
+    var ex: f64 = _us_cr_exp(nx);
+    var x2: f64 = x * x;
+    var r: f64 = ((x2 * x2) * ex) / (em * em);
+    return r;
+}
+
+# An untyped word (an allocation) as a *f64: impetus's cast-helper idiom.
+#must_use
+fn p2_as_f64p(p): *f64 { return p; }
+
+# Prints `label: n bytes per call`.
+fn p2_report(label, before, calls) {
+    print(label, strlen(label));
+    print(": ", 2);
+    fmt_int((alloc_used() - before) / calls);
+    println(" bytes of global heap per call");
+    return 0;
+}
+
+# One explicit step T'_i = T_i + Fo·(T_{i-1} − 2T_i + T_{i+1}), the ends held, through scratch `s`.
+fn p2_step(t: *f64, s: *f64, n) {
+    var fo: f64 = 0.25;
+    var i = 0;
+    while (i < n) { s[i] = t[i]; i = i + 1; }
+    i = 1;
+    while (i < n - 1) {
+        var lap: f64 = (s[i - 1] - (2.0 * s[i])) + s[i + 1];
+        t[i] = s[i] + (fo * lap);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Runs every measurement.
+fn main(): i64 {
+    alloc_init();
+    var calls = 10000;
+    var out: f64[1];
+    var before = alloc_used();
+    var k = 0;
+    while (k < calls) {
+        var b: f64 = 1.0 + f64_from(k % 40);
+        var t, v = calc_integral_simpson(&p2_debye, 0.0, b, 200, &out);
+        k = k + 1;
+    }
+    p2_report("calc_integral_simpson (200 steps)", before, calls);
+    before = alloc_used();
+    var sink: f64 = 0.0;
+    k = 0;
+    while (k < 1000000) {
+        var l: f64 = calc_lerp(1.0, 2.0, 0.25);
+        sink = sink + l;
+        k = k + 1;
+    }
+    p2_report("calc_lerp", before, 1000000);
+
+    var n = 100;
+    var steps = 100000;
+    var grid = alloc(8 * n);
+    var g: *f64 = p2_as_f64p(grid);
+    var i = 0;
+    while (i < n) { g[i] = 300.0; i = i + 1; }
+    g[0] = 400.0;
+    before = alloc_used();
+    k = 0;
+    while (k < steps) {
+        var s1 = alloc(8 * n);
+        p2_step(grid, s1, n);
+        k = k + 1;
+    }
+    p2_report("grid step, fresh scratch per step", before, steps);
+    var arena = arena_new_growable(8 * n);
+    before = alloc_used();
+    k = 0;
+    while (k < steps) {
+        arena_reset(arena);
+        var s2 = arena_alloc(arena, 8 * n);
+        p2_step(grid, s2, n);
+        k = k + 1;
+    }
+    p2_report("grid step, arena reset each step", before, steps);
+    var s3 = alloc(8 * n);
+    before = alloc_used();
+    k = 0;
+    while (k < steps) {
+        p2_step(grid, s3, n);
+        k = k + 1;
+    }
+    p2_report("grid step, scratch allocated once", before, steps);
+    fmt_hex0x(load64(&out));
+    println(" (the last integral's bits)");
+    return 0;
+}
+
+var r = main();
+sys_exit_group(r);

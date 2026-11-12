@@ -1,0 +1,18 @@
+mod us;
+
+const ATMX = 101325.0;
+var GLOBALV = 7;
+enum Phase { SOLID = 0; LIQUID = 1; }
+
+# A function the module defines.
+fn ideal_gas_pressure(n: f64, t: f64, v: f64): f64 {
+    var r: f64 = (n * 8.31446261815324 * t) / v;
+    return r;
+}
+
+# A second, calling the first by its bare name inside the module.
+fn twice(n: f64, t: f64, v: f64): f64 {
+    var p: f64 = ideal_gas_pressure(n, t, v);
+    var q: f64 = p * 2.0;
+    return q;
+}
