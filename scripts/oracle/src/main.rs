@@ -25,8 +25,10 @@
 mod cyr;
 mod glibc;
 mod grids;
+mod json_cases;
 mod m_constants;
 mod m_fmtf;
+mod m_material;
 mod m_math;
 mod rustsrc;
 mod t_constants;
@@ -44,7 +46,13 @@ use std::process::ExitCode;
 /// public tables seed (`chem`, `material`, `phase`, `state`; M0 part 2b).
 fn golden_modules() -> Result<Vec<tsv::Module>, String> {
     let mut v = vec![m_constants::emit(), m_fmtf::emit(), m_math::emit()];
-    v.extend(t_tables::golden()?);
+    let mut tables = t_tables::golden()?;
+    for m in &mut tables {
+        if m.name == "material" {
+            m_material::rows(m);
+        }
+    }
+    v.extend(tables);
     v.sort_by_key(|m| m.name);
     Ok(v)
 }

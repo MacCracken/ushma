@@ -28,7 +28,8 @@ dependency, hisab 1.4.0 above all, is the version the oracle was tested with.
 | `tests/golden/constants.tsv` | 9 | every public scalar const of ushma 1.4.0 (8 `f64`, 1 `usize`), class A |
 | `tests/golden/fmtf.tsv` | 26,088 | Rust's `{}` and `serde_json::to_string` of 13,044 doubles (`m_fmtf.rs`: the specials, every power of two, the powers of ten ± 1 ulp, the form thresholds, 0 … 1000 in tenths and hundredths, 4,000 random bit patterns, 2,000 short decimals), class A; `validate.py` checks each text by its properties |
 | `tests/golden/math.tsv` | 15,687 | every std f64 method ushma's library calls, over ushma's ranges (port plan §7.1) |
-| `tests/golden/{material,state,phase,chem}.tsv` | 11 / 9 / 9 / 13 | every public table preset (name + fields) and its `ALL_*` order, class A; each module's function rows join it at its milestone |
+| `tests/golden/material.tsv` | 2,927 | M1b (`m_material.rs`): the presets, then 1,410 rows per method (`diffusivity`, `volumetric_heat_capacity`, class B), 19 `to_json` and 77 `from_json` documents (class A; the variants from `json_cases.rs`, shared with probe 11) |
+| `tests/golden/{state,phase,chem}.tsv` | 9 / 9 / 13 | every public table preset (name + fields) and its `ALL_*` order, class A; each module's function rows join it at its milestone |
 | `tests/golden/modules.txt` | 7 | the module list the harness reads |
 | `src/constants.cyr` | 47 lines | the 9 public constants as `US_` consts, under their Rust doc comments |
 | `src/{material,state,phase,chem}_data.cyr` | 101–202 lines | the public tables: `US_<TABLE>_COUNT`, one `US_<TABLE>_<PRESET>` index constant per preset, one `f64[n]` column per field, the names as a NUL-separated blob with `u16` offsets (`t_tables.rs`) |

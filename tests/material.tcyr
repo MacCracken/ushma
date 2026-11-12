@@ -1,0 +1,197 @@
+# M1b tests: src/material.cyr and src/json.cyr.
+#
+# Rust 1.4.0's material.rs tests (8), ported: Copper's diffusivity, Water's specific heat and phase points, Diamond
+# the best conductor, Water's volumetric heat capacity, the preset count, Air's low conductivity, and the serde round
+# trip. Then what the golden rows can't carry, because a golden `s:` token is text: documents that aren't UTF-8, a
+# raw control byte, and the JSON helpers' edges.
+
+include "src/constants.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+include "src/json.cyr"
+include "src/material_data.cyr"
+include "src/material.cyr"
+
+# |a − b| ≤ tol·|b| as 1 or 0.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    if (d < 0.0) { d = 0.0 - d; }
+    var s: f64 = b;
+    if (s < 0.0) { s = 0.0 - s; }
+    if (d <= tol * s) { return 1; }
+    return 0;
+}
+
+# The preset at `i` into *m; asserts it exists.
+fn preset(i, m: *UsMaterial) {
+    var t, v = us_material_preset(i, m);
+    assert_eq(is_ok(t), 1, "preset exists");
+    return 0;
+}
+
+# Rust's eight material tests.
+fn test_rust_material() {
+    test_group("material (Rust 1.4.0's tests)");
+    var m: UsMaterial;
+    preset(US_MATERIAL_COPPER, &m);
+    var a: f64 = us_material_diffusivity(&m);
+    assert_eq(near(a, 0.000116, 0.01), 1, "copper diffusivity ~ 1.16e-4 m^2/s");
+    preset(US_MATERIAL_WATER, &m);
+    var cp: f64 = m.specific_heat;
+    assert_eq(near(cp, 4186.0, 0.00025), 1, "water specific heat ~ 4186");
+    var mpt: f64 = m.melting_point;
+    var bpt: f64 = m.boiling_point;
+    assert_eq(near(mpt, 273.15, 0.00004), 1, "water melts at 273.15 K");
+    assert_eq(near(bpt, 373.15, 0.00003), 1, "water boils at 373.15 K");
+    var vc: f64 = us_material_volumetric_heat_capacity(&m);
+    assert_eq(near(vc, 4173342.0, 0.01), 1, "water volumetric heat capacity ~ 4.17e6");
+    var dmd: UsMaterial;
+    preset(US_MATERIAL_DIAMOND, &dmd);
+    var kd: f64 = dmd.conductivity;
+    var best = 1;
+    var i = 0;
+    while (i < US_MATERIAL_COUNT) {
+        preset(i, &m);
+        var ki: f64 = m.conductivity;
+        if (ki > kd) { best = 0; }
+        i = i + 1;
+    }
+    assert_eq(best, 1, "diamond has the highest conductivity");
+    assert_eq(US_MATERIAL_COUNT, 10, "10 reference materials");
+    preset(US_MATERIAL_AIR, &m);
+    var ka: f64 = m.conductivity;
+    assert(ka < 0.1, "air conducts poorly");
+    var sb = str_builder_new();
+    preset(US_MATERIAL_COPPER, &m);
+    us_material_to_json(sb, &m);
+    var back: UsMaterial;
+    var t, v = us_material_from_json(load64(sb), load64(sb + 8), &back);
+    assert_eq(is_ok(t), 1, "copper's document reads back");
+    assert_streq(back.name, "Copper", "its name");
+    var kb: f64 = back.conductivity;
+    assert(kb == 401.0, "its conductivity");
+}
+
+# Presets out of range, names.
+fn test_presets() {
+    test_group("presets");
+    var m: UsMaterial;
+    var t, v = us_material_preset(US_MATERIAL_COUNT, &m);
+    assert_eq(is_err_result(t), 1, "past the last preset is an error");
+    assert_eq(v, US_ERR_INVALID_PARAMETER, "InvalidParameter");
+    var t2, v2 = us_material_preset(0 - 1, &m);
+    assert_eq(is_err_result(t2), 1, "a negative index is an error");
+    assert_streq(us_material_name(US_MATERIAL_STEEL), "Steel (1% carbon)", "a preset's name");
+    assert_eq(us_material_name(US_MATERIAL_COUNT), 0, "no name past the last preset");
+}
+
+# Reads `doc` (C string): 1 when it decodes, 0 when refused.
+fn reads(a, doc): i64 {
+    var m: UsMaterial;
+    reset_via(a);
+    var t, v = us_material_from_json_a(a, doc, strlen(doc), &m);
+    if (is_ok(t) == 1) { return 1; }
+    return 0;
+}
+
+# A document with byte `c` at the `?` of `{"name":"a?b",…}`: 1 when it decodes, 0 when refused.
+fn reads_name_byte(a, c): i64 {
+    var tail = "\",\"conductivity\":1,\"specific_heat\":2,\"density\":3,\"melting_point\":4,\"boiling_point\":5}";
+    var d = alloc(128);
+    memcpy(d, "{\"name\":\"a?b", 12);
+    store8(d + 10, c);
+    memcpy(d + 12, tail, strlen(tail) + 1);
+    var m: UsMaterial;
+    reset_via(a);
+    var t, v = us_material_from_json_a(a, d, strlen(d), &m);
+    if (is_ok(t) == 1) { return 1; }
+    return 0;
+}
+
+# A document with `kv` (C string) as the conductivity's value: 1 when it decodes, 0 when refused.
+fn reads_k(a, kv): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"name\":\"n\",\"conductivity\":");
+    str_builder_add_cstr(sb, kv);
+    str_builder_add_cstr(sb, ",\"specific_heat\":2,\"density\":3,\"melting_point\":4,\"boiling_point\":5}");
+    var m: UsMaterial;
+    reset_via(a);
+    var t, v = us_material_from_json_a(a, load64(sb), load64(sb + 8), &m);
+    if (is_ok(t) == 1) { return 1; }
+    return 0;
+}
+
+# What the golden rows can't carry.
+fn test_json_edges() {
+    test_group("json edges");
+    var a = arena_allocator_growable(4096);
+    assert_eq(reads_name_byte(a, 65), 1, "an ASCII name reads");
+    assert_eq(reads_name_byte(a, 255), 0, "a byte that isn't UTF-8 refuses the document (serde_json too)");
+    assert_eq(reads_name_byte(a, 128), 0, "a stray continuation byte refuses it");
+    assert_eq(reads_name_byte(a, 1), 0, "a raw control byte refuses it (serde_json too; bayan alone would read it)");
+    assert_eq(reads_name_byte(a, 9), 0, "a raw tab refuses it");
+    assert_eq(reads_name_byte(a, 127), 1, "DEL is not a control byte to JSON");
+    assert_eq(_us_utf8_valid("\xc3\xa9", 2), 1, "a 2-byte sequence");
+    assert_eq(_us_utf8_valid("\xf0\x9f\x98\x80", 4), 1, "a 4-byte sequence");
+    assert_eq(_us_utf8_valid("\xc0\xaf", 2), 0, "an overlong form");
+    assert_eq(_us_utf8_valid("\xed\xa0\x80", 3), 0, "a surrogate");
+    assert_eq(_us_utf8_valid("\xf4\x90\x80\x80", 4), 0, "past U+10FFFF");
+    assert_eq(_us_utf8_valid("\xe2\x82", 2), 0, "a truncated sequence");
+    assert_eq(_us_jr_raw_ok("{\"a\":\"x\\\"\\u0001\"}", 16), 1, "escapes are not raw bytes");
+    assert_eq(reads_k(a, "1e400"), 0, "1e400 is out of range (serde_json too)");
+    assert_eq(reads_k(a, "true"), 0, "a bool is no f64");
+    assert_eq(reads_k(a, "17"), 1, "an integer is an f64");
+    assert_eq(reads(a, "[\"n\",1,2,3,4,5]"), 1, "the sequence form");
+    assert_eq(reads(a, "[\"n\",1,2,3,4,5,6]"), 0, "a sequence too long");
+    var m: UsMaterial;
+    m.name = 0;
+    var t, v = us_material_from_json_a(a, "{}", 2, &m);
+    assert_eq(v, US_ERR_DESERIALIZE, "a refusal is Deserialize");
+    assert_eq(m.name, 0, "a refusal leaves *out unchanged");
+    var t2, v2 = us_material_from_json_a(a, 0, 0, &m);
+    assert_eq(is_err_result(t2), 1, "a null buffer is refused");
+}
+
+# Decoding on an arena reset each time doesn't grow the global heap.
+fn test_json_no_growth() {
+    test_group("json allocation");
+    var a = arena_allocator_growable(65536);
+    var sb = str_builder_new();
+    var m: UsMaterial;
+    preset(US_MATERIAL_WATER, &m);
+    us_material_to_json(sb, &m);
+    var p = load64(sb);
+    var n = load64(sb + 8);
+    var k = 0;
+    while (k < 50) {
+        reset_via(a);
+        var t0, v0 = us_material_from_json_a(a, p, n, &m);
+        k = k + 1;
+    }
+    var before = alloc_used();
+    k = 0;
+    while (k < 1000) {
+        reset_via(a);
+        var t, v = us_material_from_json_a(a, p, n, &m);
+        k = k + 1;
+    }
+    assert_eq(alloc_used() - before, 0, "1,000 decodes on a reset arena: 0 heap bytes");
+}
+
+# Runs every group and returns the failure count.
+fn main() {
+    alloc_init();
+    test_rust_material();
+    test_presets();
+    test_json_edges();
+    test_json_no_growth();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

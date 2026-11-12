@@ -1,0 +1,170 @@
+# json.cyr — the shared JSON helpers behind every ushma type's codec (ADR 0005 and its amendment).
+#
+# ushma writes and reads the JSON documents serde_json 1.0.154 writes and reads for the Rust crate's 28 serializable
+# types, so a Rust program's JSON (soorat's visualization data, stored grids and networks) passes through unchanged.
+#
+# Writers append to a str_builder: fields in declaration order, f64 through fmtf's serde_json form, strings with
+# serde_json's escapes (`\"` `\\` `\b` `\t` `\n` `\f` `\r`, `\u00xx` for the other control bytes, everything else as
+# is). Readers parse with bayan's value tree on the caller's allocator (`_a`), so nothing a decode allocates outlives
+# what the caller resets, and apply serde's derive rules:
+# - a struct reads from an object (by field name; unknown fields ignored) or from an array of exactly its field
+#   count (by position, serde's sequence form);
+# - a missing field, or a value of the wrong JSON type, refuses the document;
+# - an f64 takes a JSON float or integer, never `null`, and never one that parsed to ±∞ (`1e400`);
+# - a string must be valid UTF-8, with no raw control byte (U+0000–U+001F unescaped).
+# Every refusal is Err(US_ERR_DESERIALIZE). Where bayan is stricter than serde_json (a duplicate key anywhere, nesting
+# past 128, an integer ≥ 2^63) the document is refused too, and an integer `-0` reads as +0: ADR 0005's mapped
+# divergences, filed upstream.
+
+# ── writer ──────────────────────────────────────────────────────────────────────────
+
+# Appends `"name":` (C string `name`, no escapes needed), preceded by a comma unless `first` is 1.
+fn _us_jw_key(sb, name, first) {
+    if (first != 1) { str_builder_putc(sb, 44); }
+    str_builder_putc(sb, 34);
+    str_builder_add_cstr(sb, name);
+    str_builder_putc(sb, 34);
+    str_builder_putc(sb, 58);
+    return 0;
+}
+
+# Appends the `n` bytes at `p` as a JSON string, escaped as serde_json escapes it.
+fn _us_jw_str(sb, p, n) {
+    var t[16];
+    store64(&t, p);
+    store64(&t + 8, n);
+    str_builder_add_json_str(sb, &t);
+    return 0;
+}
+
+# Appends x as serde_json writes an f64 (`null` for NaN and ±∞).
+fn _us_jw_f64(sb, x: f64) {
+    _us_fmt_f64_json(sb, x);
+    return 0;
+}
+
+# ── reader ──────────────────────────────────────────────────────────────────────────
+
+# 1 when the `n` bytes at `p` are well-formed UTF-8 (RFC 3629: no overlong forms, no surrogates, nothing past
+# U+10FFFF), else 0.
+#must_use
+fn _us_utf8_valid(p, n): i64 {
+    var i = 0;
+    while (i < n) {
+        var c = load8(p + i);
+        if (c < 128) {
+            i = i + 1;
+            continue;
+        }
+        var need = 0;
+        var lo = 128;
+        var hi = 191;
+        if (c >= 194 && c <= 223) { need = 1; }
+        elif (c == 224) { need = 2; lo = 160; }
+        elif (c >= 225 && c <= 236) { need = 2; }
+        elif (c == 237) { need = 2; hi = 159; }
+        elif (c >= 238 && c <= 239) { need = 2; }
+        elif (c == 240) { need = 3; lo = 144; }
+        elif (c >= 241 && c <= 243) { need = 3; }
+        elif (c == 244) { need = 3; hi = 143; }
+        else { return 0; }
+        if (i + need >= n) { return 0; }
+        var c1 = load8(p + i + 1);
+        if (c1 < lo || c1 > hi) { return 0; }
+        var k = 2;
+        while (k <= need) {
+            var ck = load8(p + i + k);
+            if (ck < 128 || ck > 191) { return 0; }
+            k = k + 1;
+        }
+        i = i + need + 1;
+    }
+    return 1;
+}
+
+# 1 when no string in the `n`-byte document at `buf` holds a raw control byte (RFC 8259 §7; serde_json refuses one,
+# bayan 1.11.1 does not, and once decoded it can't be told from its escape), else 0.
+#must_use
+fn _us_jr_raw_ok(buf, n): i64 {
+    var inside = 0;
+    var i = 0;
+    while (i < n) {
+        var c = load8(buf + i);
+        if (inside == 1) {
+            if (c < 32) { return 0; }
+            if (c == 92) { i = i + 1; }
+            elif (c == 34) { inside = 0; }
+        } else {
+            if (c == 34) { inside = 1; }
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# The value tree of the `n`-byte document at `buf`, built on allocator `a`, or 0 when it is not one JSON value (or
+# holds a raw control byte in a string).
+#must_use
+fn _us_jr_parse(a, buf, n): i64 {
+    if (buf == 0 || n < 0) { return 0; }
+    if (_us_jr_raw_ok(buf, n) == 0) { return 0; }
+    return bayan_json_v_parse_buf_a(a, buf, n);
+}
+
+# The form of struct node `v` with `nfields` fields: 1 an object, 2 an array of exactly `nfields` elements (serde's
+# sequence form), 0 anything else.
+#must_use
+fn _us_jr_form(v, nfields): i64 {
+    if (v == 0) { return 0; }
+    var t = bayan_json_v_tag(v);
+    if (t == JTAG_OBJ) { return 1; }
+    if (t == JTAG_ARR && bayan_json_v_arr_len(v) == nfields) { return 2; }
+    return 0;
+}
+
+# Field `i`, named `name`, of struct node `v` in `form`: its value node, or 0 when absent.
+#must_use
+fn _us_jr_at(v, form, i, name): i64 {
+    if (form == 1) { return bayan_json_v_obj_get_by_cstr(v, name); }
+    if (form == 2) { return bayan_json_v_arr_get(v, i); }
+    return 0;
+}
+
+# A JSON number as a finite-or-not f64 into *out: 1, or 0 for any other value (`null` included) and for a float that
+# parsed to ±∞ (serde_json: "number out of range"). An integer converts as serde_json converts it (round to nearest,
+# ties to even).
+#must_use
+fn _us_jr_f64(v, out): i64 {
+    if (v == 0) { return 0; }
+    var t = bayan_json_v_tag(v);
+    if (t == JTAG_FLOAT) {
+        var w = bayan_json_v_float(v);
+        if ((w & 0x7FF0000000000000) == 0x7FF0000000000000) { return 0; }
+        store64(out, w);
+        return 1;
+    }
+    if (t == JTAG_INT) {
+        store64(out, bayan_json_v_float(v));
+        return 1;
+    }
+    return 0;
+}
+
+# A JSON string, copied onto allocator `a` with a terminating NUL: its pointer into *out_p and its byte length (which
+# may hold a decoded U+0000) into *out_n. 1, or 0 for any other value, invalid UTF-8, or a refused allocation.
+#must_use
+fn _us_jr_str(a, v, out_p, out_n): i64 {
+    if (v == 0) { return 0; }
+    if (bayan_json_v_tag(v) != JTAG_STR) { return 0; }
+    var s = bayan_json_v_str(v);
+    var p = str_data(s);
+    var n = str_len(s);
+    if (_us_utf8_valid(p, n) == 0) { return 0; }
+    var d = alloc_via(a, n + 1);
+    if (d == 0) { return 0; }
+    memcpy(d, p, n);
+    store8(d + n, 0);
+    store64(out_p, d);
+    store64(out_n, n);
+    return 1;
+}

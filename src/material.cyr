@@ -1,0 +1,149 @@
+# material.cyr — thermal material properties: conductivity, specific heat, density (Rust 1.4.0 `material`).
+#
+# A material is a UsMaterial: its name (bytes and length) and five properties. The 10 reference materials at about
+# 300 K are generated tables (src/material_data.cyr: one column per property, `US_MATERIAL_<NAME>` indices,
+# `US_MATERIAL_COUNT`); us_material_preset fills a UsMaterial from one. A caller's own material is a UsMaterial it
+# fills itself.
+#
+# JSON is serde_json's `ThermalMaterial` document, `{"name":…,"conductivity":…,"specific_heat":…,"density":…,
+# "melting_point":…,"boiling_point":…}` (ADR 0005; src/json.cyr has the rules).
+
+struct UsMaterial {
+    name;
+    name_len;
+    conductivity: f64;
+    specific_heat: f64;
+    density: f64;
+    melting_point: f64;
+    boiling_point: f64;
+}
+
+# The name of reference material `i` (a C string into the generated table), or 0 when `i` is no reference material.
+#must_use
+fn us_material_name(i): cstring {
+    if (i < 0 || i >= US_MATERIAL_COUNT) { return 0; }
+    var off = load16(&_US_MATERIAL_NAME_OFF + (2 * i));
+    return &_US_MATERIAL_NAME_BYTES + off;
+}
+
+# Fills *out with reference material `i` (`US_MATERIAL_COPPER` … `US_MATERIAL_DIAMOND`): Ok(0), or
+# Err(US_ERR_INVALID_PARAMETER) when `i` is no reference material.
+#must_use
+fn us_material_preset(i, out: *UsMaterial): Result {
+    if (i < 0 || i >= US_MATERIAL_COUNT) {
+        return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_material_preset", "index", i));
+    }
+    var name = us_material_name(i);
+    var k: f64 = US_MATERIAL_CONDUCTIVITY[i];
+    var cp: f64 = US_MATERIAL_SPECIFIC_HEAT[i];
+    var rho: f64 = US_MATERIAL_DENSITY[i];
+    var mp: f64 = US_MATERIAL_MELTING_POINT[i];
+    var bp: f64 = US_MATERIAL_BOILING_POINT[i];
+    out.name = name;
+    out.name_len = strlen(name);
+    out.conductivity = k;
+    out.specific_heat = cp;
+    out.density = rho;
+    out.melting_point = mp;
+    out.boiling_point = bp;
+    return Ok(0);
+}
+
+# Thermal diffusivity α = k / (ρ·c_p), in m²/s.
+#must_use
+#pure
+fn us_material_diffusivity(m: *UsMaterial): f64 {
+    var k: f64 = m.conductivity;
+    var rho: f64 = m.density;
+    var cp: f64 = m.specific_heat;
+    var r: f64 = k / (rho * cp);
+    return r;
+}
+
+# Volumetric heat capacity ρ·c_p, in J/(m³·K).
+#must_use
+#pure
+fn us_material_volumetric_heat_capacity(m: *UsMaterial): f64 {
+    var rho: f64 = m.density;
+    var cp: f64 = m.specific_heat;
+    var r: f64 = rho * cp;
+    return r;
+}
+
+# Appends *m as serde_json writes a `ThermalMaterial`.
+fn us_material_to_json(sb, m: *UsMaterial) {
+    var k: f64 = m.conductivity;
+    var cp: f64 = m.specific_heat;
+    var rho: f64 = m.density;
+    var mp: f64 = m.melting_point;
+    var bp: f64 = m.boiling_point;
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "name", 1);
+    _us_jw_str(sb, m.name, m.name_len);
+    _us_jw_key(sb, "conductivity", 0);
+    _us_jw_f64(sb, k);
+    _us_jw_key(sb, "specific_heat", 0);
+    _us_jw_f64(sb, cp);
+    _us_jw_key(sb, "density", 0);
+    _us_jw_f64(sb, rho);
+    _us_jw_key(sb, "melting_point", 0);
+    _us_jw_f64(sb, mp);
+    _us_jw_key(sb, "boiling_point", 0);
+    _us_jw_f64(sb, bp);
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# One f64 field of a material node into word *w: 1, or 0.
+fn _us_material_f64(v, form, i, name, w): i64 {
+    return _us_jr_f64(_us_jr_at(v, form, i, name), w);
+}
+
+# Reads a `ThermalMaterial` document (`n` bytes at `buf`) into *out, its name copied onto allocator `a`: Ok(0), or
+# Err(US_ERR_DESERIALIZE), leaving *out unchanged. The parse tree is on `a` too: reset it when the result is used.
+#must_use
+fn us_material_from_json_a(a, buf, n, out: *UsMaterial): Result {
+    var v = _us_jr_parse(a, buf, n);
+    var form = _us_jr_form(v, 6);
+    if (form == 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_material_from_json")); }
+    var np[8];
+    var nn[8];
+    if (_us_jr_str(a, _us_jr_at(v, form, 0, "name"), &np, &nn) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_material_from_json"));
+    }
+    var w[40];
+    if (_us_material_f64(v, form, 1, "conductivity", &w) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_material_from_json"));
+    }
+    if (_us_material_f64(v, form, 2, "specific_heat", &w + 8) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_material_from_json"));
+    }
+    if (_us_material_f64(v, form, 3, "density", &w + 16) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_material_from_json"));
+    }
+    if (_us_material_f64(v, form, 4, "melting_point", &w + 24) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_material_from_json"));
+    }
+    if (_us_material_f64(v, form, 5, "boiling_point", &w + 32) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_material_from_json"));
+    }
+    var k: f64 = load64(&w);
+    var cp: f64 = load64(&w + 8);
+    var rho: f64 = load64(&w + 16);
+    var mp: f64 = load64(&w + 24);
+    var bp: f64 = load64(&w + 32);
+    out.name = load64(&np);
+    out.name_len = load64(&nn);
+    out.conductivity = k;
+    out.specific_heat = cp;
+    out.density = rho;
+    out.melting_point = mp;
+    out.boiling_point = bp;
+    return Ok(0);
+}
+
+# us_material_from_json_a on the global heap: for a one-off read (each call's tree and name stay allocated).
+#must_use
+fn us_material_from_json(buf, n, out: *UsMaterial): Result {
+    return us_material_from_json_a(default_alloc(), buf, n, out);
+}

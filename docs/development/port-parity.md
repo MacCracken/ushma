@@ -421,3 +421,23 @@ serde_json's default float parse is best-effort, so the oracle crate enables `fl
 
 So P7 stands: hand-written codecs on bayan's tree, with the ADR 0005 amendment's rules. The summaries are identical on
 x86_64, PE and aarch64.
+
+## 4. M1 (2026-11-11)
+
+The harness's summary after M1b, identical on x86_64 ELF, `--bounds`, PE (wine) and aarch64 (qemu):
+`7 modules, 0 failing | rows: 44711 ok, 0 failed, 0 measured, 0 pending, 31 accepted (ADR 4: 26)`.
+
+- **fmtf** (M1a): 26,088 rows, every one ok. The vendored printer writes Rust's `{}` and serde_json's text for 13,044
+  doubles. `validate.py` checks each row independently (read-back, shortest digits, closest, form).
+- **material** (M1b): 2,927 rows.
+  - The presets: 11.
+  - `diffusivity` and `volumetric_heat_capacity`: 1,410 each, 0 ulp.
+  - `to_json`: 19 documents, byte for byte.
+  - `from_json`: 77 documents. 72 are ok, and 5 are accepted under ADR 5, which are exactly its mapped divergences:
+    - a duplicate key inside an unknown field, and another nested in one: refused, where serde_json reads them;
+    - an unknown field nested 200 deep: refused (bayan's cap is 128);
+    - an integer ≥ 2^63 for an f64: refused;
+    - an integer `-0`: read as +0, where serde_json gives −0.0.
+
+    The harness accepts such a row only when bayan's own error is one of the three mapped refusals, or the document
+    holds an integer `-0`.

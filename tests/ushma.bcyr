@@ -1,23 +1,96 @@
-# ushma benchmarks
-# Stdlib auto-included via cyrius.cyml
+# ushma benchmarks, recorded against Rust 1.4.0's (docs/benchmarks-rust-v-cyrius.md). Each name is Rust's criterion
+# name where Rust has one; the JSON ones are Cyrius-only (Rust benches no serde path).
 #
-# Pattern: bench_new -> bench_batch_start -> tight loop -> bench_batch_stop -> bench_report.
-# For sub-1us ops use batch_size >= 1000 to amortize clock_gettime overhead
-# (~240 ns per start/stop pair on x86_64 Linux). See lib/bench.cyr header for
-# the full overhead-vs-batching guidance.
+# Pattern: bench_new -> bench_batch_start -> tight loop -> bench_batch_stop -> bench_report. Every sub-1 µs operation
+# runs in batches of 10^6 to amortize the clock (~240 ns per start/stop pair on x86_64 Linux; lib/bench.cyr's header).
 
-# Empty benchmark body: measures the harness floor that real benchmarks are compared against.
+include "src/constants.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+include "src/json.cyr"
+include "src/material_data.cyr"
+include "src/material.cyr"
+
+# Keeps results observable, so no call can be dropped.
+var _bn_sink = 0;
+
+# Empty benchmark body: the harness floor the real benchmarks are compared against.
 fn bench_noop(): i64 { return 0; }
+
+# Times `n` calls of loop body `f(arg)` under `name`.
+fn bn_run(name, f, arg, n) {
+    var b = bench_new(name);
+    bench_batch_start(b);
+    var i = 0;
+    while (i < n) {
+        _bn_sink = _bn_sink + fncall1(f, arg);
+        i = i + 1;
+    }
+    bench_batch_stop(b, n);
+    bench_report(b);
+    return 0;
+}
+
+# One call of each benchmarked function on material *m.
+fn b_diffusivity(m: *UsMaterial): i64 {
+    var r: f64 = us_material_diffusivity(m);
+    return r;
+}
+
+# volumetric heat capacity of *m.
+fn b_volumetric(m: *UsMaterial): i64 {
+    var r: f64 = us_material_volumetric_heat_capacity(m);
+    return r;
+}
+
+var _bn_sb = 0;
+var _bn_arena = 0;
+var _bn_doc = 0;
+var _bn_doc_n = 0;
+
+# Writes *m's document into the shared builder.
+fn b_to_json(m: *UsMaterial): i64 {
+    store64(_bn_sb + 8, 0);
+    us_material_to_json(_bn_sb, m);
+    return load64(_bn_sb + 8);
+}
+
+# Reads Copper's document into *m on an arena reset per call.
+fn b_from_json(m: *UsMaterial): i64 {
+    reset_via(_bn_arena);
+    var t, v = us_material_from_json_a(_bn_arena, _bn_doc, _bn_doc_n, m);
+    return t;
+}
+
+# The level test a span costs with DEBUG off (sakshi at INFO).
+fn b_span(m): i64 {
+    _us_span_enter("us_bench", 8);
+    _us_span_exit();
+    return 0;
+}
 
 # Benchmark entry point: runs every benchmark and reports each one.
 fn main(): i64 {
     alloc_init();
-    var b = bench_new("noop");
-    bench_batch_start(b);
-    var i = 0;
-    while (i < 1000000) { bench_noop(); i = i + 1; }
-    bench_batch_stop(b, 1000000);
-    bench_report(b);
+    var m: UsMaterial;
+    var t, v = us_material_preset(US_MATERIAL_COPPER, &m);
+    _bn_sb = str_builder_new();
+    _bn_arena = arena_allocator_growable(65536);
+    us_material_to_json(_bn_sb, &m);
+    _bn_doc_n = load64(_bn_sb + 8);
+    _bn_doc = alloc(_bn_doc_n + 1);
+    memcpy(_bn_doc, load64(_bn_sb), _bn_doc_n);
+    sakshi_set_level(SK_INFO);
+    bn_run("noop", &bench_noop, 0, 1000000);
+    bn_run("material/diffusivity", &b_diffusivity, &m, 1000000);
+    bn_run("material/volumetric_cp", &b_volumetric, &m, 1000000);
+    bn_run("material/to_json (Cyrius only)", &b_to_json, &m, 100000);
+    bn_run("material/from_json (Cyrius only)", &b_from_json, &m, 100000);
+    bn_run("span, DEBUG off (Cyrius only)", &b_span, 0, 1000000);
     return 0;
 }
 

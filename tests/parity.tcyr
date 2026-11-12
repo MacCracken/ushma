@@ -22,7 +22,11 @@ include "src/error.cyr"
 include "src/mathx_data.cyr"
 include "src/mathx.cyr"
 include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+include "src/json.cyr"
 include "src/material_data.cyr"
+include "src/material.cyr"
 include "src/state_data.cyr"
 include "src/phase_data.cyr"
 include "src/chem_data.cyr"
@@ -305,6 +309,157 @@ fn _par_fmtf(fp, fl): i64 {
     return 1;
 }
 
+# ── material ────────────────────────────────────────────────────────────────────────
+# `material::diffusivity` / `volumetric_heat_capacity` / `to_json` (inputs: the six fields, `s:name` first) and
+# `material::from_json` (input: the document).
+
+var _par_mat_sb = 0;
+var _par_mat_arena = 0;
+# 1 when the current row's port result is one ADR 0005 maps (set by the dispatcher, read by _par_accepted).
+var _par_adr5 = 0;
+
+# Input token k (`s:`) with its %XX escapes decoded, NUL bytes kept: a fresh buffer, its length in *lenp; 0 if the
+# token is no `s:` token or an escape is malformed.
+fn _par_in_text(k, lenp): i64 {
+    var at = k * 8;
+    if (k >= _par_in_n || load64(_par_in_k + at) != 115) { return 0; }
+    var p = load64(_par_in_v + at);
+    var len = load64(_par_in_l + at);
+    var out = alloc(len + 1);
+    var n = 0;
+    var j = 0;
+    while (j < len) {
+        var c = load8(p + j);
+        if (c == 37) {
+            if (j + 2 >= len) { return 0; }
+            var hi = _par_hex_upper(load8(p + j + 1));
+            var lo = _par_hex_upper(load8(p + j + 2));
+            if (hi < 0 || lo < 0) { return 0; }
+            c = hi * 16 + lo;
+            j = j + 3;
+        } else {
+            j = j + 1;
+        }
+        store8(out + n, c);
+        n = n + 1;
+    }
+    store8(out + n, 0);
+    store64(lenp, n);
+    return out;
+}
+
+# 1 when the `n`-byte document at `p` holds the integer token `-0` (after `:`, `[` or `,`), which serde_json reads
+# into an f64 as −0.0 and bayan as +0 (ADR 0005's open divergence).
+fn _par_has_int_neg_zero(p, n): i64 {
+    var i = 0;
+    while (i + 1 < n) {
+        if (load8(p + i) == 45 && load8(p + i + 1) == 48) {
+            var nx = 0;
+            if (i + 2 < n) { nx = load8(p + i + 2); }
+            var tail_ok = 1;
+            if (nx >= 48 && nx <= 57) { tail_ok = 0; }
+            if (nx == 46 || nx == 101 || nx == 69) { tail_ok = 0; }
+            var b = i - 1;
+            while (b >= 0 && (load8(p + b) == 32 || load8(p + b) == 9 || load8(p + b) == 10 || load8(p + b) == 13)) {
+                b = b - 1;
+            }
+            var lead_ok = 0;
+            if (b >= 0) {
+                var pc = load8(p + b);
+                if (pc == 58 || pc == 91 || pc == 44) { lead_ok = 1; }
+            }
+            if (tail_ok == 1 && lead_ok == 1) { return 1; }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# 1 when bayan itself refuses the `n`-byte document at `p` for one of the reasons ADR 0005 maps: a duplicate key,
+# nesting past 128, an integer ≥ 2^63.
+fn _par_bayan_mapped_refusal(p, n): i64 {
+    if (bayan_json_v_parse_buf(p, n) != 0) { return 0; }
+    var e = bayan_json_last_error();
+    if (streq(e, "duplicate key") == 1) { return 1; }
+    if (streq(e, "nesting too deep") == 1) { return 1; }
+    if (streq(e, "integer is out of range for i64") == 1) { return 1; }
+    return 0;
+}
+
+# The material fields of the row's six input tokens into *m: 1, or 0 when the tokens aren't those.
+fn _par_mat_in(m: *UsMaterial): i64 {
+    if (_par_in_n != 6) { return 0; }
+    var nw[8];
+    var name = _par_in_text(0, &nw);
+    if (name == 0) { return 0; }
+    var k: f64 = _par_in(1);
+    var cp: f64 = _par_in(2);
+    var rho: f64 = _par_in(3);
+    var mp: f64 = _par_in(4);
+    var bp: f64 = _par_in(5);
+    m.name = name;
+    m.name_len = load64(&nw);
+    m.conductivity = k;
+    m.specific_heat = cp;
+    m.density = rho;
+    m.melting_point = mp;
+    m.boiling_point = bp;
+    return 1;
+}
+
+# One material row: 1 when handled, 0 for a function with no counterpart, -1 for unusable inputs.
+fn _par_material(fp, fl): i64 {
+    if (_par_mat_sb == 0) {
+        _par_mat_sb = str_builder_new();
+        _par_mat_arena = arena_allocator_growable(65536);
+    }
+    var m: UsMaterial;
+    if (_par_eq(fp, fl, "material::from_json") == 1) {
+        var dn[8];
+        var doc = _par_in_text(0, &dn);
+        if (doc == 0) { return 0 - 1; }
+        var n = load64(&dn);
+        reset_via(_par_mat_arena);
+        var t, v = us_material_from_json_a(_par_mat_arena, doc, n, &m);
+        if (is_err_result(t) == 1) {
+            _par_got_err(v);
+            if (_par_bayan_mapped_refusal(doc, n) == 1) { _par_adr5 = 1; }
+            return 1;
+        }
+        if (_par_has_int_neg_zero(doc, n) == 1) { _par_adr5 = 1; }
+        _par_got_text(m.name, m.name_len);
+        var k: f64 = m.conductivity;
+        var cp: f64 = m.specific_heat;
+        var rho: f64 = m.density;
+        var mp: f64 = m.melting_point;
+        var bp: f64 = m.boiling_point;
+        _par_got_f(k);
+        _par_got_f(cp);
+        _par_got_f(rho);
+        _par_got_f(mp);
+        _par_got_f(bp);
+        return 1;
+    }
+    if (_par_mat_in(&m) == 0) { return 0 - 1; }
+    if (_par_eq(fp, fl, "material::diffusivity") == 1) {
+        var r: f64 = us_material_diffusivity(&m);
+        _par_got_f(r);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "material::volumetric_heat_capacity") == 1) {
+        var r2: f64 = us_material_volumetric_heat_capacity(&m);
+        _par_got_f(r2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "material::to_json") == 1) {
+        store64(_par_mat_sb + 8, 0);
+        us_material_to_json(_par_mat_sb, &m);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    return 0;
+}
+
 # ── routing and hooks ───────────────────────────────────────────────────────────────
 
 # Routes a row to its module's dispatcher. 0 (pending) for a module or function with none yet: the module rows of
@@ -314,6 +469,8 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "constants") == 1) { return _par_constants(fp, fl); }
     if (_par_eq(mp, ml, "math") == 1) { return _par_math(fp, fl); }
     if (_par_eq(mp, ml, "fmtf") == 1) { return _par_fmtf(fp, fl); }
+    _par_adr5 = 0;
+    if (_par_eq(mp, ml, "material") == 1 && _par_in_n != 0) { return _par_material(fp, fl); }
     if (_par_in_n != 0) { return 0; }   # a preset row has no inputs; anything else is a module function
     if (_par_eq(mp, ml, "material") == 1) {
         return _par_table(fp, fl, "material", "ALL_MATERIALS", _par_tab_material, US_MATERIAL_COUNT,
@@ -424,10 +581,12 @@ fn _par_c_bound(fp, fl): i64 {
     return 0 - 1;
 }
 
-# The ADR accepting a divergent row (function and raw input field), or 0. The ADR 0002 rows arrive with their
-# modules (port plan §3.3).
+# The ADR accepting a divergent row (function and raw input field), or 0. ADR 0005: a JSON document bayan refuses for
+# a mapped reason, or an integer `-0` read as +0 (the dispatcher checks which, per row). The ADR 0002 rows arrive with
+# their modules (port plan §3.3).
 #must_use
 fn _par_accepted(fp, fl, ip, il): i64 {
+    if (_par_adr5 == 1) { return 5; }
     return 0;
 }
 
