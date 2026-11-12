@@ -164,3 +164,26 @@ It fails on:
 `--all-targets` also builds the probe for aarch64 (qemu) and PE (wine) and requires the same
 output. 1,052 values at part 2b. Tampering with a cell, a name byte, an index constant or a
 private constant, or adding an unprobed array, fails it, as checked when it was written.
+
+## The probe binaries (M0 part 3b)
+
+Three more binaries of this crate give the M0 probes their Rust halves. Each drives the frozen 1.4.0, and Rust hisab
+1.4.0 itself, read-only, and writes under `build/` (gitignored). Nothing they write is golden data:
+
+| Binary | Probe | Writes |
+|---|---|---|
+| `probe_hisab` | 1, 9 | `build/probe-hisab/simpson.txt` (3,000 `integral_simpson` rows) and `gauss.txt` (2,000 network systems with 1.4.0's solutions, each mirrored bit for bit against `ThermalNetwork::solve`, plus `gref` rows for the systems 1.4.0 refuses) |
+| `probe_ai` | 7 | nothing: it runs `DaimonClient::register_agent` once against the loopback stub (`scripts/probes/p7_daimon_stub.py`), which records the request |
+| `probe_json` | 11 | `build/probe-json/cases.txt` (1,148 serde_json documents over the 28 types, with serde's verdicts, decoded values and token streams) and `f64.txt` (160,378 doubles: serde_json's text, Rust's Display, serde's read-back) |
+
+```sh
+cargo run --release --locked --manifest-path scripts/oracle/Cargo.toml --bin probe_hisab
+cargo run --release --locked --manifest-path scripts/oracle/Cargo.toml --bin probe_json
+```
+
+For these, the crate also depends on `hisab`, `serde`, `serde_json` and `tokio`, each pinned to the version the
+lockfile already resolved, so no package was added. serde_json is built with **`float_roundtrip`**: its default
+float parse is best-effort, and reads 22 % of its own shortest texts back 1–2 ulp off (probe 11). The parse precision
+belongs to the consumer, not to ushma, which only derives `Deserialize`, and the port's parse is correctly rounded
+(bayan). Writing is identical in both modes, and nothing in the golden corpus parses JSON. tokio's `rt`, `net` and
+`time` features add no crate; `probe_ai` uses a current-thread runtime.

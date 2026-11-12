@@ -1,0 +1,541 @@
+# Probe 11 (port plan §4 step 9.11): bayan's JSON and the f64 printers against serde_json 1.0.154 on ushma 1.4.0's 28
+# serializable types (scripts/oracle/src/bin/probe_json.rs writes build/probe-json/):
+# - every document (serde_json's own text for a value, and malformed, duplicate, unknown-field, missing-field, number,
+#   string and shape variants of one per type) through bayan_json_v_parse_buf: accepted or refused against serde's
+#   verdicts, and the tree flattened to the oracle's token stream (keys, decoded strings, float bits, integers);
+# - impetus's src/fmtf.cyr (copied to build/p11/ by scripts/probes/p11_json.sh) against serde_json's f64 text and
+#   Rust's Display, bayan's own printer against serde_json's text, and bayan_f64_parse on serde_json's text;
+# - #derive(Serialize) on StatePoint, ThermalMaterial and Phase: the text it writes, and what it decodes from each
+#   variant document against serde_json's verdict and value (P7's alternative).
+#
+#   OUT=build/p11 bash scripts/probes/p11_json.sh
+
+# fmtf.cyr calls impetus's one-line bit cast from its mathx.cyr (an untyped parameter, an i64 return); M1 vendors it
+# with fmtf under ushma's name.
+#must_use
+fn _im_bits(x): i64 { return x; }
+
+include "build/p11/fmtf.cyr"
+
+var _p_buf = 0;
+var _p_len = 0;
+var _p_at = 0;
+
+# Opens a probe data file; 0 if it can't be read.
+fn p_open(path): i64 {
+    var lenw[8];
+    var buf = file_read_whole(path, &lenw);
+    if (buf == 0) { return 0; }
+    _p_buf = buf;
+    _p_len = load64(&lenw);
+    _p_at = 0;
+    return 1;
+}
+
+# 1 while reading space-separated fields (f64.txt), 0 for tab-separated ones (cases.txt, whose stream has spaces).
+var _p_space = 0;
+
+# The next field on the current line (up to a tab or newline, or a space when _p_space is 1, which it consumes): its
+# start, its length in *lenp; -1 at the end of the file.
+fn p_field(lenp): i64 {
+    if (_p_at >= _p_len) { return 0 - 1; }
+    var s = _p_at;
+    while (_p_at < _p_len) {
+        var c = load8(_p_buf + _p_at);
+        if (c == 9 || c == 10) { break; }
+        if (c == 32 && _p_space == 1) { break; }
+        _p_at = _p_at + 1;
+    }
+    store64(lenp, _p_at - s);
+    if (_p_at < _p_len) { _p_at = _p_at + 1; }
+    return s;
+}
+
+# The hex digit c's value.
+#must_use
+fn p_hexd(c): i64 {
+    if (c >= 97) { return c - 87; }
+    return c - 48;
+}
+
+# The 16-hex-digit word at p.
+#must_use
+fn p_word(p): i64 {
+    var v = 0;
+    var k = 0;
+    while (k < 16) {
+        v = (v << 4) | p_hexd(load8(p + k));
+        k = k + 1;
+    }
+    return v;
+}
+
+# Decodes n hex digits at p into a fresh NUL-terminated buffer; its length is n / 2.
+fn p_unhex(p, n): i64 {
+    var out = alloc((n / 2) + 1);
+    var k = 0;
+    while (k < n / 2) {
+        store8(out + k, (p_hexd(load8(p + (2 * k))) << 4) | p_hexd(load8(p + (2 * k) + 1)));
+        k = k + 1;
+    }
+    store8(out + (n / 2), 0);
+    return out;
+}
+
+# A word as f64 (the bits unchanged).
+#must_use
+fn p_f(w): i64 { return w; }
+
+# Empties a str_builder for reuse ({ buf, len, cap }).
+fn p_sb_reset(sb) {
+    store64(sb + 8, 0);
+    return 0;
+}
+
+# 1 when the builder holds exactly the n bytes at p.
+#must_use
+fn p_sb_eq(sb, p, n): i64 {
+    if (load64(sb + 8) != n) { return 0; }
+    return memeq(load64(sb), p, n);
+}
+
+# Prints the builder's bytes.
+fn p_sb_print(sb) {
+    print(load64(sb), load64(sb + 8));
+    return 0;
+}
+
+# Prints `label n` on one line.
+fn p_say(label, n) {
+    print(label, strlen(label));
+    fmt_int(n);
+    println("");
+    return 0;
+}
+
+# Prints the n bytes at p.
+fn p_out(p, n) {
+    print(p, n);
+    return 0;
+}
+
+# ── the oracle's token stream from bayan's tree ─────────────────────────────────────
+
+# Appends the n bytes at p percent-encoded as the oracle does (alphanumerics . _ - kept; `%` for empty).
+fn p_pct(sb, p, n) {
+    if (n == 0) { str_builder_putc(sb, 37); return 0; }
+    var k = 0;
+    while (k < n) {
+        var c = load8(p + k);
+        var keep = 0;
+        if (c >= 48 && c <= 57) { keep = 1; }
+        if (c >= 65 && c <= 90) { keep = 1; }
+        if (c >= 97 && c <= 122) { keep = 1; }
+        if (c == 46 || c == 95 || c == 45) { keep = 1; }
+        if (keep == 1) {
+            str_builder_putc(sb, c);
+        } else {
+            str_builder_putc(sb, 37);
+            var hi = (c >> 4) & 15;
+            var lo = c & 15;
+            if (hi < 10) { str_builder_putc(sb, 48 + hi); } else { str_builder_putc(sb, 55 + hi); }
+            if (lo < 10) { str_builder_putc(sb, 48 + lo); } else { str_builder_putc(sb, 55 + lo); }
+        }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# Appends a word as 16 lowercase hex digits.
+fn p_hex16(sb, w) {
+    var k = 60;
+    while (k >= 0) {
+        var d = (w >> k) & 15;
+        if (d < 10) { str_builder_putc(sb, 48 + d); } else { str_builder_putc(sb, 87 + d); }
+        k = k - 4;
+    }
+    return 0;
+}
+
+# Appends a token separator unless the builder is empty.
+fn p_sep(sb) {
+    if (load64(sb + 8) > 0) { str_builder_putc(sb, 32); }
+    return 0;
+}
+
+# Flattens bayan value v into the oracle's token stream.
+fn p_flat(sb, v) {
+    var t = bayan_json_v_tag(v);
+    p_sep(sb);
+    if (t == JTAG_NULL) { str_builder_putc(sb, 110); return 0; }
+    if (t == JTAG_BOOL) {
+        str_builder_add_cstr(sb, "b:");
+        str_builder_add_int(sb, bayan_json_v_bool(v));
+        return 0;
+    }
+    if (t == JTAG_INT) {
+        str_builder_add_cstr(sb, "i:");
+        str_builder_add_int(sb, bayan_json_v_int(v));
+        return 0;
+    }
+    if (t == JTAG_FLOAT) {
+        str_builder_add_cstr(sb, "f:");
+        p_hex16(sb, bayan_json_v_float(v));
+        return 0;
+    }
+    if (t == JTAG_STR) {
+        var s = bayan_json_v_str(v);
+        str_builder_add_cstr(sb, "s:");
+        p_pct(sb, str_data(s), str_len(s));
+        return 0;
+    }
+    if (t == JTAG_ARR) {
+        str_builder_putc(sb, 91);
+        var i = 0;
+        while (i < bayan_json_v_arr_len(v)) {
+            p_flat(sb, bayan_json_v_arr_get(v, i));
+            i = i + 1;
+        }
+        p_sep(sb);
+        str_builder_putc(sb, 93);
+        return 0;
+    }
+    str_builder_putc(sb, 123);
+    var j = 0;
+    while (j < bayan_json_v_obj_len(v)) {
+        var k = bayan_json_v_obj_key(v, j);
+        p_sep(sb);
+        str_builder_add_cstr(sb, "k:");
+        p_pct(sb, str_data(k), str_len(k));
+        p_flat(sb, bayan_json_v_obj_val(v, j));
+        j = j + 1;
+    }
+    p_sep(sb);
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# ── per-kind tallies ────────────────────────────────────────────────────────────────
+# Kind k's counters, 8 words each: cases, serde typed ok, serde syntax ok, bayan parsed, streams equal, streams
+# different, serde reads but bayan refuses, serde refuses the syntax but bayan parses.
+
+var _k_name = 0;
+var _k_len = 0;
+var _k_cnt = 0;
+var _k_n = 0;
+
+# The slot of kind (p, n), added if new.
+fn p_kind(p, n): i64 {
+    var k = 0;
+    while (k < _k_n) {
+        if (load64(_k_len + (8 * k)) == n && memeq(load64(_k_name + (8 * k)), p, n) == 1) { return k; }
+        k = k + 1;
+    }
+    store64(_k_name + (8 * _k_n), p);
+    store64(_k_len + (8 * _k_n), n);
+    _k_n = _k_n + 1;
+    return _k_n - 1;
+}
+
+# Adds 1 to counter c of kind k.
+fn p_bump(k, c) {
+    var at = _k_cnt + (64 * k) + (8 * c);
+    store64(at, load64(at) + 1);
+    return 0;
+}
+
+# ── #derive(Serialize) on three of the types (P7's alternative) ─────────────────────
+
+#derive(Serialize)
+struct P11StatePoint { temperature: f64; pressure: f64; volume: f64; entropy: f64; enthalpy: f64; }
+
+#derive(Serialize)
+struct P11ThermalMaterial {
+    name: Str;
+    conductivity: f64;
+    specific_heat: f64;
+    density: f64;
+    melting_point: f64;
+    boiling_point: f64;
+}
+
+#derive(Serialize)
+enum P11Phase { US_PHASE_SOLID = 0; US_PHASE_LIQUID = 1; US_PHASE_GAS = 2; US_PHASE_SUPERCRITICAL_FLUID = 3; }
+
+var _d_text_eq = 0;
+var _d_text_ne = 0;
+var _d_shown = 0;
+
+# Derive check for one document of type `ty`: decode `doc` with the scanner, re-encode, and compare against what
+# serde_json wrote back for the value it read (`back`, n bytes; 0 when serde refused). Prints each disagreement.
+fn p_derive(ty, tn, kind, kn, doc, back, bn) {
+    var sb = str_builder_new();
+    if (tn == 10 && memeq(ty, "StatePoint", 10) == 1) {
+        var sp = P11StatePoint_from_json_str(doc);
+        if (sp == 0) { str_builder_add_cstr(sb, "(0)"); } else { P11StatePoint_to_json(sp, sb); }
+    } else {
+        var tm = P11ThermalMaterial_from_json_str(doc);
+        # A document without "name" leaves the Str field 0, and the derived writer faults on a 0 Str (it does not
+        # write null, as it does for a 0 cstring): recorded, not re-encoded.
+        if (tm == 0) {
+            str_builder_add_cstr(sb, "(0)");
+        } else {
+            if (load64(tm) == 0) { str_builder_add_cstr(sb, "(name: Str 0; _to_json faults on it)"); }
+            else { P11ThermalMaterial_to_json(tm, sb); }
+        }
+    }
+    var same = 0;
+    if (back != 0) { same = p_sb_eq(sb, back, bn); }
+    if (same == 1) {
+        _d_text_eq = _d_text_eq + 1;
+        return 0;
+    }
+    _d_text_ne = _d_text_ne + 1;
+    if (_d_shown < 40) {
+        _d_shown = _d_shown + 1;
+        print("  derive ", 9);
+        p_out(ty, tn);
+        print(" ", 1);
+        p_out(kind, kn);
+        print(": serde ", 8);
+        if (back == 0) { print("refuses", 7); } else { p_out(back, bn); }
+        print(" | derive ", 10);
+        p_sb_print(sb);
+        println("");
+    }
+    return 0;
+}
+
+# The derived enum codec: what it writes for each variant and whether it reads serde's names.
+fn p_derive_enum() {
+    var sb = str_builder_new();
+    var k = 0;
+    print("derive enum P11Phase writes: ", 29);
+    while (k < 4) {
+        P11Phase_to_json(k, sb);
+        str_builder_putc(sb, 32);
+        k = k + 1;
+    }
+    p_sb_print(sb);
+    println("");
+    var t1, v1 = P11Phase_from_json_str("\"Solid\"");
+    var t2, v2 = P11Phase_from_json_str("\"US_PHASE_GAS\"");
+    p_say("derive enum reads serde's \"Solid\" (1 ok): ", is_ok(t1));
+    p_say("derive enum reads its own \"US_PHASE_GAS\" (1 ok): ", is_ok(t2));
+    return 0;
+}
+
+# ── the documents ──────────────────────────────────────────────────────────────────
+
+fn p_cases(): i64 {
+    if (p_open("build/probe-json/cases.txt") == 0) { println("probe 11: run probe_json first"); return 1; }
+    _p_space = 0;
+    _k_name = alloc(8 * 128);
+    _k_len = alloc(8 * 128);
+    _k_cnt = alloc(64 * 128);
+    memset(_k_cnt, 0, 64 * 128);
+    var sb = str_builder_new();
+    var shown = 0;
+    var lw[8];
+    while (1 == 1) {
+        var ty = p_field(&lw);
+        if (ty < 0) { break; }
+        var tn = load64(&lw);
+        var tyc = _p_buf + ty;
+        var kd = p_field(&lw);
+        var kn = load64(&lw);
+        var kp = _p_buf + kd;
+        var sy = p_field(&lw);
+        var syntax = load8(_p_buf + sy) - 48;
+        var tp = p_field(&lw);
+        var tpn = load64(&lw);
+        var typed_ok = 0;
+        if (tpn == 2) { typed_ok = 1; }
+        var rtp = p_field(&lw);
+        var dp = p_field(&lw);
+        var dn = load64(&lw);
+        var sp = p_field(&lw);
+        var sn = load64(&lw);
+        var bp = p_field(&lw);
+        var bn = load64(&lw);
+        var doc = p_unhex(_p_buf + dp, dn);
+        var len = dn / 2;
+        var k = p_kind(kp, kn);
+        p_bump(k, 0);
+        if (typed_ok == 1) { p_bump(k, 1); }
+        if (syntax == 1) { p_bump(k, 2); }
+        var v = bayan_json_v_parse_buf(doc, len);
+        var why = 0;
+        if (v != 0) {
+            p_bump(k, 3);
+            if (syntax == 1) {
+                p_sb_reset(sb);
+                p_flat(sb, v);
+                if (p_sb_eq(sb, _p_buf + sp, sn) == 1) { p_bump(k, 4); } else { p_bump(k, 5); why = 1; }
+            } else {
+                p_bump(k, 7);
+                why = 2;
+            }
+        } else {
+            if (typed_ok == 1) { p_bump(k, 6); why = 3; }
+        }
+        if (why != 0 && shown < 60) {
+            shown = shown + 1;
+            print("  ", 2);
+            p_out(tyc, tn);
+            print(" ", 1);
+            p_out(kp, kn);
+            if (why == 1) {
+                print(": stream differs: bayan ", 24);
+                p_sb_print(sb);
+                print(" | serde ", 9);
+                p_out(_p_buf + sp, sn);
+            }
+            if (why == 2) { print(": bayan parses what serde_json refuses as JSON", 46); }
+            if (why == 3) {
+                print(": serde_json reads it, bayan refuses: ", 38);
+                var e = bayan_json_last_error();
+                print(e, strlen(e));
+            }
+            println("");
+        }
+        var is_sp = 0;
+        if (tn == 10 && memeq(tyc, "StatePoint", 10) == 1) { is_sp = 1; }
+        if (tn == 15 && memeq(tyc, "ThermalMaterial", 15) == 1) { is_sp = 1; }
+        if (is_sp == 1) {
+            var back = 0;
+            if (typed_ok == 1) { back = p_unhex(_p_buf + bp, bn); }
+            p_derive(tyc, tn, kp, kn, doc, back, bn / 2);
+        }
+    }
+    println("");
+    println("kind                  cases serde-ok serde-json bayan-ok stream= stream!= serde-only bayan-only");
+    var j = 0;
+    while (j < _k_n) {
+        p_out(load64(_k_name + (8 * j)), load64(_k_len + (8 * j)));
+        var pad = 22 - load64(_k_len + (8 * j));
+        while (pad > 0) { print(" ", 1); pad = pad - 1; }
+        var c = 0;
+        while (c < 8) {
+            var num = load64(_k_cnt + (64 * j) + (8 * c));
+            var nb[24];
+            var w = fmt_int_buf(num, &nb);
+            var pad2 = 8 - w;
+            if (c == 0) { pad2 = 5 - w; }
+            while (pad2 > 0) { print(" ", 1); pad2 = pad2 - 1; }
+            print(&nb, w);
+            print(" ", 1);
+            c = c + 1;
+        }
+        println("");
+        j = j + 1;
+    }
+    p_say("derive: text equal to serde's value ", _d_text_eq);
+    p_say("derive: text different (or serde refused) ", _d_text_ne);
+    return 0;
+}
+
+# ── the f64 printers and parser ────────────────────────────────────────────────────
+
+fn p_floats(): i64 {
+    if (p_open("build/probe-json/f64.txt") == 0) { println("probe 11: run probe_json first"); return 1; }
+    _p_space = 1;
+    var sb = str_builder_new();
+    var bb = alloc(64);
+    var lw[8];
+    var n = 0;
+    var json_ne = 0;
+    var disp_ne = 0;
+    var bayan_ne = 0;
+    var bayan_len_ne = 0;
+    var parse_ne = 0;
+    var parsed = 0;
+    var shown = 0;
+    while (1 == 1) {
+        var bp = p_field(&lw);
+        if (bp < 0) { break; }
+        var bits = p_word(_p_buf + bp);
+        var jp = p_field(&lw);
+        var jn = load64(&lw);
+        var dp = p_field(&lw);
+        var dn = load64(&lw);
+        var kp = p_field(&lw);
+        n = n + 1;
+        var x: f64 = p_f(bits);
+        p_sb_reset(sb);
+        im_fmt_f64_json(sb, x);
+        if (p_sb_eq(sb, _p_buf + jp, jn) == 0) {
+            json_ne = json_ne + 1;
+            if (shown < 10) {
+                shown = shown + 1;
+                print("  fmtf json: ", 13);
+                p_sb_print(sb);
+                print(" serde ", 7);
+                p_out(_p_buf + jp, jn);
+                println("");
+            }
+        }
+        p_sb_reset(sb);
+        im_fmt_f64_display(sb, x);
+        if (p_sb_eq(sb, _p_buf + dp, dn) == 0) {
+            disp_ne = disp_ne + 1;
+            if (shown < 10) {
+                shown = shown + 1;
+                print("  fmtf display: ", 16);
+                p_sb_print(sb);
+                print(" rust ", 6);
+                p_out(_p_buf + dp, dn);
+                println("");
+            }
+        }
+        var bl = bayan_f64_to_json(bits, bb);
+        if (bl != jn || memeq(bb, _p_buf + jp, jn) == 0) {
+            bayan_ne = bayan_ne + 1;
+            var digits_b = 0;
+            var digits_s = 0;
+            var q = 0;
+            while (q < bl) {
+                var cq = load8(bb + q);
+                if (cq == 101 || cq == 69) { break; }
+                if (cq >= 49 && cq <= 57) { digits_b = q + 1; }
+                q = q + 1;
+            }
+            q = 0;
+            while (q < jn) {
+                var cs = load8(_p_buf + jp + q);
+                if (cs == 101 || cs == 69) { break; }
+                if (cs >= 49 && cs <= 57) { digits_s = q + 1; }
+                q = q + 1;
+            }
+            if (digits_b > digits_s) { bayan_len_ne = bayan_len_ne + 1; }
+        }
+        if (load8(_p_buf + jp) != 110) {
+            parsed = parsed + 1;
+            var pb = bayan_f64_parse(_p_buf + jp, jn);
+            if (pb != bits) { parse_ne = parse_ne + 1; }
+        }
+    }
+    p_say("doubles ", n);
+    p_say("fmtf json form != serde_json ", json_ne);
+    p_say("fmtf display form != Rust Display ", disp_ne);
+    p_say("bayan_f64_to_json != serde_json ", bayan_ne);
+    p_say("  of which longer (more digits) than serde_json's ", bayan_len_ne);
+    p_say("serde_json texts parsed ", parsed);
+    p_say("bayan_f64_parse != the written bits ", parse_ne);
+    return 0;
+}
+
+fn main(): i64 {
+    alloc_init();
+    println("== probe 11: documents");
+    var r = p_cases();
+    println("");
+    p_derive_enum();
+    println("");
+    println("== probe 11: f64 text");
+    var r2 = p_floats();
+    return r + r2;
+}
+
+var rr = main();
+sys_exit_group(rr);

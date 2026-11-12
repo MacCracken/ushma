@@ -1,0 +1,21 @@
+# Probe 10 (port plan §4 step 9.10): a consumer of the ushma bundle. It includes nothing itself: its cyrius.cyml
+# declares [deps.ushma] (a path dep on the probe's scratch copy) with the bundle as its module, and either the
+# bundle's .deps leaves or none at all as its stdlib (scripts/probes/p10_manifest.sh). With -D P10_AI it also posts
+# the registration through [lib.ai] to the loopback stub on 127.0.0.1:18731.
+
+# Prints `core N` (7 when every dependency answered) and, for the ai bundle, `ai STATUS`.
+fn main() {
+    alloc_init();
+    var c = us_p10_core();
+    print("core ", 5);
+    println_int(c);
+    #ifdef P10_AI
+    var s = us_p10_ai("http://127.0.0.1:18731/v1/agents");
+    print("ai ", 3);
+    println_int(s);
+    #endif
+    return 0;
+}
+
+var r = main();
+sys_exit_group(r);

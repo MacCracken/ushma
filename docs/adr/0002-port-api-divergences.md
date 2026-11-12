@@ -24,6 +24,8 @@ that moves results noticeably goes to the maintainer first, and the decision is 
 | 4 | `register_agent` is `async` (tokio + reqwest) | synchronous `sandhi_http_post_opts`, same 30 s timeout. Cyrius async doesn't run on aarch64 | request bytes (method, headers, body) class A; path per #6 |
 | 5 | `EnvFilter` directives in `USHMA_LOG` | the level names trace / debug / info / warn / error, and `ushma=<level>`; any other directive is refused with a warning | parsing rows class A; the log line format is sakshi's |
 | 6 | `POST /v1/agents/register`, reads `agent_id`. No daimon has ever served that path or sent that field | `POST /v1/agents`, reads `id`, as daimon 2.5.6 serves (prakash made the same correction in 2.5.1) | the oracle's path is mapped to `/v1/agents`; response handling is checked against a stub answering as daimon 2.5.6 |
+| 7 | reqwest's `timeout(30 s)` bounds the whole request | sandhi's `total_ms` alone doesn't bound a server that is silent before its first byte (probe 7), so the client sets `total_ms` **and** `read_ms`, 30 s each | stub rows: a silent server gives the timeout error |
+| 8 | reqwest sends exactly host, content-type, content-length, authorization and `accept: */*` | sandhi adds `User-Agent: sandhi/<v>`, `Accept-Encoding: identity`, `TE: trailers` and `Connection: close`. The port sets `Accept: */*` and writes the body in serde's key order (`capabilities` before `name`) | body bytes class A; the oracle's five headers by value, names case-insensitive; sandhi's four transport headers listed as extra |
 
 Exact-constant misses in Rust's formulas (exponents written as rounded decimals, such as
 `powf(1.0/3.0)` and `powf(1.0/6.0)`) are fixed under ADR 0004 as each module ports, one row per

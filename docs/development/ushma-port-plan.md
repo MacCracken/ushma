@@ -70,10 +70,10 @@
 |---|---|---|---|
 | P2 | **Range-edge sweep inside each milestone**, not a library-wide audit afterwards. | kimiya ran its audit after M4 and had to reopen every module (batches B1–B12). | Port first, audit later. |
 | P3 | **Correctly rounded primitives** in `src/mathx.cyr` (`_us_cr_exp`, `_ln`, `_expm1`, `_pow`, atan as atan2(x, 1), and tanh), vendored from kimiya's `src/mathx.cyr`, plus an upstream request to host one shared set. | The stdlib's exp/ln/atan polyfills and ganita's pow/tanh are ≤1 ulp with the same bits everywhere, but they are **not correctly rounded**, and the accuracy policy (§0.1) requires correct rounding. The stdlib has no expm1. ushma would be the third private copy, after impetus `crmath.cyr` and kimiya `mathx.cyr`. | Use the stdlib polyfills and ganita, and accept ≤1 ulp under an ADR. |
-| P4 | **`ThermalNetwork::solve` on `ganita_mat_gaussian_elim`** (partial pivoting, in place on the augmented matrix). Keep 1.4.0's diagonal row scaling in front of it. | The stdlib already has the solver; nothing to transcribe. Rust hisab 1.4.0 stops on an absolute pivot `< ε`, while ganita uses a relative threshold over [A\|b] and refuses non-finite entries. Probe 9 measures the bits. ADR 0003 records the singularity divergence. | `ganita_mat_lu` + `ganita_mat_lu_solve`. |
+| P4 | **`ThermalNetwork::solve` on `ganita_mat_lu` + `ganita_mat_lu_solve`**, after 1.4.0's diagonal row scaling (amended by probe 9; first decided as `ganita_mat_gaussian_elim`). | The stdlib already has the solver; nothing to transcribe. Probe 9 (2,178 networks): LU is bit-identical on all 2,000 systems 1.4.0 solves and refuses exactly the 178 it refuses, because after row scaling LU's relative threshold is 1.4.0's absolute `ε`. Elimination's threshold spans [A\|b] and refuses 259 systems 1.4.0 solves. ADR 0003 and its amendment. `_lu_solve` allocates 8·n B per call (§8). | `ganita_mat_gaussian_elim` (rejected by probe 9). |
 | P5 | **Two bundles, as prakash:** `[lib]` (every module except the HTTP client, logging included) and `[lib.ai]` (`[lib]` + `src/ai.cyr`). | sandhi pulls the whole TLS stack (tls, async, random, fdlopen, dynlib). A consumer that wants only the physics shouldn't link it, which is what Rust's `ai` feature did. The 10 domain features are additive, so they need no profiles. | A single bundle with ai included. |
 | P6 | **Public names live under `us`.** Functions become `us_ideal_gas_pressure`, `us_ai_register_agent`, …. Enum variants, constants and error codes get `US_` names (`US_PHASE_SOLID`, `US_ERR_INVALID_TEMPERATURE`). Probe 6 picks the mechanism: the language's own `mod us;` mangling (a consumer then writes `use us.ideal_gas_pressure;` and calls the bare name), or a written prefix. | Cyrius has **one global namespace**. A duplicate non-private `fn` is a warning, and **the last definition wins** (guide L5267–5279). A bare enum variant name also resolves to the last definition, retroactively (L391–396, L10297). Collisions already exist: 10 functions with kimiya's bundle (`ideal_gas_pressure`, `reaction_enthalpy`, `equilibrium_constant`, …), and prakash's `ai_*` client names. kiran uses both kimiya and ushma. `mod`/`use` (6.7.17, L625) is documented in one sentence and no library uses it yet, hence the probe. | Keep Rust's names and rename only the collisions. |
-| P7 | **JSON is byte-identical to serde_json**, with serde's field semantics. Readers work on `bayan_json_parse`'s tree, writers on `str_builder`. The f64 text comes from a shortest-digit printer (`src/fmtf.cyr`, vendored from impetus), which also prints `UshmaError`'s Display text the way Rust does. | `#derive(Serialize)` exists (guide L4548–4660, on bayan), but it isn't serde's semantics: a missing key leaves 0 instead of an error; u64, `Vec<Str>`, tuple and payload-enum fields are refused; its f64 text is bayan's printer, which round-trips but isn't always shortest and formats differently from serde_json. Its scanner also has three open issues (2026-11-07: reads past a NUL, memsets a refused allocation, hangs on a stray brace). impetus reached the same decision (its ADR 0010). | `#derive(Serialize)`, compared by parsed value only, with its decode differences accepted by ADR. |
+| P7 | **JSON is byte-identical to serde_json**, with serde's field semantics. Readers work on bayan's value tree (`bayan_json_v_parse_buf`), writers on `str_builder`. The f64 text comes from a shortest-digit printer (`src/fmtf.cyr`, vendored from impetus), which also prints `UshmaError`'s Display text the way Rust does. | `#derive(Serialize)` exists (guide L4548–4660, on bayan), but it isn't serde's semantics: a missing key leaves 0 instead of an error; u64, `Vec<Str>`, tuple and payload-enum fields are refused; its f64 text is bayan's printer, which round-trips but isn't always shortest and formats differently from serde_json. Its scanner also has three open issues (2026-11-07: reads past a NUL, memsets a refused allocation, hangs on a stray brace). impetus reached the same decision (its ADR 0010). | `#derive(Serialize)`, compared by parsed value only, with its decode differences accepted by ADR. |
 | P8 | **The port talks to daimon's real API: `POST /v1/agents`, reading `id`.** Rust 1.4.0 posts to `/v1/agents/register` and reads `agent_id`, which matches no daimon that exists. daimon is Cyrius-only (2.5.6), and there is no Rust daimon. prakash made the same correction in its 2.5.1 (`prakash/src/ai.cyr`). | The Rust code is frozen (§0.1), so the fix lives only in the Cyrius port, as ADR 0002 row #6. | Mirror Rust's path, which would never register. |
 
 ---
@@ -142,8 +142,9 @@
      with the same names, at DEBUG. Probe 8 measures the cost when spans are filtered out, against
      functions that take 1–2 ns.
    - **HTTP:** `DaimonClient::register_agent` becomes `us_ai_register_agent` on
-     `sandhi_http_post_opts`: a JSON body, a bearer header through `sandhi_headers_*`, a 30 s
-     timeout and the status check. `DaimonConfig`'s redacted `Debug` becomes a formatter that
+     `sandhi_http_post_opts`: serde's body bytes (`capabilities` before `name`), a bearer header and
+     `Accept: */*` through `sandhi_headers_*`, `total_ms` and `read_ms` at 30 s each (probe 7:
+     `total_ms` alone doesn't bound a silent server), and the status check. `DaimonConfig`'s redacted `Debug` becomes a formatter that
      prints `<redacted>`. Endpoint and key strings are refused when they hold control bytes (the
      request-splitting guard prakash added).
    - **JSON:** 28 types (§3.1), 30 serde round-trip test sites, documents byte-identical to
@@ -157,7 +158,9 @@
    stdlib leaf 'sakshi' … declare it in [deps] stdlib OR depend on the package, not both"
    (`cbt/deps/stdlib.cyr:251–259`). The stdlib copy wins, and the two are byte-identical at 2.5.10,
    so this is benign but can't be silenced from ushma. The fix is upstream: hisab drops
-   `[deps.sakshi]`, as patra did at 1.13.0 (§8). Probe 10 confirms it with a real resolve.
+   `[deps.sakshi]`, as patra did at 1.13.0 (§8). Probe 10 confirmed it with real resolves: every one warns (ushma's
+   `deps`, `distlib --all`, `distlib --check` and each consumer's `deps`), and all three copies are byte-identical
+   (sha256 `8a819554…`).
 8. **Open toolchain issues the port must work around** (`cyrius/docs/development/issues/`, open
    at 6.7.18):
 
@@ -244,7 +247,9 @@ and anything that moves results noticeably goes to the maintainer first.
 | 3 | lookups by `&str` name | table index (−1 when absent) plus a name search | same index set, class A |
 | 4 | `register_agent` is `async` (tokio + reqwest) | synchronous `sandhi_http_post_opts` with the same 30 s timeout | request bytes (method, headers, body) class A against the oracle's captured request; the path is mapped by #6 |
 | 5 | `EnvFilter` directives in `USHMA_LOG` (`ushma=debug,…`) | the level names trace / debug / info / warn / error, and `ushma=<level>`; other directive syntax is refused with a warning | parsing rows class A; log line format is sakshi's, not compared |
-| 6 | `POST /v1/agents/register`, reads `agent_id` (matches no daimon that exists) | `POST /v1/agents`, reads `id`, as daimon 2.5.6 serves (P8) | the oracle's path is mapped to `/v1/agents`; response handling is checked against a stub answering as daimon 2.5.6 (`{"id":N}`, 401, 500, malformed, missing `id`) |
+| 6 | `POST /v1/agents/register`, reads `agent_id` (matches no daimon that exists) | `POST /v1/agents`, reads `id`, as daimon 2.5.6 serves (P8) | the oracle's path is mapped to `/v1/agents`; response handling is checked against a stub answering as daimon 2.5.6
+| 7 | reqwest's `timeout(30 s)` bounds the whole request | `total_ms` **and** `read_ms`, 30 s each: `total_ms` alone doesn't bound a server silent before its first byte (probe 7) | stub rows: a silent server gives the timeout error |
+| 8 | reqwest sends exactly host, content-type, content-length, authorization, `accept: */*` | sandhi adds `User-Agent`, `Accept-Encoding: identity`, `TE: trailers`, `Connection: close`; the port sets `Accept: */*` | body bytes class A; the oracle's five headers by value (names case-insensitive); sandhi's four listed as extra (probe 7) | (`{"id":N}`, 401, 500, malformed, missing `id`) |
 | — | exponents written as rounded decimals (`powf(1.0/3.0)`, `powf(1.0/6.0)`) and similar exact-constant misses | fixed under the accuracy policy as each module ports (P2) | mapped per row, as kimiya's ADR 0002 #12 |
 
 ### 3.4 Not carried
@@ -354,8 +359,8 @@ hand-build the structure. On 6.7.18 the scaffold still overwrites project files 
 
    [deps]
    stdlib = ["syscalls", "string", "alloc", "str", "fmt", "io", "vec", "math", "ganita",
-             "tagged", "result", "boxed", "overflow", "fnptr", "log", "bayan",
-             "sandhi", "tls", "async", "random", "fdlopen", "dynlib"]   # sakshi: probe 10
+             "tagged", "result", "boxed", "overflow", "fnptr", "sakshi", "log", "bayan",
+             "sandhi", "tls", "async", "random", "fdlopen", "dynlib"]   # sakshi warns twice: probe 10
 
    [deps.hisab]
    git = "https://github.com/MacCracken/hisab.git"
@@ -365,10 +370,10 @@ hand-build the structure. On 6.7.18 the scaffold still overwrites project files 
    [test]
    stdlib = ["assert", "bench"]
 
-   [lib]      # from M1, in dependency order
+   [lib]      # from M1, in dependency order; dist/ushma.cyr, sidecar `log bayan` (probe 10)
    modules = ["src/error.cyr", "src/constants.cyr", "src/validate.cyr", "src/mathx.cyr", ...]
 
-   [lib.ai]   # [lib] + src/ai.cyr
+   [lib.ai]   # [lib] + src/ai.cyr; dist/ushma-ai.cyr, sidecar `log bayan sandhi` (probe 10)
    modules = [...]
    ```
    - `[lib]` order: error → constants → validate → mathx → fmtf → json → logging → material_data →
@@ -469,7 +474,7 @@ hand-build the structure. On 6.7.18 the scaffold still overwrites project files 
       `ganita_mat_lu`/`_lu_solve` as the alternative (P4).
    10. **Manifest.** sakshi via hisab's `[deps.sakshi]` and via the stdlib leaf (log, sandhi):
        `cyrius deps` warnings, byte-identity at the pin, and `distlib` for both profiles.
-   11. **JSON.** `bayan_json_parse` on serde_json's documents for all 28 types (malformed,
+   11. **JSON.** `bayan_json_v_parse_buf` on serde_json's documents for all 28 types (malformed,
        duplicate and unknown fields), and the vendored `fmtf.cyr` printer against serde_json's f64
        text and Rust's Display. Also run `#derive(Serialize)` on two of the types, to record
        exactly where its output and decoding differ from serde (P7's alternative).
@@ -493,9 +498,9 @@ tanmatra's classes apply, with kimiya's ADR 0006 reading of class C:
 | Class | Tolerance | ushma examples |
 |---|---|---|
 | **A, exact** | bit-identical; equal integers, codes and bytes | constants, every table cell, `phase_at` classifications, enum properties, `US_ERR_*` codes, **JSON documents**, **request bytes**, `USHMA_LOG` parsing, `DaimonConfig`'s redacted text |
-| **B, arithmetic** | ≤ 2 ulp, expected 0 | + − × ÷ √ only: Fourier, Newton cooling, resistances, Q = mcΔT, diffusivity, Biot, Stefan–Boltzmann (T⁴ by `powi`), ideal gas, Van der Waals, Kay's rule, Carnot, Helmholtz/Gibbs, Hess sums, IF97 Region 4 (algebraic + √), lerp interpolation, explicit FD steps, Gauss–Seidel sweeps, elimination (if probe 9 matches) |
+| **B, arithmetic** | ≤ 2 ulp, expected 0 | + − × ÷ √ only: Fourier, Newton cooling, resistances, Q = mcΔT, diffusivity, Biot, Stefan–Boltzmann (T⁴ by `powi`), ideal gas, Van der Waals, Kay's rule, Carnot, Helmholtz/Gibbs, Hess sums, IF97 Region 4 (algebraic + √), lerp interpolation, explicit FD steps, Gauss–Seidel sweeps, the network solve (ganita LU: 0 ulp, probe 9) |
 | **C, transcendental** | **0 ulp against the corrected oracle** once a function uses the `_us_cr_*` primitives; rows where glibc misrounds are counted "accepted under ADR 0004" | LMTD, ε-NTU, fins, Nusselt correlations, view factors, adiabatic relations, isothermal work, entropy changes, Clausius–Clapeyron, vapor/sublimation curves, ln-P interpolation, K and ln K, van 't Hoff, Boltzmann, partition functions, Maxwell–Boltzmann, Einstein, the bridges' power laws |
-| **D, iterative** | relative ≤ 1e-12 | only where an iteration path can differ: the hisab 3.4.1 Simpson (if probe 1 says so), elimination (if probe 9 says so), and any solver path an ADR names |
+| **D, iterative** | relative ≤ 1e-12 | only where an iteration path can differ: the hisab 3.4.1 Simpson (`debye_cv`: 1,942 of 3,000 rows bit-identical, ≤ 5 ulp, probe 1), and any solver path an ADR names |
 
 - **Never widen a class to make a row pass.** A failure is one of three things:
   - a port defect;
@@ -550,7 +555,7 @@ Every milestone ends with these gates:
 | **M3 Phase & steam** (M3a phase, M3b tables + Region 4, M3c superheated) | phase, steam | substance table; `phase_at`'s piecewise curves and sublimation; latent heats (CO₂ sublimation); Clausius–Clapeyron; generated steam tables; exact IF97 Region 4 both ways; saturated by T/P; quality with the clamp; ln-P tier interpolation; `superheated_by_entropy`; JSON for `Phase`, `SubstanceData` and the three steam types | `phase_at` T × P per substance across every join; every steam row through the lookups; Region 4 over 273.16…647.096 K and back; between-row/-tier points; every tier through `superheated_by_entropy`; x = 1 + 2e-16 |
 | **M4 Cycles** (M4a gas, M4b steam, M4c diagrams + comparison) | cycle | Otto, Diesel, Brayton, Rankine (s-inversion), refrigeration (negative net work), heat-pump COP, `compare_cycles`, T-s/P-v diagrams; results through out-pointers (probe 3); JSON for the 7 cycle types | r, γ, T grids; Rankine/refrigeration over the table range incl. 13.2 % and COP ≤ Carnot; every diagram's point list; `processes` shorter than `state_points` |
 | **M5 Chemical & statistical** | chem, stat | species table and JSON; Hess; reaction Gibbs; K and `ln_equilibrium_constant`; van 't Hoff; flame temperature; Boltzmann; S = k ln W; equipartition; partition functions; Maxwell–Boltzmann; Einstein; Debye via hisab Simpson (function-pointer callback) | every species × function; propane ln K ≈ 837; partitions at hν ≪ kT; Debye over Θ/T ∈ (0, 50] ∪ (50, 10⁴] incl. diamond at 3 K |
-| **M6 Numerical** | numerical | `ThermalGrid1D` explicit / Crank–Nicolson (reusable scratch) / adaptive / `max_stable_dt`; `ThermalGrid2D` flat storage, Gauss–Seidel with convective BCs; `ThermalNetwork` connectivity, row scaling, ganita elimination (P4); malformed state → Err; JSON for the 5 types (nested 2D shape kept) | single-step rows for every BC kind × method incl. Fo·(1 + Bi) = 0.5; 2D steady states with iteration counts; networks incl. a floating node and R ≈ 1e14; the 10⁵-step soak (probe 2) |
+| **M6 Numerical** | numerical | `ThermalGrid1D` explicit / Crank–Nicolson (reusable scratch) / adaptive / `max_stable_dt`; `ThermalGrid2D` flat storage, Gauss–Seidel with convective BCs; `ThermalNetwork` connectivity, row scaling, ganita LU (P4); malformed state → Err; JSON for the 5 types (nested 2D shape kept) | single-step rows for every BC kind × method incl. Fo·(1 + Bi) = 0.5; 2D steady states with iteration counts; networks incl. a floating node and R ≈ 1e14; the 10⁵-step soak (probe 2) |
 | **M7 Integrations** | bridge, soorat, ai | 16 bridge conversions (bijli, kimiya, dravya, badal, pravash, sharira) with their NaN fallbacks; the 6 soorat visualization types (heatmap, profile, cycle diagram, network graph, flux field) with JSON; the daimon/hoosh configs (JSON, redacted text), `us_ai_daimon_client_new`, `us_ai_register_agent` on sandhi, in `[lib.ai]` | every bridge over its documented ranges and NaN inputs; soorat from every M3–M6 grid/network/cycle golden state, incl. empty and all-NaN fields; ai against the oracle's captured requests and every scripted daimon response |
 | **M8 Release 2.0.0** | all | Rust-test ledger: every one of the 449 + 30 tests is ported or folded into golden rows, with no deferrals; full surface-parity diff (155/155); `docs/benchmarks-rust-v-cyrius.md` (63 benchmarks); **the 5 examples as Cyrius programs** in `docs/examples/` (`basic_thermo`, `heat_engine`, `building_thermal`, `cooling_system`, `phase_change`), built and run in CI; `cyrius distlib --all`; `cyrius audit`; `docs/guides/migration-2.0.md` (§3.3, P6's names, `[lib]` vs `[lib.ai]`); VERSION 2.0.0 | full corpus green on x86_64 ELF, x86_64 PE and aarch64, both profiles |
 
@@ -583,8 +588,8 @@ Every std f64 method in non-test `src/`, 1.4.0, whole crate:
 | Rust dependency (use) | Cyrius | Parity |
 |---|---|---|
 | hisab 1.4.0 `calc::lerp` (steam ×3) | hisab `calc_lerp` (same `a + (b − a)·t` fast form; stdlib `f64_lerp` rounds identically) | class B |
-| hisab 1.4.0 `calc::integral_simpson` (`debye_cv`, n = 200) | hisab `calc_integral_simpson(f, a, b, steps, out)` | class B or D (probe 1) |
-| hisab 1.4.0 `num::gaussian_elimination` (`ThermalNetwork::solve`) | ganita `ganita_mat_gaussian_elim(aug)`, or `ganita_mat_lu` + `ganita_mat_lu_solve` (P4) | class B or D (probe 9) |
+| hisab 1.4.0 `calc::integral_simpson` (`debye_cv`, n = 200) | hisab `calc_integral_simpson(f, a, b, steps, out)` | class D (probe 1) |
+| hisab 1.4.0 `num::gaussian_elimination` (`ThermalNetwork::solve`) | ganita `ganita_mat_lu` + `ganita_mat_lu_solve` (P4, ADR 0003 amendment) | class B, 0 ulp and the same refusals (probe 9) |
 | serde + serde_json (28 types; `ai` bodies) | bayan (`bayan_json_parse`, `bayan_json_v_*`, `bayan_json_build`) + `str_builder` writers + vendored `fmtf.cyr` (P7) | class A |
 | thiserror (`UshmaError` Display) | `US_ERR_*` codes + `us_error_message`, with f64 values printed by `fmtf.cyr` under Rust's Display rules | class A (message bytes) |
 | tracing (`#[instrument]` ×28, all DEBUG) | sakshi `sakshi_span_enter(name, len)` / `sakshi_span_exit()` | span names and levels: reference tests |
@@ -649,11 +654,17 @@ the gate is a warning-free `cyrius test`:
 | ganita | an `expm1` (and `log1p`) at all | ushma `partition_vibrational`, `debye_cv`; kimiya's decay chains |
 | bayan | a serde_json-compatible shortest f64 printer | impetus ADR 0010 and ushma P7: two copies of `fmtf.cyr` |
 | cyrius stdlib (math) | `f64_is_nan`, `f64_is_finite`, `F64_INF`, `F64_NAN`, `F64_EPSILON`; Rust-semantics min/max | 26 ushma call sites; check impetus's filing first and add to it |
-| hisab | drop `[deps.sakshi]` from `cyrius.cyml`: the bundle makes no `sakshi_` call, and the package makes every consumer that uses log, sandhi or sakshi resolve with a warning | §2.7, probe 10; patra did the same at 1.13.0 |
+| hisab | drop `[deps.sakshi]` from `cyrius.cyml`: the bundle makes no `sakshi_` call, and the package makes every consumer that uses log, sandhi or sakshi resolve with a warning | §2.7, probe 10: every resolve warns, ushma's and each consumer's; the copies are byte-identical; patra did the same at 1.13.0 |
+| ganita | an allocator-taking `ganita_mat_lu_solve_a` (or a caller scratch): `_lu_solve` allocates its forward-substitution vector on every call and never frees it | probe 9: 320 B per call at n = 40 with every other buffer reused |
+| ganita | `ganita_mat_gaussian_elim`'s threshold scales with the right-hand side, so it refuses well-posed systems whose b is large | probe 9: 259 of 2,000 row-scaled network systems that LU and Rust hisab 1.4.0 solve |
+| sandhi | `total_ms` doesn't bound a read that blocks before the first response byte (nor does `idle_ms`); only `read_ms` does | probe 7: a server silent for 3 s answers 200 under `total_ms` 1000 |
+| bayan | keep the sign of the integer `-0` (serde_json reads it as −0.0 into an f64; the tree has +0) | probe 11: 20 documents |
+| bayan | refuse a raw control character (U+0000–U+001F) inside a string, as RFC 8259 and serde_json do | probe 11: 10 documents parsed that serde_json refuses |
+| cyrius stdlib (dynlib) | `lib/dynlib.cyr:674` warns on every PE build that links sandhi (`syscall 5 … not routed on CYRIUS_TARGET_WIN=1`) | probe 10: every `[lib.ai]` consumer's PE build |
 | cyrius | `cyrius port` still clobbers project docs (existing issue) | add ushma as another reproduction if 6.7.18 still does it |
 | cyrius | the open `field-store-of-struct-call-copies-a-field-argument` miscompile | add ushma's grid shape as a reproduction if probe 12 hits it |
 | cyrius | a duplicate non-private `fn` across bundles is a warning, and the last one wins | probe 6; ushma × kimiya (10 names), × prakash (`ai_*`) |
-| kimiya | ganita already has `mat_gaussian_elim` and LU, so its planned transcription (ADR 0003) may not be needed | ganita reference, probe 9 |
+| kimiya | ganita's LU reproduces Rust hisab 1.4.0's elimination bit for bit on row-scaled systems, refusals included, so its planned transcription (ADR 0003) may not be needed; `mat_gaussian_elim` refuses more | probe 9 |
 | kimiya | its `KM_GAS_CONSTANT` is 8.314462618, truncated at 1e-11 relative; ushma 1.4.0 uses the exact N_A·k_B = 8.31446261815324 | values crossing the ushma ↔ kimiya bridges disagree in the 10th digit |
 
 ---
@@ -671,12 +682,12 @@ the gate is a warning-free `cyrius test`:
 
 | Milestone | Status | Golden rows | Reference tests | Benches | Notes |
 |---|---|---|---|---|---|
-| M0 Prep & initialize | 🟡 part 1 done 2026-11-11 (steps 0–3: tag verified, Rust bench baseline, `cyrius port`, repairs, manifest, ADRs 0001–0005; gates green on ELF, `--bounds`, PE, aarch64) | 15,738 (constants 9, math 15,687, table presets 42) | — | Rust baseline: 63 | Parts 2a (math check, generator, validate.py), 2b (table data, probe_tables.py), 2c-1 (parity harness: 3,374 ok, 0 failed) 2c-2a (MPFR corrected oracle: 26 rows), 2c-2b (mathx vendored) and 2c-3 (CR tanh, cr_verify: every golden row gated, 15,712 ok + 26 accepted) done. Part 3a (probes 2, 3, 4, 5, 6, 8, 12) done; P6 settled as a written prefix. Next: 3b (probes 1, 7, 9, 10, 11), upstream drafts |
+| M0 Prep & initialize | 🟡 part 1 done 2026-11-11 (steps 0–3: tag verified, Rust bench baseline, `cyrius port`, repairs, manifest, ADRs 0001–0005; gates green on ELF, `--bounds`, PE, aarch64) | 15,738 (constants 9, math 15,687, table presets 42) | — | Rust baseline: 63 | Parts 2a (math check, generator, validate.py), 2b (table data, probe_tables.py), 2c-1 (parity harness: 3,374 ok, 0 failed) 2c-2a (MPFR corrected oracle: 26 rows), 2c-2b (mathx vendored) and 2c-3 (CR tanh, cr_verify: every golden row gated, 15,712 ok + 26 accepted) done. Part 3a (probes 2, 3, 4, 5, 6, 8, 12) done; P6 settled as a written prefix. Part 3b (probes 1, 7, 9, 10, 11) done: Simpson class D, P4 moved to LU (class B), the ai client sets `read_ms`, both bundles link on three targets, P7 stands with the ADR 0005 amendment's decoder rules. Next: upstream drafts |
 | M1 Foundation, logging & transfer | ☐ | | | | |
 | M2 Equations of state & entropy | ☐ | | | | |
 | M3 Phase & steam | ☐ | | | | M3a/b/c |
 | M4 Cycles | ☐ | | | | M4a/b/c |
-| M5 Chemical & statistical | ☐ | | | | probe 1 decides Simpson's class |
-| M6 Numerical | ☐ | | | | probe 2 (memory), probe 9 (elimination) |
-| M7 Integrations | ☐ | | | | `[lib.ai]`; probe 7 |
+| M5 Chemical & statistical | ☐ | | | | Simpson class D (probe 1) |
+| M6 Numerical | ☐ | | | | probe 2 (memory); LU + the `_lu_solve` scratch stopgap (probe 9) |
+| M7 Integrations | ☐ | | | | `[lib.ai]`; `total_ms` + `read_ms`, serde's body bytes (probe 7) |
 | M8 Release 2.0.0 | ☐ | | | | 155/155 fns, 479/479 tests, 5 examples |

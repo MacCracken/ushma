@@ -18,11 +18,14 @@ cd "$ROOT" || exit 2
 # Anything else is ushma's and fails the warning count.
 KNOWN='large static data|refusing to overwrite stdlib leaf .sakshi.|^warning:lib/'
 
+# Every step that exits nonzero is named at the end, and the run then exits 1.
+FAILED=()
 run() { # PAT=<grep -E> [TAILN=n] run <cmd...>
     echo "=== $*"
     "$@" > "$OUT/step.out" 2>&1; rc=$?
     grep -v '^note:' "$OUT/step.out" | grep -iE "${PAT:-.}" | tail -"${TAILN:-4}"
     echo "--- exit $rc"
+    [ "$rc" -eq 0 ] || FAILED+=("$* (exit $rc)")
 }
 skip() { echo "=== SKIP: $*"; }
 
@@ -63,10 +66,16 @@ for t in '' --bounds --win --aarch64; do
     log="$OUT/test${t:-_elf}.log"
     echo "=== cyrius test $t"
     cyrius test $t > "$log" 2>&1
-    echo "--- exit $?"
+    rc=$?
+    echo "--- exit $rc"
     grep -E 'parity summary' "$log"
     grep -E '^[0-9]+ passed, [0-9]+ failed' "$log" | tail -1
-    echo "ushma warning lines: $(grep -i warning "$log" | grep -viE "$KNOWN" | wc -l)"
+    warns=$(grep -i warning "$log" | grep -viE "$KNOWN" | wc -l)
+    echo "ushma warning lines: $warns"
+    [ "$rc" -eq 0 ] || FAILED+=("cyrius test $t (exit $rc)")
+    grep -qE 'parity summary: .* 0 failing' "$log" || FAILED+=("cyrius test $t (no clean parity summary)")
+    grep -qE '^[1-9][0-9]* passed, 0 failed' "$log" || FAILED+=("cyrius test $t (no clean assert summary)")
+    [ "$warns" -eq 0 ] || FAILED+=("cyrius test $t ($warns ushma warning lines)")
 done
 
 # 4. Benchmarks, hygiene, lock, audit.
@@ -82,6 +91,7 @@ for f in src/*.cyr; do
     cyrius doc --check "$f" 2>&1 | grep -E '[1-9][0-9]* undocumented' && { echo "  ^ doc $f"; fails=$((fails + 1)); }
 done
 echo "--- fmt/lint/doc failures $fails"
+[ "$fails" -eq 0 ] || FAILED+=("fmt/lint/doc ($fails)")
 PAT='.' run cyrius vet src/main.cyr
 PAT='.' TAILN=2 run cyrius deps --locked
 PAT='.' TAILN=14 run cyrius audit
@@ -93,3 +103,11 @@ done
 
 echo "=== staged (must be empty: the maintainer does all git)"
 git diff --cached --name-only
+[ -z "$(git diff --cached --name-only)" ] || FAILED+=("staged files (the maintainer does all git)")
+
+if [ "${#FAILED[@]}" -gt 0 ]; then
+    echo "=== FAILED: ${#FAILED[@]} step(s)"
+    printf '  %s\n' "${FAILED[@]}"
+    exit 1
+fi
+echo "=== all steps exited 0"

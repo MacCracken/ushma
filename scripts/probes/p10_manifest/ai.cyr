@@ -1,0 +1,19 @@
+# Probe 10 (port plan §4 step 9.10): the [lib.ai] addition. The daimon registration on sandhi, as probe 7 settled it
+# (Rust's body bytes, Accept: */*, a bearer token, total_ms and read_ms); the [lib.ai] bundle is [lib] plus this.
+
+# Posts the registration to `url`; returns the HTTP status (0 with no response).
+#must_use
+fn us_p10_ai(url): i64 {
+    var bb = str_builder_new();
+    str_builder_add_cstr(bb, "{\"capabilities\":[\"heat_transfer\",\"thermodynamics\",");
+    str_builder_add_cstr(bb, "\"entropy\",\"thermal_materials\"],\"name\":\"ushma\"}");
+    var bs = str_builder_build(bb);
+    var h = sandhi_headers_new();
+    sandhi_headers_set(h, "Content-Type", "application/json");
+    sandhi_headers_set(h, "Accept", "*/*");
+    var o = sandhi_http_options_new();
+    sandhi_http_options_total_ms(o, 30000);
+    sandhi_http_options_read_ms(o, 30000);
+    var r = sandhi_http_post_opts(url, h, str_data(bs), str_len(bs), o);
+    return sandhi_http_status(r);
+}

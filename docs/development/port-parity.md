@@ -168,7 +168,9 @@ So every class-C function ushma calls is correctly rounded and target-independen
 ## 3. Probes (M0 step 9)
 
 Each probe is a small program in `scripts/probes/`, run on 6.7.18 (x86_64) on 2026-11-11. Batch 3a holds probes
-2, 3, 4, 5, 6, 8 and 12; probes 1, 7, 9, 10 and 11 follow in batch 3b.
+2, 3, 4, 5, 6, 8 and 12. Batch 3b holds probes 1, 7, 9, 10 and 11. Their Rust halves are binaries of the oracle crate
+(`scripts/oracle/src/bin/`: `probe_hisab`, `probe_ai`, `probe_json`), which drive the frozen 1.4.0 and Rust hisab 1.4.0
+read-only.
 
 ### Probe 12: f64 hygiene and the field-store miscompile (`p12_f64_hygiene.cyr`)
 
@@ -261,3 +263,161 @@ On the generated column tables, the search and interpolation alone: saturated by
 lerps) 77 ns; superheated by (T, P) (tier and row search, 3 lerps) 43 ns. Rust's whole functions take 18.2 ns and
 31.4 ns. Cyrius doesn't inline, so the lerp calls dominate; this is M3's optimisation target (inline the lerps,
 read each row pair once). Speed is measured, not gated.
+
+### Probe 1: Simpson against Rust hisab (`p1_p9_hisab.cyr`, `probe_hisab`)
+
+hisab 3.4.1's `calc_integral_simpson`, called through a function pointer, against `hisab::calc::integral_simpson` 1.4.0
+on 3,000 seeded intervals. The integrand is x⁴/(1 + x)², with + − × ÷ only, so any difference is the integrator's:
+
+| Rows | Bit-identical |
+|---|---|
+| all, 3,000 | 1,942 |
+| n = 200 (debye_cv's), 1,152 | 763 |
+| odd n, 371 | 248 |
+
+The worst distance is 5 ulp. The two integrators sum in a different order, so `debye_cv` is **class D** (relative
+≤ 1e-12, port plan §5), not B. The callback form works, and probe 2 measured it at 0 B per call.
+
+### Probe 9: network solves (`p1_p9_hisab.cyr`, `probe_hisab`)
+
+The probe generated 2,178 seeded connected networks: a chain through every node plus extra edges, R log-uniform over
+1e-3 … 1e14, and one to three fixed nodes. Each system was built and row-scaled as 1.4.0's `ThermalNetwork::solve`
+builds it, and the copy was asserted bit-identical to `solve()` itself:
+
+| Systems | hisab 1.4.0 | `ganita_mat_gaussian_elim` | `ganita_mat_lu` + `_lu_solve` |
+|---|---|---|---|
+| 2,000 that 1.4.0 solves | solved | 1,741 bit-identical, **259 refused** | **2,000 bit-identical** (37,424 unknowns, 0 ulp) |
+| 178 that 1.4.0 refuses | `SingularPivot` | 178 refused | **178 refused** |
+
+So LU reproduces 1.4.0's answers and its singularity decisions on every system:
+- **Why LU agrees.** LU refuses when |pivot| ≤ 1e-12 · max|aᵢⱼ|, and 1.4.0 when |pivot| < 1e-12 (`EPSILON_F64`). After
+  row scaling, every diagonal is exactly 1 and every other entry is at most 1 in magnitude. So on ushma's matrices the
+  two are the same test, apart from a pivot of exactly 1e-12.
+- **Why elimination refuses more.** Its scale also spans the right-hand side, temperatures up to 1,000 K, so it refuses
+  259 systems that 1.4.0 solves.
+- **The leak.** `ganita_mat_lu_solve` allocates its forward-substitution vector on every call (`alloc(n * 8)`: 320 B at
+  n = 40, never freed), even when the factors, pivots and solution are reused.
+- **The decision.** P4 moves to LU, class B (ADR 0003 amendment). The scratch allocation is filed upstream as an `_a`
+  variant (§8).
+
+### Probe 7: the daimon registration on sandhi (`p7_sandhi_post.cyr`, `p7_daimon_stub.py`, `probe_ai`)
+
+Both clients ran against a loopback stub that answers as daimon 2.5.6 does and records each raw request. The oracle's
+`DaimonClient::register_agent` (`probe_ai`) and sandhi 1.13.7 compare like this:
+
+| | Rust 1.4.0 (reqwest) | sandhi |
+|---|---|---|
+| request line | `POST /v1/agents/register` (the P8 defect: the stub's 404) | `POST /v1/agents` (P8) |
+| body | 96 B, `{"capabilities":[…],"name":"ushma"}` (`json!` sorts the keys) | the same bytes, once the port writes serde's key order |
+| host, content-type, content-length, authorization (`Bearer …`), accept (`*/*`) | sent | the same values; Accept is set explicitly |
+| other headers | none | `User-Agent: sandhi/1.13.7`, `Accept-Encoding: identity`, `TE: trailers`, `Connection: close` |
+
+Header names differ only in case (reqwest lowercases them). A 201 comes back with its body. A refused connection is
+status 0 with `err_kind` 2.
+
+**Timeouts.** The test server accepts the connection, then sends nothing for 3 s:
+
+| Options | Result |
+|---|---|
+| `total_ms` 1000 | 200 after 3 s: the deadline doesn't bound a read that is blocked waiting for the first byte |
+| `total_ms` + `read_ms` 1000 | `err_kind` 4 (timeout) after 1 s |
+| `total_ms` + `idle_ms` 1000 | 200 after 3 s |
+
+So the client sets `read_ms` as well as `total_ms`, both 30 s (reqwest's `timeout(30 s)`), and the gap is filed
+upstream (§8). The results are the same on x86_64, PE (wine) and aarch64 (qemu).
+
+### Probe 10: the manifest and both bundles (`p10_manifest.sh`)
+
+The probe ran in a scratch copy (`build/p10/`):
+- `[lib]` holds the generated `src/` modules plus a stand-in that calls hisab (Simpson, lerp), ganita (LU), sakshi, log
+  and bayan.
+- `[lib.ai]` holds the same, plus the sandhi client.
+
+**sakshi twice.** Every resolve warns `refusing to overwrite stdlib leaf 'sakshi'`: ushma's `cyrius deps`, `distlib
+--all` and `distlib --check`, and every consumer's own `cyrius deps`. The cause is hisab 3.4.1's `[deps.sakshi]` package,
+which arrives beside the stdlib leaf that log and sandhi need.
+- The three copies are byte-identical (sha256 `8a819554…`), and the stdlib copy wins: the vendored leaf, the 6.7.18
+  snapshot and the 2.5.10 package.
+- hisab is a production dependency here (debye_cv, the steam lerps), so prakash's way out (`scope = "test"`) doesn't
+  apply. Only hisab can retire it (§8).
+
+**The bundles.** `distlib --all` writes both, each with its compile-verified requires block, and `--check` reads both
+as current:
+
+| Bundle | Size | Sidecar leaves |
+|---|---|---|
+| `dist/ushma.cyr` | 235,305 B | `log bayan` |
+| `dist/ushma-ai.cyr` | 236,341 B | `log bayan sandhi` |
+
+The sidecars list only ushma's own leaves. math, ganita, sakshi and the rest come with hisab, which a consumer gets
+through ushma's `[deps.hisab]` without declaring it (vendored as `lib/hisab.cyr`, commit-pinned).
+
+**Consumers.** A consumer project declares `[deps.ushma]` with the bundle as its module, and either the sidecar's
+leaves or `stdlib = []`. Both forms build and run on x86_64, PE and aarch64:
+- the core consumer: all 7 dependency calls answer;
+- the ai consumer: its POST gets a 201 (6 of 6 at the stub).
+
+One PE warning comes with `[lib.ai]`, from the vendored stdlib: `lib/dynlib.cyr:674: syscall 5 … is not routed on
+CYRIUS_TARGET_WIN=1`. The gates already filter `^warning:lib/`, and it is noted upstream.
+
+| Consumer (DCE) | x86_64 | PE | aarch64 |
+|---|---|---|---|
+| `[lib]` | 786,920 B | 3,457,024 B | 3,588,240 B |
+| `[lib.ai]` | 1,617,096 B | 5,151,744 B | 5,290,744 B |
+
+### Probe 11: JSON (`p11_json.cyr`, `p11_json.sh`, `probe_json`)
+
+serde_json 1.0.154 wrote 1,148 documents over the 28 types:
+- 131 base documents: every preset, every cycle, grids, networks, steam entries, both configs and every enum variant;
+- 1,017 variants of one value per type, in 71 kinds: malformed, duplicate, unknown and missing fields, numbers,
+  strings, shapes and enum forms.
+
+Each document carries serde_json's verdict and the value it read. bayan 1.11.1's `bayan_json_v_parse_buf` read every
+one, and its tree was flattened into the oracle's token stream: keys in order, decoded strings, every float's bits.
+
+**Where both read a document, bayan's tree is serde_json's**, with one exception: bayan reads the integer `-0` as +0,
+where serde_json reads −0.0 into an f64 (20 documents). Their verdicts on what is JSON differ in six cases:
+
+| Document | serde_json | bayan |
+|---|---|---|
+| a duplicate key in an unknown field, or nested inside one | ignored | refused: `duplicate key` |
+| nesting past 128 levels inside an unknown field | read | refused: `nesting too deep` |
+| an integer ≥ 2^63 (an f64 field, or a usize up to u64::MAX) | read | refused: `integer is out of range for i64` |
+| a raw control character in a string | refused | parsed |
+| invalid UTF-8 in a string | refused (typed) | parsed |
+| `1e400` | refused: `number out of range` | parsed as +inf |
+
+Everything else agrees:
+- **Both refuse:** a truncated document, trailing data, two documents, a BOM, trailing commas, leading zeros, `+1.5`,
+  `.5`, `1.`, NaN, Infinity, bad escapes and lone surrogates.
+- **Both read:** whitespace, unknown fields, 100-deep nesting, exponent forms, underflow to 0 and `-0.0`.
+- **The semantic cases parse in bayan,** and the decoders apply serde's rules to them: missing fields, `null`, wrong
+  types, enum and array shapes, and a struct written as an array (serde's sequence form, which serde accepts).
+
+**Floats** (160,378 doubles: every f64 in the base documents, every power of two, the powers of ten and their
+neighbours, the printers' form thresholds, small integers, 100,000 random bit patterns and 50,000 short decimals):
+
+| | Differs on |
+|---|---|
+| impetus's `fmtf.cyr` (sha256 `1d925be3…`), serde_json form vs serde_json's text | 0 |
+| `fmtf.cyr`, Display form vs Rust's `{}` | 0 |
+| bayan's own printer (Grisu2) vs serde_json's text | 6,276 (1,402 of them longer than shortest) |
+| `bayan_f64_parse(serde_json's text)` vs the bits written | 0 |
+| serde_json's own default parse of its text vs the bits written | **35,970 of 160,320**, by 1–2 ulp |
+
+serde_json's default float parse is best-effort, so the oracle crate enables `float_roundtrip`, as impetus's does. All
+160,320 texts and all 130 encodable base documents then read back exactly. Writing is the same in both modes.
+
+**`#derive(Serialize)`** (P7's alternative), on StatePoint, ThermalMaterial and Phase:
+- **It accepts what serde refuses** (49 of its 51 disagreements): truncated documents, trailing data, a BOM, trailing
+  commas, duplicate fields, missing fields (read as 0), `{}`, `null`, NaN and Infinity (read as NaN), `1e400`, leading
+  zeros, `+1.5`, `.5`, `1.`, and a string or a bool for an f64 (0).
+- **It refuses** serde's sequence form (`[300.0,…]` returns 0).
+- **Its f64 text is bayan's printer:** `9223372036854776000.0`, where serde writes `9.223372036854776e+18`.
+- **It faults on missing strings.** A document without a `Str` field leaves the field 0, and the derived writer then
+  faults on it.
+- **Enum names are the constants'.** An enum writes `"US_PHASE_SOLID"` where serde writes `"Solid"`, and it can't read
+  `"Solid"`. A variant name over 31 bytes is a compile error (`#derive field name too long`).
+
+So P7 stands: hand-written codecs on bayan's tree, with the ADR 0005 amendment's rules. The summaries are identical on
+x86_64, PE and aarch64.

@@ -1482,6 +1482,10 @@ dependencies = [
 name = "ushma-oracle"
 version = "0.0.0"
 dependencies = [
+ "hisab",
+ "serde",
+ "serde_json",
+ "tokio",
  "ushma",
 ]
 

@@ -1,0 +1,267 @@
+# Probes 1 and 9 (port plan §4 step 9): Cyrius hisab 3.4.1's Simpson and ganita's Gaussian elimination against what
+# Rust hisab 1.4.0 itself returns (scripts/oracle/src/bin/probe_hisab.rs writes build/probe-hisab/):
+# - probe 1: calc_integral_simpson(x⁴/(1 + x)², a, b, n) against hisab::calc::integral_simpson, bit for bit
+#   (the integrand is + − × ÷ only, so a difference is the integrator's), decides debye_cv's class (B or D);
+# - probe 9: ganita_mat_gaussian_elim, and ganita_mat_lu + _lu_solve, on ushma's ThermalNetwork::solve systems
+#   (row-scaled, as 1.4.0 builds them) against hisab::num::gaussian_elimination, decides ADR 0003's class; and the
+#   singularity decisions on the systems hisab 1.4.0 refuses (`gref` rows).
+#
+#   cargo run --release --locked --manifest-path scripts/oracle/Cargo.toml --bin probe_hisab
+#   cyrius build scripts/probes/p1_p9_hisab.cyr build/p1p9 && ./build/p1p9
+
+# The probe-1 integrand, as probe_hisab.rs writes it.
+#must_use
+fn p1_f(x: f64): f64 {
+    var y: f64 = 1.0 + x;
+    var r: f64 = (((x * x) * x) * x) / (y * y);
+    return r;
+}
+
+var _p_buf = 0;
+var _p_len = 0;
+var _p_at = 0;
+
+# The next space- or newline-delimited token's start, its length in *lenp; -1 at the end of the file.
+fn p_token(lenp): i64 {
+    while (_p_at < _p_len) {
+        var c = load8(_p_buf + _p_at);
+        if (c != 32 && c != 10) { break; }
+        _p_at = _p_at + 1;
+    }
+    if (_p_at >= _p_len) { return 0 - 1; }
+    var s = _p_at;
+    while (_p_at < _p_len) {
+        var c2 = load8(_p_buf + _p_at);
+        if (c2 == 32 || c2 == 10) { break; }
+        _p_at = _p_at + 1;
+    }
+    store64(lenp, _p_at - s);
+    return s;
+}
+
+# The next token as a hex word.
+#must_use
+fn p_hex(): i64 {
+    var lw[8];
+    var s = p_token(&lw);
+    var v = 0;
+    var k = 0;
+    while (k < load64(&lw)) {
+        var c = load8(_p_buf + s + k);
+        var d = c - 48;
+        if (c >= 97) { d = c - 87; }
+        v = (v << 4) | d;
+        k = k + 1;
+    }
+    return v;
+}
+
+# The next token as a decimal integer.
+#must_use
+fn p_int(): i64 {
+    var lw[8];
+    var s = p_token(&lw);
+    var v = 0;
+    var k = 0;
+    while (k < load64(&lw)) {
+        v = (v * 10) + (load8(_p_buf + s + k) - 48);
+        k = k + 1;
+    }
+    return v;
+}
+
+# Opens a probe data file; 0 if it can't be read.
+fn p_open(path): i64 {
+    var lenw[8];
+    var buf = file_read_whole(path, &lenw);
+    if (buf == 0) { return 0; }
+    _p_buf = buf;
+    _p_len = load64(&lenw);
+    _p_at = 0;
+    return 1;
+}
+
+# |bits(a) − bits(b)| for two finite doubles of one sign (the cases here), else a large number.
+#must_use
+fn p_ulps(a, b): i64 {
+    if ((a ^ b) < 0) { return 0x7FFFFFFFFFFFFFFF; }
+    var d = a - b;
+    if (d < 0) { d = 0 - d; }
+    return d;
+}
+
+# Prints `label n` on one line.
+fn p_say(label, n) {
+    print(label, strlen(label));
+    fmt_int(n);
+    println("");
+    return 0;
+}
+
+# Probe 1: every Simpson row.
+fn probe1(): i64 {
+    if (p_open("build/probe-hisab/simpson.txt") != 1) { println("probe 1: run probe_hisab first"); return 1; }
+    var rows = 0;
+    var same = 0;
+    var worst = 0;
+    var out: f64[1];
+    var lw[8];
+    var n200 = 0;
+    var n200same = 0;
+    var odd = 0;
+    var oddsame = 0;
+    while (p_token(&lw) >= 0) {
+        var a: f64 = p_hex();
+        var b: f64 = p_hex();
+        var n = p_int();
+        var want = p_hex();
+        var t, v = calc_integral_simpson(&p1_f, a, b, n, &out);
+        var got = load64(&out);
+        rows = rows + 1;
+        var eq = 0;
+        if (is_ok(t) == 1 && got == want) { same = same + 1; eq = 1; }
+        if (n == 200) { n200 = n200 + 1; n200same = n200same + eq; }
+        if ((n % 2) == 1) { odd = odd + 1; oddsame = oddsame + eq; }
+        var d = p_ulps(got, want);
+        if (d > worst) { worst = d; }
+    }
+    p_say("probe 1: Simpson rows ", rows);
+    p_say("probe 1: bit-identical to Rust hisab 1.4.0 ", same);
+    p_say("probe 1: largest ulp distance ", worst);
+    p_say("probe 1: n = 200 rows (debye_cv's) ", n200);
+    p_say("probe 1: n = 200, bit-identical ", n200same);
+    p_say("probe 1: odd n rows ", odd);
+    p_say("probe 1: odd n, bit-identical ", oddsame);
+    return 0;
+}
+
+# Probe 9: every network system, by Gaussian elimination and by LU.
+fn probe9(): i64 {
+    if (p_open("build/probe-hisab/gauss.txt") != 1) { println("probe 9: run probe_hisab first"); return 1; }
+    var rows = 0;
+    var ge_rows = 0;
+    var ge_vals = 0;
+    var lu_rows = 0;
+    var lu_vals = 0;
+    var vals = 0;
+    var ge_worst = 0;
+    var lu_worst = 0;
+    var refused = 0;
+    var r_rows = 0;
+    var r_ge = 0;
+    var r_lu = 0;
+    var lw[8];
+    while (1 == 1) {
+        var tk = p_token(&lw);
+        if (tk < 0) { break; }
+        var nf = p_int();
+        # A system hisab 1.4.0 refuses (`gref`): what elimination and LU decide on it.
+        if (load8(_p_buf + tk + 1) == 114) {
+            var raug = ganita_mat_new(nf, nf + 1);
+            var ra = ganita_mat_new(nf, nf);
+            var ri = 0;
+            while (ri < nf) {
+                var rj = 0;
+                while (rj <= nf) {
+                    var rw = p_hex();
+                    ganita_mat_set(raug, ri, rj, rw);
+                    if (rj < nf) { ganita_mat_set(ra, ri, rj, rw); }
+                    rj = rj + 1;
+                }
+                ri = ri + 1;
+            }
+            r_rows = r_rows + 1;
+            if (ganita_mat_gaussian_elim(raug) == 1) { r_ge = r_ge + 1; }
+            var rlu = ganita_mat_new(nf, nf);
+            var rpiv = alloc(8 * nf);
+            if (ganita_mat_lu(ra, rlu, rpiv) != 0) { r_lu = r_lu + 1; }
+            continue;
+        }
+        var aug = ganita_mat_new(nf, nf + 1);
+        var a = ganita_mat_new(nf, nf);
+        var rhs = alloc(8 * nf);
+        var i = 0;
+        while (i < nf) {
+            var j = 0;
+            while (j <= nf) {
+                var w = p_hex();
+                ganita_mat_set(aug, i, j, w);
+                if (j < nf) { ganita_mat_set(a, i, j, w); } else { store64(rhs + (8 * i), w); }
+                j = j + 1;
+            }
+            i = i + 1;
+        }
+        var want = alloc(8 * nf);
+        i = 0;
+        while (i < nf) { store64(want + (8 * i), p_hex()); i = i + 1; }
+        rows = rows + 1;
+        vals = vals + nf;
+        var ok = ganita_mat_gaussian_elim(aug);
+        if (ok != 1) { refused = refused + 1; }
+        var lu = ganita_mat_new(nf, nf);
+        var piv = alloc(8 * nf);
+        var x = alloc(8 * nf);
+        var sg = ganita_mat_lu(a, lu, piv);
+        var lok = 0 - 2;
+        if (sg != 0) { lok = ganita_mat_lu_solve(lu, piv, rhs, x); }
+        var gall = 1;
+        var lall = 1;
+        i = 0;
+        while (i < nf) {
+            var wv = load64(want + (8 * i));
+            var gv = ganita_mat_get(aug, i, nf);
+            if (ok == 1 && gv == wv) { ge_vals = ge_vals + 1; } else { gall = 0; }
+            var dg = p_ulps(gv, wv);
+            if (ok == 1 && dg > ge_worst) { ge_worst = dg; }
+            var lv = load64(x + (8 * i));
+            if (lok == 0 && lv == wv) { lu_vals = lu_vals + 1; } else { lall = 0; }
+            var dl = p_ulps(lv, wv);
+            if (lok == 0 && dl > lu_worst) { lu_worst = dl; }
+            i = i + 1;
+        }
+        ge_rows = ge_rows + gall;
+        lu_rows = lu_rows + lall;
+    }
+    p_say("probe 9: network systems ", rows);
+    p_say("probe 9: unknowns ", vals);
+    p_say("probe 9: ganita_mat_gaussian_elim refused ", refused);
+    p_say("probe 9: elimination, systems bit-identical to Rust hisab 1.4.0 ", ge_rows);
+    p_say("probe 9: elimination, unknowns bit-identical ", ge_vals);
+    p_say("probe 9: elimination, largest ulp distance ", ge_worst);
+    p_say("probe 9: LU, systems bit-identical ", lu_rows);
+    p_say("probe 9: LU, unknowns bit-identical ", lu_vals);
+    p_say("probe 9: LU, largest ulp distance ", lu_worst);
+    p_say("probe 9: systems hisab 1.4.0 refuses ", r_rows);
+    p_say("probe 9:   of which ganita_mat_gaussian_elim solves ", r_ge);
+    p_say("probe 9:   of which ganita_mat_lu factors ", r_lu);
+    # Heap per LU solve with the factors, pivots and solution allocated once (lu_solve's own scratch remains).
+    var nn = 40;
+    var m = ganita_mat_new(nn, nn);
+    var k = 0;
+    while (k < nn) { ganita_mat_set(m, k, k, 2.0); if (k > 0) { ganita_mat_set(m, k, k - 1, -1.0); } k = k + 1; }
+    var lu2 = ganita_mat_new(nn, nn);
+    var piv2 = alloc(8 * nn);
+    var b2 = alloc(8 * nn);
+    var x2 = alloc(8 * nn);
+    k = 0;
+    while (k < nn) { var one: f64 = 1.0; store64(b2 + (8 * k), one); k = k + 1; }
+    var before = alloc_used();
+    k = 0;
+    while (k < 1000) {
+        var sg2 = ganita_mat_lu(m, lu2, piv2);
+        var st2 = ganita_mat_lu_solve(lu2, piv2, b2, x2);
+        k = k + 1;
+    }
+    p_say("probe 9: heap bytes per lu + lu_solve at n = 40, buffers reused ", (alloc_used() - before) / 1000);
+    return 0;
+}
+
+# Runs both probes.
+fn main(): i64 {
+    alloc_init();
+    var r = probe1() + probe9();
+    return r;
+}
+
+var rr = main();
+sys_exit_group(rr);

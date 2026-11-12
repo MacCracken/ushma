@@ -1,0 +1,62 @@
+# Probe 7 (port plan §4 step 9.7): ushma's daimon registration on sandhi, against a loopback stub that answers as
+# daimon 2.5.6 does (scripts/probes/p7_daimon_stub.py, which logs the exact request bytes):
+# - POST /v1/agents with Rust 1.4.0's exact body bytes (serde_json sorts the keys: "capabilities" before "name"), its
+#   Accept: */* and a bearer token (P8: the path daimon really serves), 30 s total;
+# - a refused connection (nothing listening on the port);
+# - the timeouts: GET /slow sleeps 3 s, against total_ms alone, total_ms + read_ms and total_ms + idle_ms (1000 each).
+# Each prints the status, the error kind and the body.
+#
+#   python3 -I -B scripts/probes/p7_daimon_stub.py 18731 build/p7.log &
+#   cyrius build scripts/probes/p7_sandhi_post.cyr build/p7 && ./build/p7
+
+# Prints one response: the HTTP status, sandhi's error kind and the body.
+fn p7_show(label, r) {
+    print(label, strlen(label));
+    print(": status ", 9);
+    fmt_int(sandhi_http_status(r));
+    print(", err_kind ", 11);
+    fmt_int(sandhi_http_err_kind(r));
+    print(", body ", 7);
+    var bl = sandhi_http_body_len(r);
+    if (bl > 0) { print(sandhi_http_body(r), bl); }
+    println("");
+    return 0;
+}
+
+# The three requests.
+fn main(): i64 {
+    alloc_init();
+    var bb = str_builder_new();
+    str_builder_add_cstr(bb, "{\"capabilities\":[\"heat_transfer\",\"thermodynamics\",");
+    str_builder_add_cstr(bb, "\"entropy\",\"thermal_materials\"],\"name\":\"ushma\"}");
+    var bs = str_builder_build(bb);
+    var body = str_data(bs);
+    var h = sandhi_headers_new();
+    sandhi_headers_set(h, "Content-Type", "application/json");
+    sandhi_headers_set(h, "Authorization", "Bearer probe-key");
+    sandhi_headers_set(h, "Accept", "*/*");
+    var o = sandhi_http_options_new();
+    sandhi_http_options_total_ms(o, 30000);
+    var r1 = sandhi_http_post_opts("http://127.0.0.1:18731/v1/agents", h, body, str_len(bs), o);
+    p7_show("POST /v1/agents", r1);
+    var r2 = sandhi_http_post_opts("http://127.0.0.1:18799/v1/agents", h, body, str_len(bs), o);
+    p7_show("refused (port 18799)", r2);
+    var o3 = sandhi_http_options_new();
+    sandhi_http_options_total_ms(o3, 1000);
+    var r3 = sandhi_http_get_opts("http://127.0.0.1:18731/slow", 0, o3);
+    p7_show("timeout? (GET /slow, total_ms 1000 alone)", r3);
+    var o4 = sandhi_http_options_new();
+    sandhi_http_options_total_ms(o4, 1000);
+    sandhi_http_options_read_ms(o4, 1000);
+    var r4 = sandhi_http_get_opts("http://127.0.0.1:18731/slow", 0, o4);
+    p7_show("timeout? (GET /slow, total_ms + read_ms 1000)", r4);
+    var o5 = sandhi_http_options_new();
+    sandhi_http_options_total_ms(o5, 1000);
+    sandhi_http_options_idle_ms(o5, 1000);
+    var r5 = sandhi_http_get_opts("http://127.0.0.1:18731/slow", 0, o5);
+    p7_show("timeout? (GET /slow, total_ms + idle_ms 1000)", r5);
+    return 0;
+}
+
+var rr = main();
+sys_exit_group(rr);

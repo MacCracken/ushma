@@ -6,6 +6,8 @@ rust-version = "1.99"
 license = "GPL-3.0-only"
 publish = false
 description = "Drives the frozen Rust ushma 1.4.0 in rust-old/ to write the Cyrius port's golden corpus"
+# The golden-corpus generator is the default; the M0 probe binaries (src/bin/) run with --bin.
+default-run = "oracle"
 
 # The oracle is used by path and never built or edited in place (CLAUDE.md: rust-old/ is
 # frozen). Cargo.lock was seeded from rust-old/Cargo.lock, so every shared dependency (hisab
@@ -14,6 +16,19 @@ description = "Drives the frozen Rust ushma 1.4.0 in rust-old/ to write the Cyri
 # `soorat-compat` included.
 [dependencies]
 ushma = { path = "../../rust-old", features = ["full"] }
+# Rust hisab itself, exactly the oracle's (1.4.0, as the lockfile pins), for the M0 hisab probes (src/bin/probe_hisab.rs).
+hisab = "=1.4.0"
+# The oracle's ai client is async (reqwest); a current-thread runtime drives it for the probe-7 request capture
+# (src/bin/probe_ai.rs). tokio is already in the lockfile through reqwest, and these features add no crate.
+tokio = { version = "=1.54.1", features = ["rt", "net", "time"] }
+# serde and serde_json exactly as the oracle resolves them, for the probe-11 documents (src/bin/probe_json.rs).
+# `float_roundtrip`: serde_json's default float parse is best-effort, and reads 22 % of its own shortest output back
+# 1–2 ulp off (probe 11, port-parity.md §3). The parse precision is the consumer's serde_json choice, not ushma's
+# (its types only derive Deserialize), so the oracle takes the exact one, as impetus's does; the port's parse is
+# correctly rounded (bayan). Writing is the same in both modes. No other feature: one here unifies into the oracle's
+# own build (preserve_order would reorder the ai client's json! body).
+serde = "=1.0.229"
+serde_json = { version = "=1.0.154", features = ["float_roundtrip"] }
 
 [[bin]]
 name = "oracle"
