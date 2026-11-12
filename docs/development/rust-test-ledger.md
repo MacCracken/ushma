@@ -5,7 +5,7 @@
 > (`# rust <file>: <test>`), at its module's milestone. Nothing is deferred: a test not ported yet is one whose
 > milestone hasn't come. The golden corpus (`tests/golden/`) checks every ported function on its grid besides.
 
-**479 Rust tests:** 260 ported; 15 at M3, 64 at M4, 62 at M5, 27 at M6, 51 at M7.
+**479 Rust tests:** 275 ported; 64 at M4, 62 at M5, 27 at M6, 51 at M7.
 
 | Rust file | Tests | Ported | Due, unported | Later (milestone) |
 |---|---:|---:|---:|---|
@@ -22,11 +22,11 @@
 | `src/phase.rs` | 44 | 44 | 0 | — |
 | `src/stat.rs` | 33 | 0 | 0 | 33 (M5) |
 | `src/state.rs` | 47 | 47 | 0 | — |
-| `src/steam.rs` | 46 | 32 | 0 | 14 (M3) |
+| `src/steam.rs` | 46 | 46 | 0 | — |
 | `src/transfer.rs` | 67 | 67 | 0 | — |
 | `src/validate.rs` | 2 | 2 | 0 | — |
-| `tests/integration.rs` | 30 | 18 | 0 | 1 (M3), 5 (M4), 6 (M5) |
-| **Total** | **479** | **260** | **0** | |
+| `tests/integration.rs` | 30 | 19 | 0 | 5 (M4), 6 (M5) |
+| **Total** | **479** | **275** | **0** | |
 
 ## Where each is ported
 
@@ -200,7 +200,21 @@
 | `src/steam.rs` `test_saturation_line_roundtrip_and_range` | `tests/steam.tcyr` `test_region4` |
 | `src/steam.rs` `test_saturation_pressure_if97_verification_values` | `tests/steam.tcyr` `test_region4` |
 | `src/steam.rs` `test_saturation_temperature_if97_verification_values` | `tests/steam.tcyr` `test_region4` |
-| `src/steam.rs` `test_steam_lookups_reject_nan` | `tests/steam.tcyr` `test_lookups` |
+| `src/steam.rs` `test_steam_lookups_reject_nan` | `tests/steam.tcyr` `test_lookups`, `tests/steam.tcyr` `test_superheated` |
+| `src/steam.rs` `test_superheated_200c_100kpa` | `tests/steam.tcyr` `test_superheated` |
+| `src/steam.rs` `test_superheated_500c_1mpa` | `tests/steam.tcyr` `test_superheated` |
+| `src/steam.rs` `test_superheated_between_tiers_matches_if97` | `tests/steam.tcyr` `test_superheated` |
+| `src/steam.rs` `test_superheated_by_entropy_out_of_range` | `tests/steam.tcyr` `test_by_entropy` |
+| `src/steam.rs` `test_superheated_by_entropy_roundtrip` | `tests/steam.tcyr` `test_by_entropy` |
+| `src/steam.rs` `test_superheated_exact_tier_entries` | `tests/steam.tcyr` `test_superheated` |
+| `src/steam.rs` `test_superheated_interpolation_between_pressures` | `tests/steam.tcyr` `test_superheated` |
+| `src/steam.rs` `test_superheated_invalid_inputs` | `tests/steam.tcyr` `test_superheated` |
+| `src/steam.rs` `test_superheated_near_saturation_uses_saturated_anchor` | `tests/steam.tcyr` `test_superheated` |
+| `src/steam.rs` `test_superheated_out_of_range_pressure` | `tests/steam.tcyr` `test_superheated` |
+| `src/steam.rs` `test_superheated_out_of_range_reports_requested_pressure` | `tests/steam.tcyr` `test_superheated` |
+| `src/steam.rs` `test_superheated_out_of_range_temperature` | `tests/steam.tcyr` `test_superheated` |
+| `src/steam.rs` `test_superheated_serde_roundtrip` | `tests/steam.tcyr` `test_superheated` |
+| `src/steam.rs` `test_superheated_table_data_valid` | `tests/steam.tcyr` `test_superheated` |
 | `src/steam.rs` `test_wet_steam_properties_invalid_quality` | `tests/steam.tcyr` `test_wet_steam` |
 | `src/steam.rs` `test_wet_steam_properties_x0` | `tests/steam.tcyr` `test_wet_steam` |
 | `src/steam.rs` `test_wet_steam_properties_x1` | `tests/steam.tcyr` `test_wet_steam` |
@@ -287,6 +301,7 @@
 | `tests/integration.rs` `nusselt_to_h_to_convection_chain` | `tests/integration.tcyr` `nusselt_to_h_to_convection_chain` |
 | `tests/integration.rs` `phase_lookup_agrees_with_steam_table` | `tests/integration.tcyr` `phase_lookup_agrees_with_steam_table` |
 | `tests/integration.rs` `quality_consistency_across_methods` | `tests/integration.tcyr` `quality_consistency_across_methods` |
+| `tests/integration.rs` `simple_rankine_cycle_energy_balance` | `tests/integration.tcyr` `simple_rankine_cycle_energy_balance` |
 | `tests/integration.rs` `thermal_equilibrium_lumped_capacitance` | `tests/integration.tcyr` `thermal_equilibrium_lumped_capacitance` |
 | `tests/integration.rs` `van_der_waals_vs_ideal_gas` | `tests/integration.tcyr` `van_der_waals_vs_ideal_gas` |
 | `tests/integration.rs` `view_factor_reciprocity` | `tests/integration.tcyr` `view_factor_reciprocity` |

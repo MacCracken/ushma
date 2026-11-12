@@ -140,6 +140,27 @@ pub fn saturated_rows(src: &str) -> Result<Vec<Vec<f64>>, String> {
     )
 }
 
+/// The superheated table's rows (temperature, pressure, specific volume, enthalpy, entropy), for the golden rows that
+/// run every row and tier through the lookups (`m_steam.rs`).
+pub fn superheated_rows(src: &str) -> Result<Vec<Vec<f64>>, String> {
+    let items = const_items("steam", src)?;
+    let fields = [
+        "temperature",
+        "pressure",
+        "specific_volume",
+        "specific_enthalpy",
+        "specific_entropy",
+    ];
+    Ok(table(
+        item(&items, "SUPERHEATED_DATA")?,
+        "SuperheatedEntry",
+        &fields,
+    )?
+    .into_iter()
+    .map(|(vals, _)| vals)
+    .collect())
+}
+
 pub fn emit(src: &str, provenance: &str) -> Result<String, String> {
     let items = const_items("steam", src)?;
     let mut out = header(

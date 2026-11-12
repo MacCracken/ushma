@@ -27,7 +27,7 @@ dependency, hisab 1.4.0 above all, is the version the oracle was tested with.
 |---|---|---|
 | `tests/golden/constants.tsv` | 9 | every public scalar const of ushma 1.4.0 (8 `f64`, 1 `usize`), class A |
 | `tests/golden/fmtf.tsv` | 26,088 | Rust's `{}` and `serde_json::to_string` of 13,044 doubles (`m_fmtf.rs`: the specials, every power of two, the powers of ten ± 1 ulp, the form thresholds, 0 … 1000 in tenths and hundredths, 4,000 random bit patterns, 2,000 short decimals), class A; `validate.py` checks each text by its properties |
-| `tests/golden/steam.tsv` | 14,025 | M3b (`m_steam.rs`): Region 4 both ways over its range, both saturated lookups at every row ± 1 ulp and between rows, quality and wet steam around their tolerances (class B); `SaturatedEntry` and `WetSteamProperties` JSON (class A). The table is private: its rows come from `t_steam::saturated_rows` |
+| `tests/golden/steam.tsv` | 31,113 | M3 (`m_steam.rs`): Region 4 both ways, both saturated lookups at every row ± 1 ulp and between rows, quality and wet steam around their tolerances (class B); the superheated lookup at every tier ± 1 ulp and between tiers, and `superheated_by_entropy` over every breakpoint's entropy (class C; `steam.cr.tsv`: 10 rows); the three steam types' JSON (class A). The tables are private: their rows come from `t_steam::saturated_rows` / `superheated_rows` |
 | `tests/golden/transfer.tsv` | 15,100 | M1c–M1d (`m_transfer.rs`): each of the 32 public transfer functions over a seeded physical sweep, every argument at each edge, and each branch switch (LMTD at ΔT₁ = ΔT₂ and across the 1e-10 band, NTU 0…100 × C_r 0…1 with both switches, view factors across 0.01); class B, or C where `exp`, `ln`, `powf`, `tanh` or `atan` enters (`transfer.cr.tsv`: 8 rows) |
 | `tests/golden/math.tsv` | 15,687 | every std f64 method ushma's library calls, over ushma's ranges (port plan §7.1) |
 | `tests/golden/entropy.tsv` | 3,454 | M2c (`m_entropy.rs`): the 9 entropy functions over seeded sweeps, every edge and each switch (T₁ = T₂, V₁ = V₂, T_cold at and around T_hot, 344 mixtures); classes A, B and C (`entropy.cr.tsv`: 1 row) |
@@ -111,7 +111,7 @@ struct literal in the Rust source, and the `ALL_*` row against the slice's entri
 are checked against MPFR by the corrected-oracle tooling (M0 part 2c). Run it with
 `python3 -I -B`. A tampered row fails it, as checked when it was written.
 
-From M1 it also models each ported module's functions (`MODELS`: transfer's 32, state's 21, entropy's 9, phase's 10, steam's 8): each is recomputed in Rust's
+From M1 it also models each ported module's functions (`MODELS`: transfer's 32, state's 21, entropy's 9, phase's 10, steam's 10): each is recomputed in Rust's
 operation order with Python binary64 arithmetic, its transcendentals (`exp`, `ln`, `pow`, `tanh`, `atan`) taken from
 glibc through ctypes, and every row must come out token for token. With MPFR's primitives instead, the same models
 give the module's corrected oracle (`<module>.cr.tsv`), each misrounded call recorded.
@@ -137,7 +137,7 @@ fn <TAB> inputs <TAB> corrected outputs <TAB> note
 The plain `validate.py .` run recomputes the file and checks it. On the recorded libm platform
 it also checks that each note's glibc value is this machine's libm result, and the exact text.
 `math.cr.tsv` has 26 rows (exp_m1 23, ln 1, powf 2), `transfer.cr.tsv` 8 (pow 4, exp 3, atan 1),
-`state.cr.tsv` 1 (pow) and `entropy.cr.tsv` 1 (log).
+`state.cr.tsv` 1 (pow), `entropy.cr.tsv` 1 (log) and `steam.cr.tsv` 10 (log 5, exp 5).
 
 ## mathx_tables.py
 

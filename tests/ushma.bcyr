@@ -332,6 +332,30 @@ fn b_sat_pressure(x): i64 {
     return v;
 }
 
+# superheated_lookup(573.15, 500000): on a tier.
+fn b_sh_lookup(x): i64 {
+    var e: UsSuperheated;
+    var t, v = us_superheated_lookup(573.15, 500000.0, &e);
+    var h: f64 = e.specific_enthalpy;
+    return h;
+}
+
+# superheated_lookup(573.15, 750000): between tiers.
+fn b_sh_between(x): i64 {
+    var e: UsSuperheated;
+    var t, v = us_superheated_lookup(573.15, 750000.0, &e);
+    var h: f64 = e.specific_enthalpy;
+    return h;
+}
+
+# superheated_by_entropy(100000, 8000).
+fn b_sh_by_s(x): i64 {
+    var e: UsSuperheated;
+    var t, v = us_superheated_by_entropy(100000.0, 8000.0, &e);
+    var tt: f64 = e.temperature;
+    return tt;
+}
+
 # Fills the two resistance lists the benchmarks use.
 fn bn_lists() {
     _bn_series = alloc(40);
@@ -435,6 +459,9 @@ fn main(): i64 {
     bn_run("steam/quality_from_enthalpy", &b_quality_h, &se, 1000000);
     bn_run("steam/wet_steam_properties", &b_wet, &se, 1000000);
     bn_run("steam/saturation_pressure", &b_sat_pressure, 0, 1000000);
+    bn_run("steam/superheated_lookup", &b_sh_lookup, 0, 1000000);
+    bn_run("steam/superheated_between_tiers", &b_sh_between, 0, 1000000);
+    bn_run("steam/superheated_by_entropy", &b_sh_by_s, 0, 100000);
     return 0;
 }
 

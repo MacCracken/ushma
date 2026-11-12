@@ -6,11 +6,14 @@
 //! pressure, each ± 1 ulp, the midpoints between rows, seeded points and the edges. Quality runs saturated states (rows,
 //! midpoints and the critical row, where v_g = v_f and h_fg = 0) at the liquid and vapor values, midway, past them by
 //! the 1e-9 round-off tolerance ± 2 ulps, at x = 1 + 2e-16 and at the edges; wet steam at x across [0, 1] and just
-//! outside. JSON: `SaturatedEntry` and `WetSteamProperties`, as `material.tsv`'s. Classes: B (Region 4 is + − × ÷ √),
-//! A for JSON.
+//! outside. Superheated steam (M3c): the lookup at every tier pressure ± 1 ulp and between tiers, at every table
+//! temperature ± 1 ulp, the midpoints and around each pressure's saturation temperature (the tier's anchor);
+//! `superheated_by_entropy` at each of those pressures over the entropies of the breakpoints ± 1 ulp, the midpoints and
+//! past the range. JSON: `SaturatedEntry`, `WetSteamProperties` and `SuperheatedEntry`, as `material.tsv`'s. Classes:
+//! B (Region 4 is + − × ÷ √), C for superheated steam (ln and exp between tiers), A for JSON.
 
 use serde::Deserialize as _;
-use ushma::steam::{self as st, SaturatedEntry, WetSteamProperties};
+use ushma::steam::{self as st, SaturatedEntry, SuperheatedEntry, WetSteamProperties};
 
 use crate::grids::Rng;
 use crate::json_cases::variants;
@@ -340,11 +343,202 @@ fn json_rows(m: &mut Module, states: &[SaturatedEntry]) {
     }
 }
 
+fn sh_fields(e: &SuperheatedEntry) -> Vec<Tok> {
+    vec![
+        f(e.temperature),
+        f(e.pressure),
+        f(e.specific_volume),
+        f(e.specific_enthalpy),
+        f(e.specific_entropy),
+    ]
+}
+
+fn sh_res(r: ushma::error::Result<SuperheatedEntry>) -> Vec<Tok> {
+    match r {
+        Ok(e) => sh_fields(&e),
+        Err(z) => vec![err(&z)],
+    }
+}
+
+/// The superheated table's rows, parsed as `steam_data.cyr`'s columns are.
+fn sh_table() -> Vec<Vec<f64>> {
+    let src = include_str!("../../../rust-old/src/steam.rs");
+    crate::t_steam::superheated_rows(src).expect("SUPERHEATED_DATA parses")
+}
+
+/// The pressures to try: every tier ± 1 ulp, the geometric midpoint of each pair of tiers, and the range's ends.
+fn sh_pressures(rows: &[Vec<f64>]) -> Vec<f64> {
+    let mut tiers: Vec<f64> = rows.iter().map(|r| r[1]).collect();
+    tiers.dedup();
+    let mut ps = Vec::new();
+    for (k, &p) in tiers.iter().enumerate() {
+        ps.extend(around(p, 1));
+        if let Some(&p2) = tiers.get(k + 1) {
+            ps.push((p * p2).sqrt());
+            ps.push(p + 0.25 * (p2 - p));
+        }
+    }
+    ps.extend([5_000.0, 2e7]);
+    ps
+}
+
+fn superheated(m: &mut Module) {
+    let rows = sh_table();
+    let ps = sh_pressures(&rows);
+    // superheated_lookup(T, P): at each pressure, every table temperature ± 1 ulp, the midpoints between rows, and
+    // around each tier's saturation temperature (the anchor) ± 1 ulp
+    let mut temps: Vec<f64> = Vec::new();
+    for (k, r) in rows.iter().enumerate() {
+        temps.extend(around(r[0], 1));
+        if let Some(r2) = rows.get(k + 1)
+            && r2[1] == r[1]
+        {
+            temps.push(0.5 * (r[0] + r2[0]));
+        }
+    }
+    let mut sats: Vec<f64> = Vec::new();
+    for &p in &ps {
+        if let Ok(e) = st::saturated_by_pressure(p) {
+            sats.extend(around(e.temperature, 1));
+            sats.push(e.temperature + 1.0);
+        }
+    }
+    temps.sort_by(f64::total_cmp);
+    temps.dedup();
+    for &p in &ps {
+        for &t in temps.iter().chain(sats.iter()) {
+            m.row(
+                "steam::superheated_lookup",
+                Class::C,
+                &[f(t), f(p)],
+                &sh_res(st::superheated_lookup(t, p)),
+            );
+        }
+    }
+    for e in edges() {
+        for (t, p) in [(e, 500_000.0), (573.15, e)] {
+            m.row(
+                "steam::superheated_lookup",
+                Class::C,
+                &[f(t), f(p)],
+                &sh_res(st::superheated_lookup(t, p)),
+            );
+        }
+    }
+    let mut r = Rng::new(82);
+    for _ in 0..400 {
+        let p = r.log_uniform(4.0, 7.0);
+        let t = r.uniform(300.0, 1100.0);
+        m.row(
+            "steam::superheated_lookup",
+            Class::C,
+            &[f(t), f(p)],
+            &sh_res(st::superheated_lookup(t, p)),
+        );
+    }
+    // superheated_by_entropy(P, s): at each pressure, the entropy of every breakpoint the lookup covers there ± 1 ulp,
+    // the midpoints, and below and above the range; then the edges and seeded points
+    for &p in &ps {
+        let mut ss: Vec<f64> = Vec::new();
+        for &t in temps.iter().chain(sats.iter()) {
+            if let Ok(e) = st::superheated_lookup(t, p) {
+                ss.extend(around(e.specific_entropy, 1));
+            }
+        }
+        ss.sort_by(f64::total_cmp);
+        ss.dedup();
+        let mids: Vec<f64> = ss.windows(2).map(|w| 0.5 * (w[0] + w[1])).collect();
+        ss.extend(mids);
+        ss.extend([1000.0, 20_000.0]);
+        for s0 in ss.iter().step_by(2) {
+            m.row(
+                "steam::superheated_by_entropy",
+                Class::C,
+                &[f(p), f(*s0)],
+                &sh_res(st::superheated_by_entropy(p, *s0)),
+            );
+        }
+    }
+    for e in edges() {
+        for (p, s0) in [(e, 8000.0), (100_000.0, e)] {
+            m.row(
+                "steam::superheated_by_entropy",
+                Class::C,
+                &[f(p), f(s0)],
+                &sh_res(st::superheated_by_entropy(p, s0)),
+            );
+        }
+    }
+    for _ in 0..300 {
+        let p = r.log_uniform(4.0, 7.0);
+        let s0 = r.uniform(6000.0, 9500.0);
+        m.row(
+            "steam::superheated_by_entropy",
+            Class::C,
+            &[f(p), f(s0)],
+            &sh_res(st::superheated_by_entropy(p, s0)),
+        );
+    }
+    // JSON
+    let mut vals: Vec<SuperheatedEntry> = Vec::new();
+    for &(t, p) in &[
+        (573.15, 500_000.0),
+        (573.15, 750_000.0),
+        (373.15, 10_000.0),
+        (873.15, 10_000_000.0),
+    ] {
+        if let Ok(e) = st::superheated_lookup(t, p) {
+            vals.push(e);
+        }
+    }
+    vals.push(SuperheatedEntry {
+        temperature: f64::NAN,
+        pressure: f64::INFINITY,
+        specific_volume: -0.0,
+        specific_enthalpy: f64::MAX,
+        specific_entropy: f64::from_bits(1),
+    });
+    let mut docs = Vec::new();
+    for e in &vals {
+        let doc = serde_json::to_string(e).expect("serialize");
+        m.row(
+            "steam::SuperheatedEntry::to_json",
+            Class::A,
+            &sh_fields(e),
+            &[s(doc.clone())],
+        );
+        docs.push(doc);
+    }
+    let base = docs[0].clone();
+    for (_kind, bytes) in variants(&base) {
+        if let Ok(text) = String::from_utf8(bytes)
+            && !text.contains('\0')
+        {
+            docs.push(text);
+        }
+    }
+    docs.extend(["[1,2,3,4,5]", "[1,2,3,4]", "{}", "null"].map(String::from));
+    for doc in &docs {
+        let mut de = serde_json::Deserializer::from_str(doc);
+        let out = match SuperheatedEntry::deserialize(&mut de).and_then(|x| de.end().map(|()| x)) {
+            Ok(x) => sh_fields(&x),
+            Err(_) => vec![Tok::Err("Deserialize".to_string())],
+        };
+        m.row(
+            "steam::SuperheatedEntry::from_json",
+            Class::A,
+            &[s(doc.clone())],
+            &out,
+        );
+    }
+}
+
 pub fn emit() -> Module {
     let mut m = Module::new("steam");
     region4(&mut m);
     let states = lookups(&mut m);
     quality(&mut m, &states);
     json_rows(&mut m, &states);
+    superheated(&mut m);
     m
 }

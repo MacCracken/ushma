@@ -358,6 +358,38 @@ fn phase_lookup_agrees_with_steam_table() {
     assert_eq(v2, US_PHASE_LIQUID, "100 C, 1.1 P_sat: liquid");
 }
 
+# A simple Rankine cycle at 2 MPa / 10 kPa from the steam tables: the first law closes within 5 kJ/kg, and the
+# efficiency is 15–40 %.
+# rust tests/integration.rs: simple_rankine_cycle_energy_balance
+fn simple_rankine_cycle_energy_balance() {
+    test_group("Rankine energy balance");
+    var cond: UsSaturated;
+    var tc, vc = us_saturated_by_pressure(10000.0, &cond);
+    assert_eq(is_ok(tc), 1, "the condenser state is Ok");
+    var h1: f64 = cond.h_f;
+    var vf: f64 = cond.v_f;
+    var hf: f64 = cond.h_f;
+    var hfg: f64 = cond.h_fg;
+    var w_pump: f64 = vf * (2000000.0 - 10000.0);
+    var h2: f64 = h1 + w_pump;
+    var sh: UsSuperheated;
+    var ts, vs = us_superheated_lookup(573.15, 2000000.0, &sh);
+    assert_eq(is_ok(ts), 1, "the boiler exit is Ok");
+    var h3: f64 = sh.specific_enthalpy;
+    var s3: f64 = sh.specific_entropy;
+    var tq, vq = us_quality_from_entropy(s3, &cond);
+    var x4: f64 = okv(tq, vq, "the turbine exit's quality is Ok");
+    var h4: f64 = hf + x4 * hfg;
+    var q_in: f64 = h3 - h2;
+    var w_turbine: f64 = h3 - h4;
+    var q_out: f64 = h4 - h1;
+    var w_net: f64 = w_turbine - w_pump;
+    var bal: f64 = absdiff(q_in - w_net, q_out);
+    assert(bal < 5000.0, "q_in = w_net + q_out within 5 kJ/kg");
+    var eta: f64 = w_net / q_in;
+    assert(eta > 0.15 && eta < 0.4, "efficiency 15-40%");
+}
+
 # Runs every test and returns the failure count.
 fn main() {
     alloc_init();
@@ -379,6 +411,7 @@ fn main() {
     clausius_clapeyron_vs_steam_table();
     quality_consistency_across_methods();
     phase_lookup_agrees_with_steam_table();
+    simple_rankine_cycle_energy_balance();
     return assert_summary();
 }
 

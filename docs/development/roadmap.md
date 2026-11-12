@@ -166,7 +166,7 @@ benchmark and example. Plan of record: [ushma-port-plan.md](ushma-port-plan.md).
 - [x] M0 — tag 1.4.0 (Rust frozen as it stands), `cyrius port`, oracle generator, parity harness, probes, upstream filings (2026-11-11)
 - [x] M1 — foundation, logging (sakshi) & transfer (2026-11-12)
 - [x] M2 — equations of state & entropy (2026-11-12)
-- [ ] M3 — phase & steam
+- [x] M3 — phase & steam (2026-11-12)
 - [ ] M4 — cycles
 - [ ] M5 — chemical & statistical
 - [ ] M6 — numerical

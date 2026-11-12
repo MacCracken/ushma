@@ -912,9 +912,19 @@ fn _par_steam_json(fp, fl): i64 {
         _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
         return 1;
     }
+    var sh: UsSuperheated;
+    if (_par_eq(fp, fl, "steam::SuperheatedEntry::to_json") == 1) {
+        if (_par_in_n != 5) { return 0 - 1; }
+        _par_in_words(0, 5, &sh);
+        store64(_par_mat_sb + 8, 0);
+        us_superheated_to_json(_par_mat_sb, &sh);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
     var kind = 0;
     if (_par_eq(fp, fl, "steam::SaturatedEntry::from_json") == 1) { kind = 1; }
     if (_par_eq(fp, fl, "steam::WetSteamProperties::from_json") == 1) { kind = 2; }
+    if (_par_eq(fp, fl, "steam::SuperheatedEntry::from_json") == 1) { kind = 3; }
     if (kind == 0) { return 0; }
     var doc = _par_in_text(0, &dn);
     if (doc == 0) { return 0 - 1; }
@@ -922,7 +932,11 @@ fn _par_steam_json(fp, fl): i64 {
     reset_via(_par_mat_arena);
     var t = 0;
     var v = 0;
-    if (kind == 1) {
+    if (kind == 3) {
+        var t3, v3 = us_superheated_from_json_a(_par_mat_arena, doc, n, &sh);
+        if (is_ok(t3) == 1) { _par_got_words(&sh, 5); } else { _par_got_err(v3); }
+        t = t3;
+    } elif (kind == 1) {
         var t1, v1 = us_saturated_from_json_a(_par_mat_arena, doc, n, &e);
         if (is_ok(t1) == 1) { _par_got_words(&e, 9); } else { _par_got_err(v1); }
         t = t1;
@@ -960,6 +974,18 @@ fn _par_steam(fp, fl): i64 {
     if (_par_eq(fp, fl, "steam::saturated_by_pressure") == 1) {
         var t3, v3 = us_saturated_by_pressure(x, &e);
         if (is_ok(t3) == 1) { _par_got_words(&e, 9); } else { _par_got_err(v3); }
+        return 1;
+    }
+    var y: f64 = _par_in(1);
+    var sh: UsSuperheated;
+    if (_par_eq(fp, fl, "steam::superheated_lookup") == 1) {
+        var t8, v8 = us_superheated_lookup(x, y, &sh);
+        if (is_ok(t8) == 1) { _par_got_words(&sh, 5); } else { _par_got_err(v8); }
+        return 1;
+    }
+    if (_par_eq(fp, fl, "steam::superheated_by_entropy") == 1) {
+        var t9, v9 = us_superheated_by_entropy(x, y, &sh);
+        if (is_ok(t9) == 1) { _par_got_words(&sh, 5); } else { _par_got_err(v9); }
         return 1;
     }
     if (_par_in_n != 10) { return 0; }
@@ -1364,11 +1390,12 @@ fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "f64::powf") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::atan") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::tanh") == 1) { return 0; }
-    # Every class-C transfer, state, entropy and phase function computes on the _us_cr_* primitives.
+    # Every class-C transfer, state, entropy, phase and steam function computes on the _us_cr_* primitives.
     if (fl > 10 && _par_eq(fp, 10, "transfer::") == 1) { return 0; }
     if (fl > 7 && _par_eq(fp, 7, "state::") == 1) { return 0; }
     if (fl > 9 && _par_eq(fp, 9, "entropy::") == 1) { return 0; }
     if (fl > 7 && _par_eq(fp, 7, "phase::") == 1) { return 0; }
+    if (fl > 7 && _par_eq(fp, 7, "steam::") == 1) { return 0; }
     return 0 - 1;
 }
 

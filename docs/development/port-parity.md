@@ -511,10 +511,10 @@ accepted (ADR 4: 36)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
   - **Surface parity:** entropy 9 of 9. **Tests:** all 23 of entropy's and the 2 entropy integration tests; every
     test due at M2 is ported (ledger: 180 of 479).
 
-## 6. M3 (2026-11-12 on)
+## 6. M3 (2026-11-12)
 
-After M3b the harness's summary is `10 modules, 0 failing | rows: 115711 ok, 0 failed, 0 measured, 0 pending, 61
-accepted (ADR 4: 36)`.
+The harness's summary at the end of M3 is `10 modules, 0 failing | rows: 132784 ok, 0 failed, 0 measured, 0 pending,
+76 accepted (ADR 4: 46)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
 
 - **phase** (M3a): 27,333 rows (class A 232, B 2,389, C 24,712; 6,054 refusals).
   - **The substances:** the 8 presets and 106 edge substances: each of Water's and CO₂'s ten properties at 0, −1,
@@ -544,3 +544,14 @@ accepted (ADR 4: 36)`.
     its liquid and vapor values, midway, past them by the 1e-9 round-off ± 2 ulps and at x = 1 + 2e-16. Wet steam at
     x across [0, 1] and just outside. Bit-identical.
   - **JSON:** `SaturatedEntry` and `WetSteamProperties`, 145 rows, 10 accepted under ADR 5's mapped divergences.
+- **steam, superheated** (M3c): 17,088 rows more, 31,113 in all.
+  - **The lookup** (10,999 rows) at every tier pressure ± 1 ulp, between tiers (the geometric midpoint and a
+    quarter of the way), and the range's ends; at every table temperature ± 1 ulp, the midpoints between rows, and
+    around each pressure's saturation temperature, where the tier's saturated-vapor anchor takes over. 0 ulp against
+    MPFR; glibc misrounds a ln or an exp inside 6 rows.
+  - **`superheated_by_entropy`** (6,037 rows) at each of those pressures over the entropy of every breakpoint ± 1 ulp,
+    the midpoints, and below s_g (wet) and above the range. 0 ulp against MPFR; 4 rows inherit a glibc misround from
+    an intermediate lookup. The breakpoints are sorted by insertion, the same order as Rust's `sort_unstable_by
+    (total_cmp)` for these finite positive temperatures.
+  - **`steam.cr.tsv`:** 10 rows (log 5, exp 5). **Surface parity:** steam 19 of 19. **Tests:** all 46 of steam's and
+    M3's 5 integration tests (ledger: 275 of 479, every one due).

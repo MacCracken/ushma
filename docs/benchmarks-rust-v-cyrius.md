@@ -92,6 +92,9 @@ correctly rounded ln and pow (ADR 0004), the harness floor and the spans. Nothin
 | steam/quality_from_enthalpy | 2.18 | 21 | the |h_fg| check, the round-off clamp |
 | steam/wet_steam_properties | 1.84 | 17 | the range check, three mixtures, the out-struct |
 | steam/saturation_pressure | 6.45 | 59 | Region 4: about 30 flops and a √ (68 before) |
+| steam/superheated_lookup | 31.43 | 155 | on a tier: the tier's row search and 3 `calc_lerp` |
+| steam/superheated_between_tiers | 63.64 | 483 | two tiers, then four correctly rounded ln and one exp (ADR 0004) |
+| steam/superheated_by_entropy | 342.05 | 1,498 | the breakpoints, their sort, and about seven between-tier lookups |
 
 **M3b's review.** Probe 5 named the steam lookups M3's target. Measured on `saturated_by_temp` (174 ns): Region 4
 took 49 ns, ten indexed loads of its coefficients 15 of them; the interpolation's per-field helper calls most of the
@@ -102,3 +105,7 @@ rest. Two changes, every row unchanged:
 
 hisab's `calc_lerp` stays (hisab-first): an inlined `a + (b − a)·t` measured only 3 ns faster, and it would not inline
 anyway (3 parameters: cyrius's open `#inline` issue).
+
+**M3c.** Between tiers the lookup pays for correct rounding: four ln and one exp are about 285 of its 483 ns. One of
+the four, ln(P_hi/P_lo), depends only on the tier pair; caching it would save about 60 ns but adds state or a
+generated table, so it is left as measured. `superheated_by_entropy` is about seven of those lookups.

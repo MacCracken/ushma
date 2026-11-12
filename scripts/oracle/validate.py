@@ -1277,6 +1277,16 @@ def load_steam(root):
         vals = dict((k, float(rust_literal(v))) for k, v in re.findall(r"(\w+):\s*([-0-9._e]+)", body))
         rows.append([vals[k] for k in SAT_FIELDS])
     STEAM["rows"] = rows
+    tiers = re.search(r"const SUPERHEAT_PRESSURES: &\[f64\] = &\[(.*?)\];", src, re.S).group(1)
+    STEAM["tiers"] = [float(rust_literal(v.strip())) for v in tiers.split(",") if v.strip()]
+    sh = src[src.index("const SUPERHEATED_DATA"):]
+    sh = sh[: sh.index("\n];")]
+    fields = ["temperature", "pressure", "specific_volume", "specific_enthalpy", "specific_entropy"]
+    sh_rows = []
+    for body in re.findall(r"SuperheatedEntry \{(.*?)\}", sh, re.S):
+        vals = dict((k, float(rust_literal(v))) for k, v in re.findall(r"(\w+):\s*([-0-9._e]+)", body))
+        sh_rows.append([vals[k] for k in fields])
+    STEAM["sh"] = sh_rows
 
 
 def _r4p(t):
@@ -1373,6 +1383,112 @@ def m_wet(a, p):
     return [fbits(v) for v in (x, e[2] + x * (e[3] - e[2]), e[4] + x * e[5], e[7] + x * (e[8] - e[7]))]
 
 
+def _sat_by_p_vals(pr):
+    """saturated_by_pressure's nine values, or None for its refusal."""
+    rows = STEAM["rows"]
+    if not fge(pr, rows[0][1]) or pr > rows[-1][1]:
+        return None
+    return _sat_interp(rust_clamp(_r4t(pr), rows[0][0], T_CRIT), pr)
+
+
+def _sh_lerp(a, b, t):
+    frac = fdiv(t - a[0], b[0] - a[0])
+    return [t, a[1], _lerp(a[2], b[2], frac), _lerp(a[3], b[3], frac), _lerp(a[4], b[4], frac)]
+
+
+def _sh_tier(tier, t):
+    rows = STEAM["sh"][tier * 8 : (tier + 1) * 8]
+    first, last = rows[0], rows[-1]
+    if t > last[0]:
+        return None
+    if t < first[0]:
+        sat = _sat_by_p_vals(first[1])
+        if sat is None or t < sat[0]:
+            return None
+        return _sh_lerp([sat[0], first[1], sat[3], sat[6], sat[8]], first, t)
+    hi = min(max(sum(1 for r in rows if r[0] <= t), 1), len(rows) - 1)
+    return _sh_lerp(rows[hi - 1], rows[hi], t)
+
+
+def _sh_lookup(t, pr, p):
+    """(error name, None) or (None, the five values)."""
+    tiers = STEAM["tiers"]
+    if not fgt(t, 0.0):
+        return "InvalidTemperature", None
+    if not fgt(pr, 0.0):
+        return "InvalidPressure", None
+    if pr < tiers[0] or pr > tiers[-1]:
+        return "SuperheatOutOfRange", None
+    hi = sum(1 for x in tiers if x < pr)
+    if tiers[hi] <= pr:
+        e = _sh_tier(hi, t)
+        if e is None:
+            return "SuperheatOutOfRange", None
+        e[1] = pr
+        return None, e
+    a, b = _sh_tier(hi - 1, t), _sh_tier(hi, t)
+    if a is None or b is None:
+        return "SuperheatOutOfRange", None
+    frac = fdiv(p.log(fdiv(pr, tiers[hi - 1])), p.log(fdiv(tiers[hi], tiers[hi - 1])))
+    v = p.exp(_lerp(p.log(a[2]), p.log(b[2]), frac))
+    return None, [t, pr, v, _lerp(a[3], b[3], frac), _lerp(a[4], b[4], frac)]
+
+
+def _sh_out(r):
+    e, v = r
+    return E(e) if e else [fbits(x) for x in v]
+
+
+def m_sh_by_s(a, p):
+    pr, s = a
+    tiers, sh = STEAM["tiers"], STEAM["sh"]
+    if not fgt(pr, 0.0):
+        return E("InvalidPressure")
+    if not math.isfinite(s):
+        return E("InvalidParameter")
+    if pr < tiers[0] or pr > tiers[-1]:
+        return E("SuperheatOutOfRange")
+    hi = sum(1 for x in tiers if x < pr)
+    on_tier = tiers[hi] <= pr
+    sat = _sat_by_p_vals(tiers[hi])
+    if sat is None:
+        return E("SteamTableOutOfRange")
+    t_min = sat[0]
+    t_max = sh[hi * 8 + 7][0]
+    if not on_tier:
+        t_max = rust_min(t_max, sh[(hi - 1) * 8 + 7][0])
+    bps = [r[0] for r in sh[hi * 8 : hi * 8 + 8] if t_min < r[0] < t_max]
+    if not on_tier:
+        bps += [r[0] for r in sh[(hi - 1) * 8 : hi * 8] if t_min < r[0] < t_max]
+    bps = sorted(bps + [t_min, t_max])
+
+    def s_at(t):
+        e, v = _sh_lookup(t, pr, p)
+        return e, (v[4] if v else None)
+
+    lo, hi_i = 0, len(bps) - 1
+    e1, s_lo = s_at(bps[lo])
+    if e1:
+        return E(e1)
+    e2, s_hi = s_at(bps[hi_i])
+    if e2:
+        return E(e2)
+    if s < s_lo or s > s_hi:
+        return E("SuperheatOutOfRange")
+    while hi_i - lo > 1:
+        mid = (lo + hi_i) // 2
+        em, s_mid = s_at(bps[mid])
+        if em:
+            return E(em)
+        if s_mid <= s:
+            lo, s_lo = mid, s_mid
+        else:
+            hi_i, s_hi = mid, s_mid
+    ds = s_hi - s_lo
+    tt = bps[lo] + fdiv(s - s_lo, ds) * (bps[hi_i] - bps[lo]) if ds > 0.0 else bps[lo]
+    return _sh_out(_sh_lookup(rust_clamp(tt, t_min, t_max), pr, p))
+
+
 def unmodelled(fn, ins):
     """Rows of a modelled module that other checks own: the table presets (no inputs; check_tables) and the JSON
     documents (serde_json's text and verdicts, which the harness compares byte for byte; ADR 0005)."""
@@ -1389,6 +1505,8 @@ MODELS = {
         "steam::quality_from_enthalpy": m_q_h,
         "steam::quality_from_entropy": lambda a, p: _q_from(a, 7, 8),
         "steam::wet_steam_properties": m_wet,
+        "steam::superheated_lookup": lambda a, p: _sh_out(_sh_lookup(a[0], a[1], p)),
+        "steam::superheated_by_entropy": m_sh_by_s,
     },
     "phase": {
         "phase::SubstanceData::sublimes_at_atmospheric": lambda a, p: [f"i:{int(Sub(a).sublimes())}"],

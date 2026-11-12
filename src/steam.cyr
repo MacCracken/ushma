@@ -361,3 +361,350 @@ fn us_wet_steam_from_json_a(a, buf, n, out: *UsWetSteam): Result {
 fn us_wet_steam_from_json(buf, n, out: *UsWetSteam): Result {
     return us_wet_steam_from_json_a(default_alloc(), buf, n, out);
 }
+
+# --- Superheated steam ---
+
+struct UsSuperheated {
+    temperature: f64;
+    pressure: f64;
+    specific_volume: f64;
+    specific_enthalpy: f64;
+    specific_entropy: f64;
+}
+
+# Fills *out with the linear interpolation in T between superheated states *a and *b (one tier) at T.
+fn _us_sh_lerp(a: *UsSuperheated, b: *UsSuperheated, t: f64, out: *UsSuperheated) {
+    var ta: f64 = a.temperature;
+    var tb: f64 = b.temperature;
+    var pa: f64 = a.pressure;
+    var va: f64 = a.specific_volume;
+    var vb: f64 = b.specific_volume;
+    var ha: f64 = a.specific_enthalpy;
+    var hb: f64 = b.specific_enthalpy;
+    var sa: f64 = a.specific_entropy;
+    var sb: f64 = b.specific_entropy;
+    var frac: f64 = (t - ta) / (tb - ta);
+    var v: f64 = calc_lerp(va, vb, frac);
+    var h: f64 = calc_lerp(ha, hb, frac);
+    var s: f64 = calc_lerp(sa, sb, frac);
+    out.temperature = t;
+    out.pressure = pa;
+    out.specific_volume = v;
+    out.specific_enthalpy = h;
+    out.specific_entropy = s;
+    return 0;
+}
+
+# Fills *out with row `k` of the generated superheated table.
+fn _us_sh_row(k, out: *UsSuperheated) {
+    var t: f64 = _US_STEAM_SH_TEMPERATURE[k];
+    var p: f64 = _US_STEAM_SH_PRESSURE[k];
+    var v: f64 = _US_STEAM_SH_SPECIFIC_VOLUME[k];
+    var h: f64 = _US_STEAM_SH_SPECIFIC_ENTHALPY[k];
+    var s: f64 = _US_STEAM_SH_SPECIFIC_ENTROPY[k];
+    out.temperature = t;
+    out.pressure = p;
+    out.specific_volume = v;
+    out.specific_enthalpy = h;
+    out.specific_entropy = s;
+    return 0;
+}
+
+# Fills *out with pressure tier `tier` interpolated at T, the saturated vapor at the tier pressure serving as its
+# lowest point: 1, or 0 outside [T_sat, the tier's last temperature] (Rust's None).
+fn _us_sh_tier(tier, t: f64, out: *UsSuperheated): i64 {
+    var base = tier * _US_STEAM_TEMPS_PER_TIER;
+    var t_first: f64 = _US_STEAM_SH_TEMPERATURE[base];
+    var t_last: f64 = _US_STEAM_SH_TEMPERATURE[base + _US_STEAM_TEMPS_PER_TIER - 1];
+    var a: UsSuperheated;
+    var b: UsSuperheated;
+    if (t > t_last) { return 0; }
+    if (t < t_first) {
+        var p_first: f64 = _US_STEAM_SH_PRESSURE[base];
+        var sat: UsSaturated;
+        var ts, vs = us_saturated_by_pressure(p_first, &sat);
+        if (is_ok(ts) == 0) { return 0; }
+        var tsat: f64 = sat.temperature;
+        if (t < tsat) { return 0; }
+        var vg: f64 = sat.v_g;
+        var hg: f64 = sat.h_g;
+        var sg: f64 = sat.s_g;
+        a.temperature = tsat;
+        a.pressure = p_first;
+        a.specific_volume = vg;
+        a.specific_enthalpy = hg;
+        a.specific_entropy = sg;
+        _us_sh_row(base, &b);
+        _us_sh_lerp(&a, &b, t, out);
+        return 1;
+    }
+    var lo = 0;
+    var hi = _US_STEAM_TEMPS_PER_TIER;
+    while (lo < hi) {
+        var mid = (lo + hi) / 2;
+        var tm: f64 = _US_STEAM_SH_TEMPERATURE[base + mid];
+        if (tm <= t) { lo = mid + 1; } else { hi = mid; }
+    }
+    if (lo < 1) { lo = 1; }
+    if (lo > _US_STEAM_TEMPS_PER_TIER - 1) { lo = _US_STEAM_TEMPS_PER_TIER - 1; }
+    _us_sh_row(base + lo - 1, &a);
+    _us_sh_row(base + lo, &b);
+    _us_sh_lerp(&a, &b, t, out);
+    return 1;
+}
+
+# The first pressure tier at or above P (Rust's partition_point on `p < P`).
+fn _us_sh_tier_at(pressure: f64): i64 {
+    var k = 0;
+    while (k < _US_STEAM_SUPERHEAT_TIER_COUNT) {
+        var pk: f64 = _US_STEAM_SUPERHEAT_PRESSURES[k];
+        if ((pk < pressure) == 0) { return k; }
+        k = k + 1;
+    }
+    return k;
+}
+
+# Fills *out with superheated steam at (T, P): within a pressure tier linearly in T from the saturated-vapor state up;
+# between tiers h and s linearly in ln P and v log-linearly in ln P. At a tier pressure T must be at or above
+# saturation; between tiers at or above the higher tier's. Ok(0), or Err(US_ERR_INVALID_TEMPERATURE) unless T > 0,
+# Err(US_ERR_INVALID_PRESSURE) unless P > 0, Err(US_ERR_SUPERHEAT_OUT_OF_RANGE) outside 10 kPa … 10 MPa or the tiers'
+# temperatures; *out unchanged on a refusal.
+#must_use
+fn us_superheated_lookup(temperature: f64, pressure: f64, out: *UsSuperheated): Result {
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_superheated_lookup", "temperature", temperature));
+    }
+    if (_us_finite_gt(pressure, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE, "us_superheated_lookup", "pressure", pressure));
+    }
+    var p0: f64 = _US_STEAM_SUPERHEAT_PRESSURES[0];
+    var pn: f64 = _US_STEAM_SUPERHEAT_PRESSURES[_US_STEAM_SUPERHEAT_TIER_COUNT - 1];
+    if (pressure < p0 || pressure > pn) {
+        return Err(_us_fail_ff(US_ERR_SUPERHEAT_OUT_OF_RANGE, "us_superheated_lookup", "state", "T", temperature,
+            "P", pressure));
+    }
+    var hi = _us_sh_tier_at(pressure);
+    var p_hi: f64 = _US_STEAM_SUPERHEAT_PRESSURES[hi];
+    var e: UsSuperheated;
+    if (p_hi <= pressure) {
+        if (_us_sh_tier(hi, temperature, &e) == 0) {
+            return Err(_us_fail_ff(US_ERR_SUPERHEAT_OUT_OF_RANGE, "us_superheated_lookup", "state", "T", temperature,
+                "P", pressure));
+        }
+        e.pressure = pressure;
+        memcpy(out, &e, 40);
+        return Ok(0);
+    }
+    var lo = hi - 1;
+    var p_lo: f64 = _US_STEAM_SUPERHEAT_PRESSURES[lo];
+    var a: UsSuperheated;
+    var b: UsSuperheated;
+    if (_us_sh_tier(lo, temperature, &a) == 0 || _us_sh_tier(hi, temperature, &b) == 0) {
+        return Err(_us_fail_ff(US_ERR_SUPERHEAT_OUT_OF_RANGE, "us_superheated_lookup", "state", "T", temperature,
+            "P", pressure));
+    }
+    var ln1: f64 = _us_cr_ln(pressure / p_lo);
+    var ln2: f64 = _us_cr_ln(p_hi / p_lo);
+    var frac: f64 = ln1 / ln2;
+    var va: f64 = a.specific_volume;
+    var vb: f64 = b.specific_volume;
+    var ha: f64 = a.specific_enthalpy;
+    var hb: f64 = b.specific_enthalpy;
+    var sa: f64 = a.specific_entropy;
+    var sb: f64 = b.specific_entropy;
+    var lva: f64 = _us_cr_ln(va);
+    var lvb: f64 = _us_cr_ln(vb);
+    var lv: f64 = calc_lerp(lva, lvb, frac);
+    var v: f64 = _us_cr_exp(lv);
+    var h: f64 = calc_lerp(ha, hb, frac);
+    var s: f64 = calc_lerp(sa, sb, frac);
+    out.temperature = temperature;
+    out.pressure = pressure;
+    out.specific_volume = v;
+    out.specific_enthalpy = h;
+    out.specific_entropy = s;
+    return Ok(0);
+}
+
+# The entropy of us_superheated_lookup(T, P) into *s: Ok(0), or its refusal.
+fn _us_sh_s_at(t: f64, pressure: f64, s): Result {
+    var e: UsSuperheated;
+    var tr, vr = us_superheated_lookup(t, pressure, &e);
+    if (is_err_result(tr) == 1) { return Err(vr); }
+    var x: f64 = e.specific_entropy;
+    store64(s, x);
+    return Ok(0);
+}
+
+# Appends T to the breakpoints at `bps` (count at *nb) when T_min < T < T_max.
+fn _us_sh_push(bps, nb, t: f64, t_min: f64, t_max: f64) {
+    if (t > t_min && t < t_max) {
+        var n = load64(nb);
+        store64(bps + (8 * n), t);
+        store64(nb, n + 1);
+    }
+    return 0;
+}
+
+# Fills *out with the superheated state at P whose specific entropy is s (an isentropic compressor's or turbine's
+# exit). s(T) at constant P is piecewise linear in T, with breakpoints at the tabulated temperatures and the saturated
+# anchor, so the inverse is exact for the table's model: bracket by bisection over the breakpoints (about 7 lookups),
+# then solve the segment. Ok(0), or Err(US_ERR_INVALID_PRESSURE) unless P > 0, Err(US_ERR_INVALID_PARAMETER) unless
+# s is finite, Err(US_ERR_SUPERHEAT_OUT_OF_RANGE) outside 10 kPa … 10 MPa or when s lies outside the range the lookup
+# covers at P (below s_g, the state is wet), or the lookups' refusals.
+#must_use
+fn us_superheated_by_entropy(pressure: f64, entropy: f64, out: *UsSuperheated): Result {
+    _us_span_enter("superheated_by_entropy", 22);
+    if (_us_finite_gt(pressure, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE, "us_superheated_by_entropy", "pressure", pressure));
+    }
+    if (_us_is_finite(entropy) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_superheated_by_entropy", "entropy", entropy));
+    }
+    var p0: f64 = _US_STEAM_SUPERHEAT_PRESSURES[0];
+    var pn: f64 = _US_STEAM_SUPERHEAT_PRESSURES[_US_STEAM_SUPERHEAT_TIER_COUNT - 1];
+    if (pressure < p0 || pressure > pn) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_SUPERHEAT_OUT_OF_RANGE, "us_superheated_by_entropy", "pressure", pressure));
+    }
+    var hi = _us_sh_tier_at(pressure);
+    var p_hi: f64 = _US_STEAM_SUPERHEAT_PRESSURES[hi];
+    var on_tier = p_hi <= pressure;
+    var sat: UsSaturated;
+    var ts, vs = us_saturated_by_pressure(p_hi, &sat);
+    if (is_err_result(ts) == 1) {
+        _us_span_exit();
+        return Err(vs);
+    }
+    var t_min: f64 = sat.temperature;
+    var per = _US_STEAM_TEMPS_PER_TIER;
+    var t_max: f64 = _US_STEAM_SH_TEMPERATURE[hi * per + per - 1];
+    if (on_tier == 0) {
+        var t_lo_max: f64 = _US_STEAM_SH_TEMPERATURE[(hi - 1) * per + per - 1];
+        t_max = _us_min(t_max, t_lo_max);
+    }
+    var bps[144];
+    var nbw[8];
+    store64(&nbw, 0);
+    var k = 0;
+    while (k < per) {
+        var th: f64 = _US_STEAM_SH_TEMPERATURE[hi * per + k];
+        _us_sh_push(&bps, &nbw, th, t_min, t_max);
+        k = k + 1;
+    }
+    if (on_tier == 0) {
+        k = 0;
+        while (k < per) {
+            var tl: f64 = _US_STEAM_SH_TEMPERATURE[(hi - 1) * per + k];
+            _us_sh_push(&bps, &nbw, tl, t_min, t_max);
+            k = k + 1;
+        }
+    }
+    var nb = load64(&nbw);
+    store64(&bps + (8 * nb), t_min);
+    store64(&bps + (8 * (nb + 1)), t_max);
+    nb = nb + 2;
+    # Insertion sort, ascending: the same order as Rust's sort by total_cmp for these finite positive temperatures.
+    var i = 1;
+    while (i < nb) {
+        var x: f64 = load64(&bps + (8 * i));
+        var j = i - 1;
+        while (j >= 0) {
+            var y: f64 = load64(&bps + (8 * j));
+            if (y <= x) { break; }
+            store64(&bps + (8 * (j + 1)), y);
+            j = j - 1;
+        }
+        store64(&bps + (8 * (j + 1)), x);
+        i = i + 1;
+    }
+    var sw[8];
+    var lo = 0;
+    var hi_i = nb - 1;
+    var b_lo: f64 = load64(&bps);
+    var t1, v1 = _us_sh_s_at(b_lo, pressure, &sw);
+    if (is_err_result(t1) == 1) {
+        _us_span_exit();
+        return Err(v1);
+    }
+    var s_lo: f64 = load64(&sw);
+    var b_hi: f64 = load64(&bps + (8 * hi_i));
+    var t2, v2 = _us_sh_s_at(b_hi, pressure, &sw);
+    if (is_err_result(t2) == 1) {
+        _us_span_exit();
+        return Err(v2);
+    }
+    var s_hi: f64 = load64(&sw);
+    if (entropy < s_lo || entropy > s_hi) {
+        var bound: f64 = t_max;
+        if (entropy < s_lo) { bound = t_min; }
+        _us_span_exit();
+        return Err(_us_fail_ff(US_ERR_SUPERHEAT_OUT_OF_RANGE, "us_superheated_by_entropy", "state", "T", bound, "P",
+            pressure));
+    }
+    while (hi_i - lo > 1) {
+        var mid = (lo + hi_i) / 2;
+        var b_mid: f64 = load64(&bps + (8 * mid));
+        var t3, v3 = _us_sh_s_at(b_mid, pressure, &sw);
+        if (is_err_result(t3) == 1) {
+            _us_span_exit();
+            return Err(v3);
+        }
+        var s_mid: f64 = load64(&sw);
+        if (s_mid <= entropy) {
+            lo = mid;
+            s_lo = s_mid;
+        } else {
+            hi_i = mid;
+            s_hi = s_mid;
+        }
+    }
+    var ds: f64 = s_hi - s_lo;
+    var bl: f64 = load64(&bps + (8 * lo));
+    var bh: f64 = load64(&bps + (8 * hi_i));
+    var t: f64 = bl;
+    if (ds > 0.0) { t = bl + (entropy - s_lo) / ds * (bh - bl); }
+    var tc: f64 = f64_clamp(t, t_min, t_max);
+    var tr, vr = us_superheated_lookup(tc, pressure, out);
+    _us_span_exit();
+    if (is_err_result(tr) == 1) { return Err(vr); }
+    return Ok(0);
+}
+
+# The field names of a SuperheatedEntry, in declaration order.
+fn _us_sh_field(k): cstring {
+    match k {
+        0 => { return "temperature"; }
+        1 => { return "pressure"; }
+        2 => { return "specific_volume"; }
+        3 => { return "specific_enthalpy"; }
+        4 => { return "specific_entropy"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# Appends *e as serde_json writes a `SuperheatedEntry`.
+fn us_superheated_to_json(sb, e: *UsSuperheated) {
+    return _us_jw_f64_struct(sb, e, 5, &_us_sh_field);
+}
+
+# Reads a `SuperheatedEntry` document (`n` bytes at `buf`; its tree on allocator `a`) into *out: Ok(0), or
+# Err(US_ERR_DESERIALIZE), leaving *out unchanged.
+#must_use
+fn us_superheated_from_json_a(a, buf, n, out: *UsSuperheated): Result {
+    var w[40];
+    if (_us_jr_f64_struct(a, buf, n, &w, 5, &_us_sh_field) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_superheated_from_json"));
+    }
+    memcpy(out, &w, 40);
+    return Ok(0);
+}
+
+# us_superheated_from_json_a on the global heap.
+#must_use
+fn us_superheated_from_json(buf, n, out: *UsSuperheated): Result {
+    return us_superheated_from_json_a(default_alloc(), buf, n, out);
+}

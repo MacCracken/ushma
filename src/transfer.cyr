@@ -408,7 +408,8 @@ fn us_lmtd_parallel(t_h_in: f64, t_h_out: f64, t_c_in: f64, t_c_out: f64): Resul
     _us_span_enter("lmtd_parallel", 13);
     var t, v = _us_lmtd(t_h_in - t_c_in, t_h_out - t_c_out, "us_lmtd_parallel");
     _us_span_exit();
-    return (t, v);
+    if (is_err_result(t) == 1) { return Err(v); }
+    return Ok(v);
 }
 
 # Log mean temperature difference of a counter-flow exchanger (K), with ΔT₁ = T_h,in − T_c,out and
@@ -418,7 +419,8 @@ fn us_lmtd_counter(t_h_in: f64, t_h_out: f64, t_c_in: f64, t_c_out: f64): Result
     _us_span_enter("lmtd_counter", 12);
     var t, v = _us_lmtd(t_h_in - t_c_out, t_h_out - t_c_in, "us_lmtd_counter");
     _us_span_exit();
-    return (t, v);
+    if (is_err_result(t) == 1) { return Err(v); }
+    return Ok(v);
 }
 
 # Heat rate by the LMTD method: Q = U·A·LMTD (W).
