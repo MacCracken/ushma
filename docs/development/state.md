@@ -16,8 +16,17 @@ Plan of record: [`ushma-port-plan.md`](ushma-port-plan.md). Decisions P2–P8 we
 
 | Milestone | Status |
 |---|---|
-| M0 Prep & initialize | 🟡 in progress. **Part 1 done (2026-11-11):** oracle verified (Rust code identical to `9528e1f`), Rust bench baseline on the tag, `cyrius port`, repairs, manifest, ADRs 0001–0005. **Next, part 2:** golden-value generator (`scripts/oracle/`), tables, parity harness, `src/mathx.cyr`. **Part 3:** baselines on three targets, probes 1–12, upstream filings |
+| M0 Prep & initialize | 🟡 in progress. **Part 1 done (2026-11-11):** oracle verified (Rust code identical to `9528e1f`), Rust bench baseline on the tag, `cyrius port`, repairs, manifest, ADRs 0001–0005. **Part 2a done (2026-11-11):** math check (probe 0, `port-parity.md` §1), the generator `scripts/oracle/` (constants + math sweep: 9 + 15,687 golden rows, `src/constants.cyr`), `validate.py` (5,869 rows re-derived, 0 failures). **Next, 2b:** table data (material, state, phase, chem, steam with the private-constant proof). **2c:** parity harness and `src/mathx.cyr`. **Part 3:** baselines on three targets, probes 1–12, upstream filings |
 | M1–M8 | ☐ |
+
+## Golden corpus
+
+| File | Rows | Classes |
+|---|---|---|
+| `tests/golden/constants.tsv` | 9 | A |
+| `tests/golden/math.tsv` | 15,687 | A 4,591 · B 1,260 · C 9,836 |
+
+Recorded on glibc 2.44 x86_64 fma (ushma 1.4.0, hisab 1.4.0). `--check` and `validate.py` are clean.
 
 ## Toolchain
 

@@ -45,8 +45,11 @@ cyrius distlib --all                          # dist/ushma.cyr and dist/ushma-ai
 cargo test --manifest-path rust-old/Cargo.toml --all-features   # the Rust oracle, read-only
 ```
 
-The golden-corpus commands (`scripts/oracle/`, `validate.py`) are added here when M0 part 2
-lands.
+```sh
+cargo run --release --locked --manifest-path scripts/oracle/Cargo.toml -- --check   # golden corpus + generated .cyr up to date
+python3 -I -B scripts/oracle/validate.py .                                         # independent check of the corpus
+OUT=/tmp/ushma-gates bash scripts/gates.sh                                         # every gate, every target
+```
 
 ## Development Process
 

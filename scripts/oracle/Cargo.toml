@@ -1,0 +1,24 @@
+[package]
+name = "ushma-oracle"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "GPL-3.0-only"
+publish = false
+description = "Drives the frozen Rust ushma 1.4.0 in rust-old/ to write the Cyrius port's golden corpus"
+
+# The oracle is used by path and never built or edited in place (CLAUDE.md: rust-old/ is
+# frozen). Cargo.lock was seeded from rust-old/Cargo.lock, so every shared dependency (hisab
+# 1.4.0 above all) resolves to the version the oracle was tested with. `full`: everything
+# ports (ADR 0001), so the corpus can reach every module — `ai`, `logging` and
+# `soorat-compat` included.
+[dependencies]
+ushma = { path = "../../rust-old", features = ["full"] }
+
+[[bin]]
+name = "oracle"
+path = "src/main.rs"
+
+[profile.release]
+# Correctness, not speed: keep overflow checks so a bad grid index fails loudly.
+overflow-checks = true

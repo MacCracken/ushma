@@ -27,6 +27,11 @@ ADRs 0001–0005.
   rewritten for the port; ADRs 0001–0005 (port with a frozen oracle, API divergences, ganita
   Gaussian elimination, correct rounding, serde-compatible JSON)
 
+### Added
+- **scripts/oracle** — the golden-value generator: drives `rust-old/` read-only and writes `tests/golden/constants.tsv` (9 rows), `tests/golden/math.tsv` (15,687 rows: every std f64 method ushma calls, over its call sites' ranges) and `src/constants.cyr` (the 9 public constants as `US_` consts). `--check` refuses a corpus from another glibc. `validate.py` independently re-derives the constants and every class A/B math row (5,869 checks)
+- **scripts/probes/p0_math.cyr** — the math-counterpart probe: `f64_max`/`f64_min` return NaN for a NaN second operand where Rust returns the other value, so the port wraps them; `ganita_f64_pow(2, 0.5)` is 1 ulp off √2 (`docs/development/port-parity.md` §1)
+- **scripts/gates.sh** — the full gate run (oracle, ELF / `--bounds` / PE / aarch64 tests, bench, fmt / lint / doc, vet, lock, audit)
+
 ### Performance
 - Rust 1.4.0 baseline: 63 benchmarks on the tag (`rust-old/bench-history.csv`, commit
   `2688099`), the Rust column for `docs/benchmarks-rust-v-cyrius.md`

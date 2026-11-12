@@ -1,0 +1,66 @@
+# Probe 0 (port plan §4 step 4): the Cyrius 6.7.18 counterpart of every Rust f64 method ushma
+# calls, and how the stdlib's min / max / clamp treat NaN and signed zero. Rust's own results
+# are the golden `math` rows (tests/golden/math.tsv); port-parity.md §1 puts the two side by side.
+#
+#   cyrius build scripts/probes/p0_math.cyr build/p0_math && ./build/p0_math
+
+# Print `label = 0x<bits>` for one f64 (an f64 travels as its i64 bit pattern).
+fn hx(label, bits) {
+    print(label, strlen(label));
+    print(" = ", 3);
+    fmt_hex0x(bits);
+    println("");
+    return 0;
+}
+
+# Every case, in the order port-parity.md §1 lists them.
+fn main() {
+    alloc_init();
+    var zero: f64 = 0.0;
+    var one: f64 = 1.0;
+    var two: f64 = 2.0;
+    var nan: f64 = zero / zero;
+    var nzero: f64 = f64_neg(zero);
+    var half: f64 = 0.5;
+
+    # min / max / clamp: NaN in each slot, and both orders of ±0.
+    hx("f64_max(NaN, 1)", f64_max(nan, one));
+    hx("f64_max(1, NaN)", f64_max(one, nan));
+    hx("f64_min(NaN, 1)", f64_min(nan, one));
+    hx("f64_min(1, NaN)", f64_min(one, nan));
+    hx("f64_max(+0, -0)", f64_max(zero, nzero));
+    hx("f64_max(-0, +0)", f64_max(nzero, zero));
+    hx("f64_min(+0, -0)", f64_min(zero, nzero));
+    hx("f64_min(-0, +0)", f64_min(nzero, zero));
+    hx("f64_clamp(NaN, 0, 1)", f64_clamp(nan, zero, one));
+    hx("f64_clamp(2, 0, 1)", f64_clamp(two, zero, one));
+    hx("f64_clamp(-0, +0, 1)", f64_clamp(nzero, zero, one));
+
+    # The counterparts of the transcendentals at one ordinary argument (presence + bits).
+    hx("f64_exp(0.5)", f64_exp(half));
+    hx("_f64_exp_polyfill(0.5)", _f64_exp_polyfill(half));
+    hx("f64_ln(2)", f64_ln(two));
+    hx("_f64_ln_polyfill(2)", _f64_ln_polyfill(two));
+    hx("f64_atan(0.5)", f64_atan(half));
+    hx("_f64_atan_polyfill(0.5)", _f64_atan_polyfill(half));
+    hx("ganita_f64_atan2(0.5, 1)", ganita_f64_atan2(half, one));
+    hx("ganita_f64_pow(2, 0.5)", ganita_f64_pow(two, half));
+    hx("ganita_f64_tanh(0.5)", ganita_f64_tanh(half));
+    hx("ganita_f64_cbrt(2)", ganita_f64_cbrt(two));
+    hx("f64_sqrt(2)", f64_sqrt(two));
+    hx("f64_ceil(0.5)", f64_ceil(half));
+    hx("f64_abs(-0)", f64_abs(nzero));
+
+    # NaN / finiteness idioms ushma's helpers will use: x != x, and x - x == 0.
+    var inf: f64 = one / zero;
+    var d: f64 = inf - inf;
+    hx("isnan(NaN) via x != x", nan != nan);
+    hx("isnan(1) via x != x", one != one);
+    hx("finite(inf) via (x - x) == 0", f64_eq(d, zero));
+    var e: f64 = one - one;
+    hx("finite(1) via (x - x) == 0", f64_eq(e, zero));
+    return 0;
+}
+
+var r = main();
+sys_exit_group(r);
