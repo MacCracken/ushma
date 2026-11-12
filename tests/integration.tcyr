@@ -1,5 +1,5 @@
 # Rust 1.4.0's integration tests (rust-old/tests/integration.rs), cross-module, each ported at the milestone of the
-# last module it calls. M1: the six on transfer and material alone.
+# last module it calls: M1's six on transfer and material, then M2's on state (and, at M2c, entropy).
 
 include "src/constants.cyr"
 include "src/error.cyr"
@@ -12,6 +12,8 @@ include "src/json.cyr"
 include "src/material_data.cyr"
 include "src/material.cyr"
 include "src/transfer.cyr"
+include "src/state_data.cyr"
+include "src/state.cyr"
 
 # |a − b| as an f64.
 fn absdiff(a: f64, b: f64): f64 {
@@ -124,6 +126,129 @@ fn view_factor_reciprocity() {
     assert(rel < 0.01, "A1 F12 = A2 F21");
 }
 
+# |p − 1 atm| / 1 atm.
+fn atm_rel(p: f64): f64 {
+    var d: f64 = absdiff(p, US_ATM);
+    var r: f64 = d / US_ATM;
+    return r;
+}
+
+# The ideal gas law round trip: V(P), then P(V), then T(P, V).
+# rust tests/integration.rs: ideal_gas_law_roundtrip
+fn ideal_gas_law_roundtrip() {
+    test_group("ideal gas round trip");
+    var t, v = us_ideal_gas_volume(2.0, 350.0, US_ATM);
+    var vol: f64 = okv(t, v, "V is Ok");
+    var t2, v2 = us_ideal_gas_pressure(2.0, 350.0, vol);
+    var p: f64 = okv(t2, v2, "P is Ok");
+    var rp: f64 = atm_rel(p);
+    assert(rp < 0.0000000001, "P back within 1e-10");
+    var t3, v3 = us_ideal_gas_temperature(p, vol, 2.0);
+    var tb: f64 = okv(t3, v3, "T is Ok");
+    var dt: f64 = absdiff(tb, 350.0);
+    assert(dt < 0.0000000001, "T back within 1e-10 K");
+}
+
+# Adiabatic compression heats; expanding back recovers T₁.
+# rust tests/integration.rs: energy_conservation_adiabatic_process
+fn energy_conservation_adiabatic_process() {
+    test_group("adiabatic round trip");
+    var t, v = us_adiabatic_temperature(300.0, 0.02, 0.01, 1.4);
+    var t2: f64 = okv(t, v, "compression is Ok");
+    assert(t2 > 300.0, "compression heats");
+    var tb, vb = us_adiabatic_temperature(t2, 0.01, 0.02, 1.4);
+    var back: f64 = okv(tb, vb, "expansion is Ok");
+    var d: f64 = absdiff(back, 300.0);
+    var rel: f64 = d / 300.0;
+    assert(rel < 0.0000000001, "T1 recovered within 1e-10");
+}
+
+# Van der Waals CO₂ at STP sits a little below the ideal gas.
+# rust tests/integration.rs: van_der_waals_vs_ideal_gas
+fn van_der_waals_vs_ideal_gas() {
+    test_group("van der Waals vs ideal");
+    var t, v = us_ideal_gas_pressure(1.0, US_STANDARD_TEMP, 0.02241);
+    var pi: f64 = okv(t, v, "ideal is Ok");
+    var t2, v2 = us_van_der_waals_pressure(1.0, US_STANDARD_TEMP, 0.02241, 0.3658, 0.00004286);
+    var pv: f64 = okv(t2, v2, "vdW is Ok");
+    assert(pv < pi, "attraction lowers the pressure");
+    var d: f64 = absdiff(pi, pv);
+    var rel: f64 = d / pi;
+    assert(rel < 0.05, "by under 5% at STP");
+}
+
+# CO₂ at STP: ideal, van der Waals, Redlich–Kwong and Peng–Robinson all within 5 % of 1 atm.
+# rust tests/integration.rs: eos_comparison_co2_stp
+fn eos_comparison_co2_stp() {
+    test_group("equations of state at STP");
+    var t, v = us_ideal_gas_pressure(1.0, US_STANDARD_TEMP, 0.02241);
+    var pi: f64 = okv(t, v, "ideal is Ok");
+    var t2, v2 = us_van_der_waals_pressure(1.0, US_STANDARD_TEMP, 0.02241, 0.3658, 0.00004286);
+    var pv: f64 = okv(t2, v2, "vdW is Ok");
+    var t3, v3 = us_redlich_kwong_pressure(US_STANDARD_TEMP, 0.02241, 304.13, 7375000.0);
+    var pk: f64 = okv(t3, v3, "RK is Ok");
+    var t4, v4 = us_peng_robinson_pressure(US_STANDARD_TEMP, 0.02241, 304.13, 7375000.0, 0.224);
+    var pp: f64 = okv(t4, v4, "PR is Ok");
+    var ri: f64 = atm_rel(pi);
+    var rv: f64 = atm_rel(pv);
+    var rk: f64 = atm_rel(pk);
+    var rp: f64 = atm_rel(pp);
+    assert(ri < 0.05, "ideal near 1 atm");
+    assert(rv < 0.05, "vdW near 1 atm");
+    assert(rk < 0.05, "RK near 1 atm");
+    assert(rp < 0.05, "PR near 1 atm");
+}
+
+# At 1 m³/mol the virial pressure is the ideal gas's within 0.1 %.
+# rust tests/integration.rs: virial_approaches_ideal_at_low_density
+fn virial_approaches_ideal_at_low_density() {
+    test_group("virial at low density");
+    var b: f64 = us_pitzer_second_virial(300.0, 304.13, 7375000.0, 0.224);
+    var t, v = us_virial_pressure_2nd(300.0, 1.0, b);
+    var pv: f64 = okv(t, v, "virial is Ok");
+    var pi: f64 = US_GAS_CONSTANT * 300.0 / 1.0;
+    var d: f64 = absdiff(pv, pi);
+    var rel: f64 = d / pi;
+    assert(rel < 0.001, "within 0.1% of ideal");
+}
+
+# 70 % N₂ + 30 % CO₂ at 300 K, 5 MPa: Kay's rules, the reduced coordinates, then Pitzer's Z.
+# rust tests/integration.rs: mixture_z_factor_kays_rule
+fn mixture_z_factor_kays_rule() {
+    test_group("mixture Z by Kay's rules");
+    var ys[16];
+    var tcs[16];
+    var pcs[16];
+    var oms[16];
+    var y1: f64 = 0.7;
+    var y2: f64 = 0.3;
+    var a1: f64 = 126.19;
+    var a2: f64 = 304.13;
+    var b1: f64 = 3390000.0;
+    var b2: f64 = 7375000.0;
+    var c1: f64 = 0.037;
+    var c2: f64 = 0.224;
+    store64(&ys, y1);
+    store64(&ys + 8, y2);
+    store64(&tcs, a1);
+    store64(&tcs + 8, a2);
+    store64(&pcs, b1);
+    store64(&pcs + 8, b2);
+    store64(&oms, c1);
+    store64(&oms + 8, c2);
+    var t, v = us_kays_rule_tc(&ys, 2, &tcs, 2);
+    var tc: f64 = okv(t, v, "Tc mix is Ok");
+    var t2, v2 = us_kays_rule_pc(&ys, 2, &pcs, 2);
+    var pc: f64 = okv(t2, v2, "Pc mix is Ok");
+    var t3, v3 = us_kays_rule_omega(&ys, 2, &oms, 2);
+    var om: f64 = okv(t3, v3, "omega mix is Ok");
+    var tr: f64 = us_reduced_temperature(300.0, tc);
+    var pr: f64 = us_reduced_pressure(5000000.0, pc);
+    var t4, v4 = us_compressibility_pitzer(pr, tr, om);
+    var z: f64 = okv(t4, v4, "Z is Ok");
+    assert(z > 0.5 && z < 1.5, "a physical Z");
+}
+
 # Runs every test and returns the failure count.
 fn main() {
     alloc_init();
@@ -133,6 +258,12 @@ fn main() {
     nusselt_to_h_to_convection_chain();
     lmtd_vs_ntu_same_heat_exchanger();
     view_factor_reciprocity();
+    ideal_gas_law_roundtrip();
+    energy_conservation_adiabatic_process();
+    van_der_waals_vs_ideal_gas();
+    eos_comparison_co2_stp();
+    virial_approaches_ideal_at_low_density();
+    mixture_z_factor_kays_rule();
     return assert_summary();
 }
 

@@ -476,8 +476,8 @@ The harness's summary at the end of M1, identical on x86_64 ELF, `--bounds`, PE 
 
 ## 5. M2 (2026-11-12 on)
 
-After M2a the harness's summary is `8 modules, 0 failing | rows: 64039 ok, 0 failed, 0 measured, 0 pending, 44
-accepted (ADR 4: 34)`.
+After M2b the harness's summary is `8 modules, 0 failing | rows: 70924 ok, 0 failed, 0 measured, 0 pending, 45
+accepted (ADR 4: 35)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
 
 - **state, part 1** (M2a): 4,250 rows.
   - The presets and `ALL_GASES`: 9.
@@ -490,3 +490,14 @@ accepted (ADR 4: 34)`.
     ADR 5, the same mapped divergences as material's (two duplicate keys in an unknown field, deep nesting, an
     integer `-0`, an integer ≥ 2^63).
   - **`validate.py`** reproduces all 4,145 function rows with glibc's primitives.
+- **state, part 2** (M2b): 6,886 more rows, 11,136 in all.
+  - **The cubic equations:** each gas at 11 temperatures from 0.3 T_c to 10 T_c (0.99, 1.0, 1.01 T_c among them) ×
+    molar volumes from the co-volume b ± 2 ulps to 1 m³/mol, so the V_m > b refusal switches on the row where Rust's
+    does. Redlich–Kwong is class C (T_c^2.5), Peng–Robinson class B (√ only): all 3,350 rows of the two pass, and so
+    do their parameter rows (Redlich–Kwong's pair, Peng–Robinson's triple).
+  - **Pitzer–Abbott Z** over T_r 0.3…5 × P_r 0…10 × five ω, out to where the correlation gives Z ≤ 0 and refuses:
+    0 ulp against MPFR. glibc's `pow` misrounds T_r^4.2 inside one row, the first entry of `state.cr.tsv`; the port
+    matches MPFR there.
+  - **Kay's rules:** 233 mixtures × 3 rules, class B, every row bit-identical, the refusals included (unequal and
+    empty lists, NaN, negative and out-of-range fractions, sums across the 1e-10 tolerance, non-finite values).
+  - **Surface parity:** state 36 of 36.

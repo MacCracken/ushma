@@ -1,9 +1,8 @@
-# state tests (M2a: the ideal gas to the reduced coordinates, and the reference gases).
+# state tests.
 #
-# Rust 1.4.0's state.rs tests for these functions and GasData, one for one (28 of its 47; the cubic equations, virial
-# forms, Pitzer and Kay's rules join with M2b), each also checking the refusal's code. Then a reference test of the
-# spans: ideal_gas_pressure and van_der_waals_pressure open a DEBUG span under Rust's span name, and close it on every
-# path.
+# Rust 1.4.0's 47 state.rs tests, one for one, each also checking the refusal's code. Then a reference test of the
+# spans: the four functions Rust instruments (ideal_gas_pressure, van_der_waals_pressure, redlich_kwong_pressure,
+# peng_robinson_pressure) open a DEBUG span under Rust's span name, and close it on every path.
 
 include "src/constants.cyr"
 include "src/error.cyr"
@@ -240,6 +239,157 @@ fn test_gas_data() {
     errc(t6, v6, US_ERR_DESERIALIZE, "a sequence too short");
 }
 
+# Redlich–Kwong: positive parameters, CO₂ near 1 atm at STP, and its refusals.
+# rust src/state.rs: test_rk_params, test_rk_pressure_co2_stp, test_rk_invalid
+# rust src/state.rs: test_cubic_eos_validate_critical_constants
+fn test_redlich_kwong() {
+    test_group("Redlich-Kwong");
+    var a, b = us_redlich_kwong_params(304.13, 7375000.0);
+    assert(a > 0.0, "a > 0");
+    assert(b > 0.0, "b > 0");
+    var t, v = us_redlich_kwong_pressure(US_STANDARD_TEMP, 0.02241, 304.13, 7375000.0);
+    var p: f64 = okv(t, v, "CO2 at STP is Ok");
+    var d: f64 = absdiff(p, US_ATM);
+    var rel: f64 = d / US_ATM;
+    assert(rel < 0.05, "close to 1 atm");
+    var t2, v2 = us_redlich_kwong_pressure(0.0, 0.02241, 304.13, 7375000.0);
+    errc(t2, v2, US_ERR_INVALID_TEMPERATURE, "T = 0");
+    var t3, v3 = us_redlich_kwong_pressure(300.0, 0.0000001, 304.13, 7375000.0);
+    errc(t3, v3, US_ERR_INVALID_PARAMETER, "Vm < b");
+    var t4, v4 = us_redlich_kwong_pressure(300.0, 0.02, 304.13, -7375000.0);
+    errc(t4, v4, US_ERR_INVALID_PRESSURE, "negative Pc");
+    var t5, v5 = us_redlich_kwong_pressure(300.0, _nan, 304.13, 7375000.0);
+    errc(t5, v5, US_ERR_INVALID_VOLUME, "NaN Vm");
+}
+
+# Peng–Robinson: positive parameters, CO₂ near 1 atm, a different pressure from RK's, and its refusals.
+# rust src/state.rs: test_pr_params, test_pr_pressure_co2_stp, test_pr_vs_rk_differ, test_pr_invalid
+# rust src/state.rs: test_cubic_eos_validate_critical_constants
+fn test_peng_robinson() {
+    test_group("Peng-Robinson");
+    var a, b, k = us_peng_robinson_params(304.13, 7375000.0, 0.224);
+    assert(a > 0.0, "a > 0");
+    assert(b > 0.0, "b > 0");
+    assert(k > 0.0, "kappa > 0");
+    var t, v = us_peng_robinson_pressure(US_STANDARD_TEMP, 0.02241, 304.13, 7375000.0, 0.224);
+    var p: f64 = okv(t, v, "CO2 at STP is Ok");
+    var d: f64 = absdiff(p, US_ATM);
+    var rel: f64 = d / US_ATM;
+    assert(rel < 0.05, "close to 1 atm");
+    var t2, v2 = us_redlich_kwong_pressure(400.0, 0.005, 304.13, 7375000.0);
+    var prk: f64 = okv(t2, v2, "RK at 5 L/mol is Ok");
+    var t3, v3 = us_peng_robinson_pressure(400.0, 0.005, 304.13, 7375000.0, 0.224);
+    var ppr: f64 = okv(t3, v3, "PR at 5 L/mol is Ok");
+    assert(prk > 0.0 && ppr > 0.0, "both positive");
+    var dd: f64 = absdiff(prk, ppr);
+    assert(dd > 100.0, "but different");
+    var t4, v4 = us_peng_robinson_pressure(0.0, 0.02241, 304.13, 7375000.0, 0.224);
+    errc(t4, v4, US_ERR_INVALID_TEMPERATURE, "T = 0");
+    var t5, v5 = us_peng_robinson_pressure(300.0, 0.02, -304.13, 7375000.0, 0.224);
+    errc(t5, v5, US_ERR_INVALID_TEMPERATURE, "negative Tc");
+    var t6, v6 = us_peng_robinson_pressure(300.0, 0.02, 304.13, _nan, 0.224);
+    errc(t6, v6, US_ERR_INVALID_PRESSURE, "NaN Pc");
+    var t7, v7 = us_peng_robinson_pressure(300.0, 0.02, 304.13, 7375000.0, _nan);
+    errc(t7, v7, US_ERR_INVALID_PARAMETER, "NaN omega");
+}
+
+# Pitzer's second virial coefficient and the virial pressures.
+# rust src/state.rs: test_pitzer_second_virial, test_virial_ideal_at_large_vm, test_virial_3rd_order
+# rust src/state.rs: test_virial_invalid
+fn test_virial() {
+    test_group("virial");
+    var bv: f64 = us_pitzer_second_virial(300.0, 304.13, 7375000.0, 0.224);
+    assert(bv < 0.0, "B < 0 near Tc: attraction dominates");
+    var t, v = us_virial_pressure_2nd(300.0, 1.0, bv);
+    var pv: f64 = okv(t, v, "virial at 1 m^3/mol is Ok");
+    var pi: f64 = US_GAS_CONSTANT * 300.0 / 1.0;
+    var d: f64 = absdiff(pv, pi);
+    var rel: f64 = d / pi;
+    assert(rel < 0.01, "large Vm: the ideal gas");
+    var t2, v2 = us_virial_pressure_3rd(300.0, 0.02241, -0.0001, 0.00000001);
+    var p3: f64 = okv(t2, v2, "third order is Ok");
+    assert(p3 > 0.0, "positive pressure");
+    var t3, v3 = us_virial_pressure_2nd(0.0, 0.02241, -0.0001);
+    errc(t3, v3, US_ERR_INVALID_TEMPERATURE, "T = 0");
+    var t4, v4 = us_virial_pressure_2nd(300.0, 0.0, -0.0001);
+    errc(t4, v4, US_ERR_INVALID_VOLUME, "Vm = 0");
+    var t5, v5 = us_virial_pressure_3rd(300.0, 0.0, -0.0001, 0.00000001);
+    errc(t5, v5, US_ERR_INVALID_VOLUME, "third order, Vm = 0");
+}
+
+# Pitzer–Abbott Z: near 1 at low Pr, and its refusals, Z ≤ 0 among them.
+# rust src/state.rs: test_compressibility_pitzer_ideal, test_compressibility_pitzer_invalid
+# rust src/state.rs: test_compressibility_pitzer_rejects_nonphysical_z
+fn test_pitzer() {
+    test_group("Pitzer compressibility");
+    var t, v = us_compressibility_pitzer(0.01, 2.0, 0.0);
+    var z: f64 = okv(t, v, "low Pr is Ok");
+    var d: f64 = absdiff(z, 1.0);
+    assert(d < 0.01, "low Pr: Z ~ 1");
+    var t2, v2 = us_compressibility_pitzer(1.0, 0.0, 0.1);
+    errc(t2, v2, US_ERR_INVALID_PARAMETER, "Tr = 0");
+    var t3, v3 = us_compressibility_pitzer(5.0, 1.0, 0.0);
+    errc(t3, v3, US_ERR_INVALID_PARAMETER, "Z <= 0 refused (the virial form gave -0.695)");
+    var t4, v4 = us_compressibility_pitzer(-1.0, 1.5, 0.0);
+    errc(t4, v4, US_ERR_INVALID_PARAMETER, "negative Pr");
+    var t5, v5 = us_compressibility_pitzer(_nan, 1.5, 0.0);
+    errc(t5, v5, US_ERR_INVALID_PARAMETER, "NaN Pr");
+    var t6, v6 = us_compressibility_pitzer(0.5, 1.5, 0.1);
+    var z2: f64 = okv(t6, v6, "Pr 0.5, Tr 1.5 is Ok");
+    assert(z2 > 0.9 && z2 < 1.0, "0.9 < Z < 1");
+}
+
+# The two f64 `a`, `b` into buf.
+fn set2(buf, a: f64, b: f64) {
+    store64(buf, a);
+    store64(buf + 8, b);
+    return 0;
+}
+
+# Kay's rules: a pure component, a 50/50 mixture, and the refusals.
+# rust src/state.rs: test_kays_rule_pure, test_kays_rule_binary, test_kays_rule_invalid
+# rust src/state.rs: test_mixture_rules_reject_bad_fractions
+fn test_kays() {
+    test_group("Kay's rules");
+    var ys[16];
+    var xs[16];
+    set2(&ys, 1.0, 0.0);
+    set2(&xs, 304.13, 0.0);
+    var t, v = us_kays_rule_tc(&ys, 1, &xs, 1);
+    var tc: f64 = okv(t, v, "pure is Ok");
+    var d: f64 = absdiff(tc, 304.13);
+    assert(d < 0.0000000001, "a pure component is itself");
+    set2(&ys, 0.5, 0.5);
+    set2(&xs, 126.19, 154.58);
+    var t2, v2 = us_kays_rule_tc(&ys, 2, &xs, 2);
+    var tm: f64 = okv(t2, v2, "N2/O2 is Ok");
+    var d2: f64 = absdiff(tm, 140.385);
+    assert(d2 < 0.01, "50/50 N2/O2: 140.385 K");
+    set2(&ys, 0.3, 0.3);
+    var t3, v3 = us_kays_rule_tc(&ys, 2, &xs, 2);
+    errc(t3, v3, US_ERR_INVALID_PARAMETER, "fractions summing to 0.6");
+    set2(&ys, 0.5, 0.5);
+    var t4, v4 = us_kays_rule_tc(&ys, 2, &xs, 1);
+    errc(t4, v4, US_ERR_INVALID_PARAMETER, "a length mismatch");
+    set2(&ys, _nan, 0.0);
+    set2(&xs, 300.0, 0.0);
+    var t5, v5 = us_kays_rule_tc(&ys, 1, &xs, 1);
+    errc(t5, v5, US_ERR_INVALID_PARAMETER, "a NaN fraction");
+    set2(&ys, 1.5, -0.5);
+    set2(&xs, 300.0, 200.0);
+    var t6, v6 = us_kays_rule_tc(&ys, 2, &xs, 2);
+    errc(t6, v6, US_ERR_INVALID_PARAMETER, "fractions outside [0, 1]");
+    set2(&ys, 0.5, 0.5);
+    set2(&xs, 4000000.0, _nan);
+    var t7, v7 = us_kays_rule_pc(&ys, 2, &xs, 2);
+    errc(t7, v7, US_ERR_INVALID_PARAMETER, "a NaN value");
+    set2(&xs, 0.037, 0.022);
+    var t8, v8 = us_kays_rule_omega(&ys, 2, &xs, 2);
+    var om: f64 = okv(t8, v8, "omega is Ok");
+    var d3: f64 = absdiff(om, 0.0295);
+    assert(d3 < 0.0000000001, "50/50 omega");
+}
+
 # The span named `name` opened and closed: depth back to 0, `events` events in the ring.
 fn span_seen(name, events, label) {
     assert_eq(sakshi_span_depth(), 0, label);
@@ -249,8 +399,8 @@ fn span_seen(name, events, label) {
     return 0;
 }
 
-# ideal_gas_pressure and van_der_waals_pressure open a DEBUG span under Rust's span name and close it on Ok and on
-# Err; at INFO they record nothing.
+# The four instrumented functions open a DEBUG span under Rust's span name and close it on Ok and on Err; at INFO they
+# record nothing.
 fn test_spans() {
     test_group("spans");
     sakshi_output_buffer();
@@ -264,6 +414,14 @@ fn test_spans() {
     span_seen("van_der_waals_pressure", 2, "van_der_waals_pressure");
     var t3, v3 = us_van_der_waals_pressure(1.0, 300.0, 0.000001, 0.3658, 0.00004286);
     span_seen("van_der_waals_pressure", 3, "van_der_waals_pressure, refused");
+    var t5, v5 = us_redlich_kwong_pressure(300.0, 0.0224, 304.13, 7375000.0);
+    span_seen("redlich_kwong_pressure", 2, "redlich_kwong_pressure");
+    var t6, v6 = us_redlich_kwong_pressure(300.0, 0.0224, 0.0, 7375000.0);
+    span_seen("redlich_kwong_pressure", 3, "redlich_kwong_pressure, refused");
+    var t7, v7 = us_peng_robinson_pressure(300.0, 0.0224, 304.13, 7375000.0, 0.224);
+    span_seen("peng_robinson_pressure", 2, "peng_robinson_pressure");
+    var t8, v8 = us_peng_robinson_pressure(300.0, 0.0000001, 304.13, 7375000.0, 0.224);
+    span_seen("peng_robinson_pressure", 3, "peng_robinson_pressure, refused");
     sakshi_set_level(SK_INFO);
     sakshi_ring_clear();
     var t4, v4 = us_ideal_gas_pressure(1.0, 300.0, 0.0224);
@@ -280,6 +438,11 @@ fn main() {
     test_adiabatic();
     test_compressibility();
     test_gas_data();
+    test_redlich_kwong();
+    test_peng_robinson();
+    test_virial();
+    test_pitzer();
+    test_kays();
     test_spans();
     return assert_summary();
 }

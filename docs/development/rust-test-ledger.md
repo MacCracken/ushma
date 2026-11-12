@@ -5,7 +5,7 @@
 > (`# rust <file>: <test>`), at its module's milestone. Nothing is deferred: a test not ported yet is one whose
 > milestone hasn't come. The golden corpus (`tests/golden/`) checks every ported function on its grid besides.
 
-**479 Rust tests:** 130 ported; 50 at M2, 95 at M3, 64 at M4, 62 at M5, 27 at M6, 51 at M7.
+**479 Rust tests:** 155 ported; 25 at M2, 95 at M3, 64 at M4, 62 at M5, 27 at M6, 51 at M7.
 
 | Rust file | Tests | Ported | Due, unported | Later (milestone) |
 |---|---:|---:|---:|---|
@@ -21,12 +21,12 @@
 | `src/numerical.rs` | 27 | 0 | 0 | 27 (M6) |
 | `src/phase.rs` | 44 | 0 | 0 | 44 (M3) |
 | `src/stat.rs` | 33 | 0 | 0 | 33 (M5) |
-| `src/state.rs` | 47 | 28 | 0 | 19 (M2) |
+| `src/state.rs` | 47 | 47 | 0 | — |
 | `src/steam.rs` | 46 | 0 | 0 | 46 (M3) |
 | `src/transfer.rs` | 67 | 67 | 0 | — |
 | `src/validate.rs` | 2 | 2 | 0 | — |
-| `tests/integration.rs` | 30 | 6 | 0 | 8 (M2), 5 (M3), 5 (M4), 6 (M5) |
-| **Total** | **479** | **130** | **0** | |
+| `tests/integration.rs` | 30 | 12 | 0 | 2 (M2), 5 (M3), 5 (M4), 6 (M5) |
+| **Total** | **479** | **155** | **0** | |
 
 ## Where each is ported
 
@@ -67,6 +67,10 @@
 | `src/state.rs` `test_compressibility_factor_validates_inputs` | `tests/state.tcyr` `test_compressibility` |
 | `src/state.rs` `test_compressibility_factor_zero_temp` | `tests/state.tcyr` `test_compressibility` |
 | `src/state.rs` `test_compressibility_ideal` | `tests/state.tcyr` `test_compressibility` |
+| `src/state.rs` `test_compressibility_pitzer_ideal` | `tests/state.tcyr` `test_pitzer` |
+| `src/state.rs` `test_compressibility_pitzer_invalid` | `tests/state.tcyr` `test_pitzer` |
+| `src/state.rs` `test_compressibility_pitzer_rejects_nonphysical_z` | `tests/state.tcyr` `test_pitzer` |
+| `src/state.rs` `test_cubic_eos_validate_critical_constants` | `tests/state.tcyr` `test_redlich_kwong`, `tests/state.tcyr` `test_peng_robinson` |
 | `src/state.rs` `test_gas_constant_is_exact` | `tests/state.tcyr` `test_gas_data` |
 | `src/state.rs` `test_gas_data_serde_roundtrip` | `tests/state.tcyr` `test_gas_data` |
 | `src/state.rs` `test_gas_data_valid` | `tests/state.tcyr` `test_gas_data` |
@@ -81,11 +85,26 @@
 | `src/state.rs` `test_isothermal_work_expansion` | `tests/state.tcyr` `test_work` |
 | `src/state.rs` `test_isothermal_work_negative_temp` | `tests/state.tcyr` `test_work` |
 | `src/state.rs` `test_isothermal_work_zero_temp` | `tests/state.tcyr` `test_work` |
+| `src/state.rs` `test_kays_rule_binary` | `tests/state.tcyr` `test_kays` |
+| `src/state.rs` `test_kays_rule_invalid` | `tests/state.tcyr` `test_kays` |
+| `src/state.rs` `test_kays_rule_pure` | `tests/state.tcyr` `test_kays` |
+| `src/state.rs` `test_mixture_rules_reject_bad_fractions` | `tests/state.tcyr` `test_kays` |
 | `src/state.rs` `test_negative_temperature` | `tests/state.tcyr` `test_ideal_gas` |
+| `src/state.rs` `test_pitzer_second_virial` | `tests/state.tcyr` `test_virial` |
+| `src/state.rs` `test_pr_invalid` | `tests/state.tcyr` `test_peng_robinson` |
+| `src/state.rs` `test_pr_params` | `tests/state.tcyr` `test_peng_robinson` |
+| `src/state.rs` `test_pr_pressure_co2_stp` | `tests/state.tcyr` `test_peng_robinson` |
+| `src/state.rs` `test_pr_vs_rk_differ` | `tests/state.tcyr` `test_peng_robinson` |
 | `src/state.rs` `test_reduced_coordinates` | `tests/state.tcyr` `test_gas_data` |
+| `src/state.rs` `test_rk_invalid` | `tests/state.tcyr` `test_redlich_kwong` |
+| `src/state.rs` `test_rk_params` | `tests/state.tcyr` `test_redlich_kwong` |
+| `src/state.rs` `test_rk_pressure_co2_stp` | `tests/state.tcyr` `test_redlich_kwong` |
 | `src/state.rs` `test_van_der_waals` | `tests/state.tcyr` `test_van_der_waals` |
 | `src/state.rs` `test_van_der_waals_negative_temp` | `tests/state.tcyr` `test_van_der_waals` |
 | `src/state.rs` `test_van_der_waals_volume_too_small` | `tests/state.tcyr` `test_van_der_waals` |
+| `src/state.rs` `test_virial_3rd_order` | `tests/state.tcyr` `test_virial` |
+| `src/state.rs` `test_virial_ideal_at_large_vm` | `tests/state.tcyr` `test_virial` |
+| `src/state.rs` `test_virial_invalid` | `tests/state.tcyr` `test_virial` |
 | `src/state.rs` `test_zero_volume` | `tests/state.tcyr` `test_ideal_gas` |
 | `src/transfer.rs` `test_biot_number` | `tests/transfer.tcyr` `test_storage_diffusivity_biot` |
 | `src/transfer.rs` `test_biot_number_zero_conductivity` | `tests/transfer.tcyr` `test_storage_diffusivity_biot` |
@@ -156,9 +175,15 @@
 | `src/transfer.rs` `test_view_factor_perpendicular_reference_values` | `tests/transfer.tcyr` `test_view_factor_regressions` |
 | `src/validate.rs` `finite_ge_accepts_bound` | `tests/foundation.tcyr` `test_validate_predicates` |
 | `src/validate.rs` `finite_gt_rejects_nan_and_inf` | `tests/foundation.tcyr` `test_validate_predicates` |
+| `tests/integration.rs` `energy_conservation_adiabatic_process` | `tests/integration.tcyr` `energy_conservation_adiabatic_process` |
+| `tests/integration.rs` `eos_comparison_co2_stp` | `tests/integration.tcyr` `eos_comparison_co2_stp` |
 | `tests/integration.rs` `heat_conduction_through_copper_wall` | `tests/integration.tcyr` `heat_conduction_through_copper_wall` |
+| `tests/integration.rs` `ideal_gas_law_roundtrip` | `tests/integration.tcyr` `ideal_gas_law_roundtrip` |
 | `tests/integration.rs` `lmtd_vs_ntu_same_heat_exchanger` | `tests/integration.tcyr` `lmtd_vs_ntu_same_heat_exchanger` |
 | `tests/integration.rs` `material_thermal_diffusivity_matches_manual` | `tests/integration.tcyr` `material_thermal_diffusivity_matches_manual` |
+| `tests/integration.rs` `mixture_z_factor_kays_rule` | `tests/integration.tcyr` `mixture_z_factor_kays_rule` |
 | `tests/integration.rs` `nusselt_to_h_to_convection_chain` | `tests/integration.tcyr` `nusselt_to_h_to_convection_chain` |
 | `tests/integration.rs` `thermal_equilibrium_lumped_capacitance` | `tests/integration.tcyr` `thermal_equilibrium_lumped_capacitance` |
+| `tests/integration.rs` `van_der_waals_vs_ideal_gas` | `tests/integration.tcyr` `van_der_waals_vs_ideal_gas` |
 | `tests/integration.rs` `view_factor_reciprocity` | `tests/integration.tcyr` `view_factor_reciprocity` |
+| `tests/integration.rs` `virial_approaches_ideal_at_low_density` | `tests/integration.tcyr` `virial_approaches_ideal_at_low_density` |

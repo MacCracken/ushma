@@ -205,6 +205,18 @@ fn b_z(x): i64 {
     return v;
 }
 
+# redlich_kwong_pressure(300, 0.02241, 304.13, 7.375e6).
+fn b_rk(x): i64 {
+    var t, v = us_redlich_kwong_pressure(300.0, 0.02241, 304.13, 7375000.0);
+    return v;
+}
+
+# peng_robinson_pressure(300, 0.02241, 304.13, 7.375e6, 0.224).
+fn b_pr(x): i64 {
+    var t, v = us_peng_robinson_pressure(300.0, 0.02241, 304.13, 7375000.0, 0.224);
+    return v;
+}
+
 # Fills the two resistance lists the benchmarks use.
 fn bn_lists() {
     _bn_series = alloc(40);
@@ -276,6 +288,8 @@ fn main(): i64 {
     bn_run("state/isothermal_work", &b_iso_work, 0, 1000000);
     bn_run("state/adiabatic_temperature", &b_adiabatic, 0, 1000000);
     bn_run("state/compressibility_factor", &b_z, 0, 1000000);
+    bn_run("state/redlich_kwong", &b_rk, 0, 1000000);
+    bn_run("state/peng_robinson", &b_pr, 0, 1000000);
     return 0;
 }
 

@@ -64,3 +64,5 @@ The rest of the gap is the harness floor (4 ns a call) and, in the seven instrum
 | state/isothermal_work | 9.42 | 83 | four checks, a correctly rounded ln |
 | state/adiabatic_temperature | 17.15 | 155 | four checks, a correctly rounded pow |
 | state/compressibility_factor | 4.46 | 21 | five checks, PV/(nRT) |
+| state/redlich_kwong | 27.27 | 188 | four checks, a correctly rounded T_c^2.5 (ADR 0004), √T, a span |
+| state/peng_robinson | 18.85 | 69 | five checks, √(T/T_c), the attractive denominator's check, a span |

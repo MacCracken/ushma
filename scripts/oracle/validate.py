@@ -970,6 +970,107 @@ def m_z(a, p):
     return F(fdiv(pr * v, d))
 
 
+def _critical_ok(tc, pc):
+    if not fgt(tc, 0.0):
+        return "InvalidTemperature"
+    if not fgt(pc, 0.0):
+        return "InvalidPressure"
+    return None
+
+
+def rk_params(tc, pc, p):
+    return (fdiv(0.42748 * GAS_R * GAS_R * p.pow(tc, 2.5), pc), fdiv(0.08664 * GAS_R * tc, pc))
+
+
+def pr_params(tc, pc, om):
+    return (fdiv(0.45724 * GAS_R * GAS_R * tc * tc, pc), fdiv(0.07780 * GAS_R * tc, pc),
+            0.37464 + 1.54226 * om - 0.26992 * om * om)
+
+
+def m_rk(a, p):
+    temp, vm, tc, pc = a
+    if not fgt(temp, 0.0):
+        return E("InvalidTemperature")
+    e = _critical_ok(tc, pc)
+    if e:
+        return E(e)
+    if not fgt(vm, 0.0):
+        return E("InvalidVolume")
+    aa, b = rk_params(tc, pc, p)
+    vm_b = vm - b
+    if not fgt(vm_b, 0.0):
+        return E("InvalidParameter")
+    return F(fdiv(GAS_R * temp, vm_b) - fdiv(aa, fsqrt(temp) * vm * (vm + b)))
+
+
+def m_pr(a, p):
+    temp, vm, tc, pc, om = a
+    if not fgt(temp, 0.0):
+        return E("InvalidTemperature")
+    e = _critical_ok(tc, pc)
+    if e:
+        return E(e)
+    if not fgt(vm, 0.0):
+        return E("InvalidVolume")
+    if not math.isfinite(om):
+        return E("InvalidParameter")
+    aa, b, k = pr_params(tc, pc, om)
+    vm_b = vm - b
+    if not fgt(vm_b, 0.0):
+        return E("InvalidParameter")
+    al = 1.0 + k * (1.0 - fsqrt(fdiv(temp, tc)))
+    d = vm * vm + 2.0 * b * vm - b * b
+    if not fge(abs(d), TINY):
+        return E("DivisionByZero")
+    return F(fdiv(GAS_R * temp, vm_b) - fdiv(aa * (al * al), d))
+
+
+def _pitzer_b(tr, p):
+    return 0.083 - fdiv(0.422, p.pow(tr, 1.6)), 0.139 - fdiv(0.172, p.pow(tr, 4.2))
+
+
+def m_pitzer_b(a, p):
+    temp, tc, pc, om = a
+    b0, b1 = _pitzer_b(fdiv(temp, tc), p)
+    return F(fdiv((b0 + om * b1) * GAS_R * tc, pc))
+
+
+def m_virial(a, p):
+    temp, vm, b = a[:3]
+    if not fgt(temp, 0.0):
+        return E("InvalidTemperature")
+    if not fgt(vm, 0.0):
+        return E("InvalidVolume")
+    z = 1.0 + fdiv(b, vm)
+    if len(a) == 4:
+        z = z + fdiv(a[3], vm * vm)
+    return F(fdiv(z * GAS_R * temp, vm))
+
+
+def m_z_pitzer(a, p):
+    pr, tr, om = a
+    if not fgt(tr, 0.0) or not fge(pr, 0.0) or not math.isfinite(om):
+        return E("InvalidParameter")
+    b0, b1 = _pitzer_b(tr, p)
+    z = (1.0 + fdiv(b0 * pr, tr)) + om * fdiv(b1 * pr, tr)
+    return F(z) if fgt(z, 0.0) else E("InvalidParameter")
+
+
+def m_kays(a, p):
+    ys, xs = a
+    if len(ys) != len(xs) or not all(0.0 <= y <= 1.0 for y in ys) or not all(math.isfinite(x) for x in xs):
+        return E("InvalidParameter")
+    s = -0.0
+    for y in ys:
+        s = s + y
+    if abs(s - 1.0) > 1e-10:
+        return E("InvalidParameter")
+    r = -0.0
+    for y, x in zip(ys, xs):
+        r = r + y * x
+    return F(r)
+
+
 def unmodelled(fn, ins):
     """Rows of a modelled module that other checks own: the table presets (no inputs; check_tables) and the JSON
     documents (serde_json's text and verdicts, which the harness compares byte for byte; ADR 0005)."""
@@ -988,6 +1089,17 @@ MODELS = {
         "state::compressibility_factor": m_z,
         "state::reduced_temperature": lambda a, p: F(fdiv(a[0], a[1])),
         "state::reduced_pressure": lambda a, p: F(fdiv(a[0], a[1])),
+        "state::redlich_kwong_params": lambda a, p: [fbits(x) for x in rk_params(a[0], a[1], p)],
+        "state::peng_robinson_params": lambda a, p: [fbits(x) for x in pr_params(*a)],
+        "state::redlich_kwong_pressure": m_rk,
+        "state::peng_robinson_pressure": m_pr,
+        "state::pitzer_second_virial": m_pitzer_b,
+        "state::virial_pressure_2nd": m_virial,
+        "state::virial_pressure_3rd": m_virial,
+        "state::compressibility_pitzer": m_z_pitzer,
+        "state::kays_rule_tc": m_kays,
+        "state::kays_rule_pc": m_kays,
+        "state::kays_rule_omega": m_kays,
     },
     "transfer": {
         "transfer::conduction": m_conduction,
@@ -1027,10 +1139,18 @@ MODELS = {
 
 
 def model_args(ins):
-    """A row's inputs as floats; a `v:n` sequence is its n elements."""
-    if ins and ins[0].startswith("v:"):
-        return [tok_f(t) for t in ins[1:]]
-    return [tok_f(t) for t in ins]
+    """A row's inputs as floats; a `v:n` sequence is the list of its n elements. A row that is one sequence is that
+    list itself (the resistance lists); one with two is the pair of lists (Kay's rules)."""
+    out, i = [], 0
+    while i < len(ins):
+        if ins[i].startswith("v:"):
+            n = int(ins[i][2:])
+            out.append([tok_f(t) for t in ins[i + 1 : i + 1 + n]])
+            i += 1 + n
+        else:
+            out.append(tok_f(ins[i]))
+            i += 1
+    return out[0] if len(out) == 1 and isinstance(out[0], list) else out
 
 
 def check_models(tables, rep, exact):

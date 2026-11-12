@@ -520,6 +520,83 @@ fn _par_gas_json(fp, fl): i64 {
     return 0;
 }
 
+var _par_list = 0;
+var _par_list2 = 0;
+
+# One row of state's part 2 (the cubic equations, virial forms, Pitzer, Kay's rules): 1 when handled, 0 for none.
+fn _par_state2(fp, fl): i64 {
+    var a: f64 = _par_in(0);
+    var b: f64 = _par_in(1);
+    var c: f64 = _par_in(2);
+    var d: f64 = _par_in(3);
+    var e: f64 = _par_in(4);
+    if (_par_eq(fp, fl, "state::redlich_kwong_params") == 1) {
+        var ra, rb = us_redlich_kwong_params(a, b);
+        _par_got_f(ra);
+        _par_got_f(rb);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::peng_robinson_params") == 1) {
+        var pa, pb, pk = us_peng_robinson_params(a, b, c);
+        _par_got_f(pa);
+        _par_got_f(pb);
+        _par_got_f(pk);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::redlich_kwong_pressure") == 1) {
+        var t, v = us_redlich_kwong_pressure(a, b, c, d);
+        _par_got_res(t, v);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::peng_robinson_pressure") == 1) {
+        var t1, v1 = us_peng_robinson_pressure(a, b, c, d, e);
+        _par_got_res(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::pitzer_second_virial") == 1) {
+        var bv: f64 = us_pitzer_second_virial(a, b, c, d);
+        _par_got_f(bv);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::virial_pressure_2nd") == 1) {
+        var t2, v2 = us_virial_pressure_2nd(a, b, c);
+        _par_got_res(t2, v2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::virial_pressure_3rd") == 1) {
+        var t3, v3 = us_virial_pressure_3rd(a, b, c, d);
+        _par_got_res(t3, v3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "state::compressibility_pitzer") == 1) {
+        var t4, v4 = us_compressibility_pitzer(a, b, c);
+        _par_got_res(t4, v4);
+        return 1;
+    }
+    var kind = 0;
+    if (_par_eq(fp, fl, "state::kays_rule_tc") == 1) { kind = 1; }
+    if (_par_eq(fp, fl, "state::kays_rule_pc") == 1) { kind = 2; }
+    if (_par_eq(fp, fl, "state::kays_rule_omega") == 1) { kind = 3; }
+    if (kind == 0) { return 0; }
+    if (_par_list == 0) { _par_list = alloc(8 * 64); }
+    if (_par_list2 == 0) { _par_list2 = alloc(8 * 64); }
+    var ny = _par_in_f64s(0, _par_list);
+    var nv = _par_in_f64s(1 + ny, _par_list2);
+    if (kind == 1) {
+        var t5, v5 = us_kays_rule_tc(_par_list, ny, _par_list2, nv);
+        _par_got_res(t5, v5);
+    }
+    if (kind == 2) {
+        var t6, v6 = us_kays_rule_pc(_par_list, ny, _par_list2, nv);
+        _par_got_res(t6, v6);
+    }
+    if (kind == 3) {
+        var t7, v7 = us_kays_rule_omega(_par_list, ny, _par_list2, nv);
+        _par_got_res(t7, v7);
+    }
+    return 1;
+}
+
 # One state row: 1 when handled, 0 for a function with no counterpart yet, -1 for unusable inputs.
 fn _par_state(fp, fl): i64 {
     var j = _par_gas_json(fp, fl);
@@ -579,7 +656,7 @@ fn _par_state(fp, fl): i64 {
         _par_got_f(pr);
         return 1;
     }
-    return 0;
+    return _par_state2(fp, fl);
 }
 
 # ── transfer ────────────────────────────────────────────────────────────────────────
@@ -588,8 +665,6 @@ fn _par_state(fp, fl): i64 {
 fn _par_got_res(t, v) {
     if (is_ok(t) == 1) { _par_got_f(v); } else { _par_got_err(v); }
 }
-
-var _par_list = 0;
 
 # One row of transfer's part 2 (fins, heat exchangers, view factors): 1 when handled, 0 for a function with no
 # counterpart.

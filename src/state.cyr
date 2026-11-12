@@ -1,10 +1,13 @@
-# state.cyr — equations of state: the ideal gas, van der Waals, work and adiabatic relations, compressibility, reduced
-# coordinates, and the reference gases' critical data (Rust 1.4.0 `state`). All SI: pascals, cubic meters, kelvins,
-# moles.
+# state.cyr — equations of state: the ideal gas, van der Waals, Redlich–Kwong and Peng–Robinson, the virial forms, work
+# and adiabatic relations, compressibility (Pitzer–Abbott), Kay's mixture rules, reduced coordinates, and the reference
+# gases' critical data (Rust 1.4.0 `state`). All SI: pascals, cubic meters, kelvins, moles.
 #
 # Each function computes in the order Rust 1.4.0 writes, so its arithmetic is bit-identical (class B), and its ln and
-# pow are correctly rounded (ADR 0004, class C). A refusal returns Err(US_ERR_*) and reports its value at DEBUG
-# (src/validate.cyr). ideal_gas_pressure and van_der_waals_pressure open a DEBUG span under Rust's span name.
+# pow are correctly rounded (ADR 0004, class C); Pitzer's fitted exponents 1.6 and 4.2 are the doubles Rust writes
+# (ADR 0002 row 9). A refusal returns Err(US_ERR_*) and reports its value at DEBUG (src/validate.cyr). The four
+# functions Rust instruments open a DEBUG span under Rust's span name: ideal_gas_pressure, van_der_waals_pressure,
+# redlich_kwong_pressure and peng_robinson_pressure. The parameter functions return their pair or triple as multiple
+# values; Kay's rules take each list with its own length, so a mismatch is a refusal as in Rust.
 #
 # A gas is a UsGas: its name (bytes and length), critical temperature and pressure, and acentric factor. The 8
 # reference gases are generated tables (src/state_data.cyr: `US_GAS_<NAME>` indices, `US_GAS_COUNT`); us_gas_preset
@@ -296,4 +299,255 @@ fn us_gas_from_json_a(a, buf, n, out: *UsGas): Result {
 #must_use
 fn us_gas_from_json(buf, n, out: *UsGas): Result {
     return us_gas_from_json_a(default_alloc(), buf, n, out);
+}
+
+# --- Cubic equations of state ---
+
+# The cubic equations' check on the critical constants for `fname`, or 0: Err(US_ERR_INVALID_TEMPERATURE) unless
+# T_c > 0, Err(US_ERR_INVALID_PRESSURE) unless P_c > 0.
+fn _us_critical_check(tc: f64, pc: f64, fname): i64 {
+    if (_us_finite_gt(tc, 0.0) == 0) { return _us_fail_f(US_ERR_INVALID_TEMPERATURE, fname, "tc", tc); }
+    if (_us_finite_gt(pc, 0.0) == 0) { return _us_fail_f(US_ERR_INVALID_PRESSURE, fname, "pc", pc); }
+    return 0;
+}
+
+# Redlich–Kwong's (a, b) from the critical constants: a = 0.42748·R²·T_c^2.5 / P_c, b = 0.08664·R·T_c / P_c.
+#must_use
+fn us_redlich_kwong_params(tc: f64, pc: f64): (f64, f64) {
+    var t25: f64 = _us_cr_pow(tc, 2.5);
+    var a: f64 = 0.42748 * US_GAS_CONSTANT * US_GAS_CONSTANT * t25 / pc;
+    var b: f64 = 0.08664 * US_GAS_CONSTANT * tc / pc;
+    return (a, b);
+}
+
+# The Redlich–Kwong pressure P = RT / (V_m − b) − a / (√T·V_m·(V_m + b)) (Pa), at molar volume V_m (m³/mol).
+# Err(US_ERR_INVALID_TEMPERATURE) unless T > 0, then the critical constants' refusals, Err(US_ERR_INVALID_VOLUME)
+# unless V_m > 0, Err(US_ERR_INVALID_PARAMETER) unless V_m > b.
+#must_use
+fn us_redlich_kwong_pressure(temperature: f64, molar_volume: f64, tc: f64, pc: f64): Result {
+    _us_span_enter("redlich_kwong_pressure", 22);
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_redlich_kwong_pressure", "temperature", temperature));
+    }
+    var code = _us_critical_check(tc, pc, "us_redlich_kwong_pressure");
+    if (code != 0) {
+        _us_span_exit();
+        return Err(code);
+    }
+    if (_us_finite_gt(molar_volume, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_redlich_kwong_pressure", "molar_volume", molar_volume));
+    }
+    var a, b = us_redlich_kwong_params(tc, pc);
+    var vm_b: f64 = molar_volume - b;
+    if (_us_finite_gt(vm_b, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_ff(US_ERR_INVALID_PARAMETER, "us_redlich_kwong_pressure", "Vm <= b", "Vm", molar_volume,
+            "b", b));
+    }
+    var repulsive: f64 = US_GAS_CONSTANT * temperature / vm_b;
+    var st: f64 = f64_sqrt(temperature);
+    var attractive: f64 = a / (st * molar_volume * (molar_volume + b));
+    var p: f64 = repulsive - attractive;
+    _us_span_exit();
+    return Ok(p);
+}
+
+# Peng–Robinson's (a, b, κ) from the critical constants and acentric factor: a = 0.45724·R²·T_c² / P_c,
+# b = 0.07780·R·T_c / P_c, κ = 0.37464 + 1.54226ω − 0.26992ω².
+#must_use
+#pure
+fn us_peng_robinson_params(tc: f64, pc: f64, omega: f64): (f64, f64, f64) {
+    var a: f64 = 0.45724 * US_GAS_CONSTANT * US_GAS_CONSTANT * tc * tc / pc;
+    var b: f64 = 0.07780 * US_GAS_CONSTANT * tc / pc;
+    var kappa: f64 = 0.37464 + 1.54226 * omega - 0.26992 * omega * omega;
+    return (a, b, kappa);
+}
+
+# The Peng–Robinson pressure P = RT / (V_m − b) − a·α(T) / (V_m² + 2bV_m − b²) (Pa), α(T) = [1 + κ(1 − √(T/T_c))]².
+# Err(US_ERR_INVALID_TEMPERATURE) unless T > 0, then the critical constants' refusals, Err(US_ERR_INVALID_VOLUME)
+# unless V_m > 0, Err(US_ERR_INVALID_PARAMETER) unless ω is finite and V_m > b, Err(US_ERR_DIVISION_BY_ZERO) when the
+# attractive denominator is below 1e-30 in magnitude.
+#must_use
+fn us_peng_robinson_pressure(temperature: f64, molar_volume: f64, tc: f64, pc: f64, omega: f64): Result {
+    _us_span_enter("peng_robinson_pressure", 22);
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_peng_robinson_pressure", "temperature", temperature));
+    }
+    var code = _us_critical_check(tc, pc, "us_peng_robinson_pressure");
+    if (code != 0) {
+        _us_span_exit();
+        return Err(code);
+    }
+    if (_us_finite_gt(molar_volume, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_peng_robinson_pressure", "molar_volume", molar_volume));
+    }
+    if (_us_is_finite(omega) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_peng_robinson_pressure", "omega", omega));
+    }
+    var a, b, kappa = us_peng_robinson_params(tc, pc, omega);
+    var vm_b: f64 = molar_volume - b;
+    if (_us_finite_gt(vm_b, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_ff(US_ERR_INVALID_PARAMETER, "us_peng_robinson_pressure", "Vm <= b", "Vm", molar_volume,
+            "b", b));
+    }
+    var sr: f64 = f64_sqrt(temperature / tc);
+    var alpha_sqrt: f64 = 1.0 + kappa * (1.0 - sr);
+    var alpha: f64 = alpha_sqrt * alpha_sqrt;
+    var repulsive: f64 = US_GAS_CONSTANT * temperature / vm_b;
+    var denom: f64 = molar_volume * molar_volume + 2.0 * b * molar_volume - b * b;
+    var ad: f64 = f64_abs(denom);
+    if (_us_finite_ge(ad, _US_TINY) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_peng_robinson_pressure", "denominator", denom));
+    }
+    var p: f64 = repulsive - a * alpha / denom;
+    _us_span_exit();
+    return Ok(p);
+}
+
+# --- Virial equations of state ---
+
+# Pitzer's correlation for the second virial coefficient B (m³/mol): B·P_c / (R·T_c) = B⁰ + ω·B¹, with
+# B⁰ = 0.083 − 0.422 / T_r^1.6 and B¹ = 0.139 − 0.172 / T_r^4.2 (the fitted exponents Rust writes, ADR 0002 row 9).
+#must_use
+fn us_pitzer_second_virial(temperature: f64, tc: f64, pc: f64, omega: f64): f64 {
+    var tr: f64 = temperature / tc;
+    var p16: f64 = _us_cr_pow(tr, 1.6);
+    var p42: f64 = _us_cr_pow(tr, 4.2);
+    var b0: f64 = 0.083 - 0.422 / p16;
+    var b1: f64 = 0.139 - 0.172 / p42;
+    var bv: f64 = (b0 + omega * b1) * US_GAS_CONSTANT * tc / pc;
+    return bv;
+}
+
+# The two-term virial pressure P = RT/V_m · (1 + B/V_m) (Pa). Err(US_ERR_INVALID_TEMPERATURE) unless T > 0,
+# Err(US_ERR_INVALID_VOLUME) unless V_m > 0.
+#must_use
+fn us_virial_pressure_2nd(temperature: f64, molar_volume: f64, b_coeff: f64): Result {
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_virial_pressure_2nd", "temperature", temperature));
+    }
+    if (_us_finite_gt(molar_volume, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_virial_pressure_2nd", "molar_volume", molar_volume));
+    }
+    var z: f64 = 1.0 + b_coeff / molar_volume;
+    var p: f64 = z * US_GAS_CONSTANT * temperature / molar_volume;
+    return Ok(p);
+}
+
+# The three-term virial pressure P = RT/V_m · (1 + B/V_m + C/V_m²) (Pa). Err(US_ERR_INVALID_TEMPERATURE) unless T > 0,
+# Err(US_ERR_INVALID_VOLUME) unless V_m > 0.
+#must_use
+fn us_virial_pressure_3rd(temperature: f64, molar_volume: f64, b_coeff: f64, c_coeff: f64): Result {
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_virial_pressure_3rd", "temperature", temperature));
+    }
+    if (_us_finite_gt(molar_volume, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_virial_pressure_3rd", "molar_volume", molar_volume));
+    }
+    var vm2: f64 = molar_volume * molar_volume;
+    var z: f64 = 1.0 + b_coeff / molar_volume + c_coeff / vm2;
+    var p: f64 = z * US_GAS_CONSTANT * temperature / molar_volume;
+    return Ok(p);
+}
+
+# --- Generalized compressibility ---
+
+# The generalized compressibility of the Pitzer–Abbott virial correlation, Z = 1 + (B⁰ + ω·B¹)·P_r / T_r (B⁰ and B¹ as
+# us_pitzer_second_virial's), valid where Z is near linear in P_r (V_r ≳ 2). Err(US_ERR_INVALID_PARAMETER) unless
+# T_r > 0, P_r ≥ 0 and ω finite, and when the correlation gives Z ≤ 0 (outside its range).
+#must_use
+fn us_compressibility_pitzer(pr: f64, tr: f64, omega: f64): Result {
+    if (_us_finite_gt(tr, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_compressibility_pitzer", "tr", tr));
+    }
+    if (_us_finite_ge(pr, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_compressibility_pitzer", "pr", pr));
+    }
+    if (_us_is_finite(omega) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_compressibility_pitzer", "omega", omega));
+    }
+    var p16: f64 = _us_cr_pow(tr, 1.6);
+    var p42: f64 = _us_cr_pow(tr, 4.2);
+    var b0: f64 = 0.083 - 0.422 / p16;
+    var b1: f64 = 0.139 - 0.172 / p42;
+    var z0: f64 = 1.0 + b0 * pr / tr;
+    var z1: f64 = b1 * pr / tr;
+    var z: f64 = z0 + omega * z1;
+    if (_us_finite_gt(z, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_compressibility_pitzer", "z", z));
+    }
+    return Ok(z);
+}
+
+# --- Mixture rules ---
+
+# The mixture check for `fname`, or 0: Err(US_ERR_INVALID_PARAMETER) when the `ny` fractions at `ys` and the `nv`
+# values at `vals` differ in length, a fraction is outside [0, 1] (or NaN), a value is not finite, or the fractions'
+# sum is more than 1e-10 from 1.
+fn _us_mixture_check(ys, ny, vals, nv, fname): i64 {
+    if (ny != nv) { return _us_fail_i(US_ERR_INVALID_PARAMETER, fname, "values length", nv); }
+    var k = 0;
+    while (k < ny) {
+        var y: f64 = load64(ys + (8 * k));
+        if ((y >= 0.0 && y <= 1.0) == 0) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, "mole fraction", y); }
+        k = k + 1;
+    }
+    k = 0;
+    while (k < nv) {
+        var v: f64 = load64(vals + (8 * k));
+        if (_us_is_finite(v) == 0) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, "value", v); }
+        k = k + 1;
+    }
+    var s: f64 = 0.0 - 0.0;
+    k = 0;
+    while (k < ny) {
+        var y2: f64 = load64(ys + (8 * k));
+        s = s + y2;
+        k = k + 1;
+    }
+    var dev: f64 = f64_abs(s - 1.0);
+    if (dev > 0.0000000001) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, "fraction sum", s); }
+    return 0;
+}
+
+# Kay's rule Σ yᵢ·xᵢ over the checked mixture, summed left to right from −0.0 as Rust's `sum` does.
+fn _us_kays(ys, ny, vals, nv, fname): Result {
+    var code = _us_mixture_check(ys, ny, vals, nv, fname);
+    if (code != 0) { return Err(code); }
+    var s: f64 = 0.0 - 0.0;
+    var k = 0;
+    while (k < ny) {
+        var y: f64 = load64(ys + (8 * k));
+        var v: f64 = load64(vals + (8 * k));
+        s = s + y * v;
+        k = k + 1;
+    }
+    return Ok(s);
+}
+
+# Kay's rule for the pseudo-critical temperature T_c,mix = Σ yᵢ·T_c,i (K), over the `ny` mole fractions at `ys` and
+# the `nv` critical temperatures at `tcs`. Err(US_ERR_INVALID_PARAMETER) when the lengths differ, a fraction is
+# outside [0, 1], a value is not finite, or the fractions don't sum to 1 within 1e-10.
+#must_use
+fn us_kays_rule_tc(ys, ny, tcs, nv): Result {
+    return _us_kays(ys, ny, tcs, nv, "us_kays_rule_tc");
+}
+
+# Kay's rule for the pseudo-critical pressure P_c,mix = Σ yᵢ·P_c,i (Pa); refusals as us_kays_rule_tc's.
+#must_use
+fn us_kays_rule_pc(ys, ny, pcs, nv): Result {
+    return _us_kays(ys, ny, pcs, nv, "us_kays_rule_pc");
+}
+
+# Kay's rule for the pseudo-acentric factor ω_mix = Σ yᵢ·ωᵢ; refusals as us_kays_rule_tc's.
+#must_use
+fn us_kays_rule_omega(ys, ny, omegas, nv): Result {
+    return _us_kays(ys, ny, omegas, nv, "us_kays_rule_omega");
 }
