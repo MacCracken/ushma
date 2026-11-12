@@ -39,7 +39,7 @@ current list is in `state.md`.
 ```sh
 cyrius deps                                   # resolve dependencies (vendors lib/, incl. hisab)
 cyrius build src/main.cyr build/ushma         # compile
-cyrius test                                   # run tests/*.tcyr (parity + reference tests)
+cyrius test                                   # run tests/*.tcyr (tests/parity.tcyr replays the golden corpus)
 cyrius bench                                  # run benchmarks
 cyrius distlib --all                          # dist/ushma.cyr and dist/ushma-ai.cyr (from M1)
 cargo test --manifest-path rust-old/Cargo.toml --all-features   # the Rust oracle, read-only

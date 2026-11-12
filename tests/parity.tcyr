@@ -1,0 +1,392 @@
+# parity.tcyr — replays the golden corpus (tests/golden/*.tsv) against the port.
+#
+# Port plan §4 step 7, adapted from kimiya's tests/parity.tcyr (itself tanmatra's). Format and comparison rules:
+# scripts/oracle/README.md. The module list is tests/golden/modules.txt, which the generator writes. The replay
+# machinery is tests/parity_core.cyr; this file holds the dispatchers.
+#
+# Every row of every module is one of:
+# - ok: every output matched within its class;
+# - FAILED: an output differs; the first 10 per module are printed with the row's note and both bit patterns;
+# - measured: class C, with no bound set yet for its function. The ulp distance is recorded but not gated
+#   (M0 step 8, docs/development/port-parity.md §2);
+# - accepted: a divergence an ADR accepts (_par_accepted), or a pass against the ADR 0004 corrected oracle;
+# - pending: its function isn't ported yet (no dispatcher entry).
+#
+# Per function it prints the row counts and the ulp histogram, which is the step-8 baseline. Shadow lines
+# (`fn ~ candidate`) compare the same rows against another Cyrius candidate and are never gated. The exit code is
+# the number of modules with a failure (at most a handful, so the 8-bit exit status can't wrap).
+
+include "tests/ulp.cyr"
+include "src/constants.cyr"
+include "src/material_data.cyr"
+include "src/state_data.cyr"
+include "src/phase_data.cyr"
+include "src/chem_data.cyr"
+
+alloc_init();
+
+include "tests/parity_core.cyr"
+
+# The Rust variant name of an error code. src/error.cyr arrives in M1; until then no row returns an error.
+#must_use
+fn _par_error_name(code): i64 {
+    return "Unknown";
+}
+
+# ── constants ───────────────────────────────────────────────────────────────────────
+# `const` rows (input `s:<module>::<NAME>`): src/constants.cyr's US_ consts. Any other name is a defect.
+fn _par_constants(fp, fl): i64 {
+    if (_par_eq(fp, fl, "const") != 1 || _par_in_n != 1) { return 0 - 1; }
+    var np = load64(_par_in_v);
+    var nl = load64(_par_in_l);
+    if (_par_eq(np, nl, "numerical::MAX_ADAPTIVE_SUBSTEPS") == 1) {
+        _par_got_i(US_MAX_ADAPTIVE_SUBSTEPS);
+        return 1;
+    }
+    var x: f64 = 0.0;
+    if (_par_eq(np, nl, "chem::STANDARD_T") == 1) { x = US_STANDARD_T; }
+    elif (_par_eq(np, nl, "stat::PLANCK") == 1) { x = US_PLANCK; }
+    elif (_par_eq(np, nl, "stat::AVOGADRO") == 1) { x = US_AVOGADRO; }
+    elif (_par_eq(np, nl, "state::GAS_CONSTANT") == 1) { x = US_GAS_CONSTANT; }
+    elif (_par_eq(np, nl, "state::ATM") == 1) { x = US_ATM; }
+    elif (_par_eq(np, nl, "state::STANDARD_TEMP") == 1) { x = US_STANDARD_TEMP; }
+    elif (_par_eq(np, nl, "transfer::STEFAN_BOLTZMANN") == 1) { x = US_STEFAN_BOLTZMANN; }
+    elif (_par_eq(np, nl, "transfer::BOLTZMANN_K") == 1) { x = US_BOLTZMANN_K; }
+    else { return 0 - 1; }
+    _par_got_f(x);
+    return 1;
+}
+
+# ── the public tables ───────────────────────────────────────────────────────────────
+# Each table's presets by Rust name, with their index constants, as a vec of (name, index) pairs. A preset row
+# `<module>::<PRESET>` is answered from the data columns at that index; the `<module>::<ALL>` row names, for each row
+# r of the table, the preset whose index constant is r. So every index constant, name, cell and the count are
+# compared against the oracle's API.
+var _par_tab_material = 0;
+var _par_tab_gas = 0;
+var _par_tab_substance = 0;
+var _par_tab_species = 0;
+
+# Appends one (Rust name, index constant) pair.
+fn _par_tab_add(t, name, idx) {
+    vec_push(t, name);
+    vec_push(t, idx);
+    return 0;
+}
+
+# Builds the four preset tables.
+fn _par_tables_init(): i64 {
+    var m = vec_new();
+    _par_tab_add(m, "COPPER", US_MATERIAL_COPPER);
+    _par_tab_add(m, "ALUMINUM", US_MATERIAL_ALUMINUM);
+    _par_tab_add(m, "IRON", US_MATERIAL_IRON);
+    _par_tab_add(m, "STEEL", US_MATERIAL_STEEL);
+    _par_tab_add(m, "GLASS", US_MATERIAL_GLASS);
+    _par_tab_add(m, "WATER", US_MATERIAL_WATER);
+    _par_tab_add(m, "AIR", US_MATERIAL_AIR);
+    _par_tab_add(m, "WOOD_OAK", US_MATERIAL_WOOD_OAK);
+    _par_tab_add(m, "CONCRETE", US_MATERIAL_CONCRETE);
+    _par_tab_add(m, "DIAMOND", US_MATERIAL_DIAMOND);
+    _par_tab_material = m;
+    var g = vec_new();
+    _par_tab_add(g, "GAS_NITROGEN", US_GAS_NITROGEN);
+    _par_tab_add(g, "GAS_OXYGEN", US_GAS_OXYGEN);
+    _par_tab_add(g, "GAS_CO2", US_GAS_CO2);
+    _par_tab_add(g, "GAS_METHANE", US_GAS_METHANE);
+    _par_tab_add(g, "GAS_WATER", US_GAS_WATER);
+    _par_tab_add(g, "GAS_AMMONIA", US_GAS_AMMONIA);
+    _par_tab_add(g, "GAS_ETHANE", US_GAS_ETHANE);
+    _par_tab_add(g, "GAS_PROPANE", US_GAS_PROPANE);
+    _par_tab_gas = g;
+    var s = vec_new();
+    _par_tab_add(s, "WATER_PHASE", US_SUBSTANCE_WATER_PHASE);
+    _par_tab_add(s, "NITROGEN", US_SUBSTANCE_NITROGEN);
+    _par_tab_add(s, "OXYGEN", US_SUBSTANCE_OXYGEN);
+    _par_tab_add(s, "CARBON_DIOXIDE", US_SUBSTANCE_CARBON_DIOXIDE);
+    _par_tab_add(s, "AMMONIA", US_SUBSTANCE_AMMONIA);
+    _par_tab_add(s, "METHANE", US_SUBSTANCE_METHANE);
+    _par_tab_add(s, "ETHANOL", US_SUBSTANCE_ETHANOL);
+    _par_tab_add(s, "MERCURY", US_SUBSTANCE_MERCURY);
+    _par_tab_substance = s;
+    var c = vec_new();
+    _par_tab_add(c, "H2", US_SPECIES_H2);
+    _par_tab_add(c, "O2", US_SPECIES_O2);
+    _par_tab_add(c, "N2", US_SPECIES_N2);
+    _par_tab_add(c, "H2O_GAS", US_SPECIES_H2O_GAS);
+    _par_tab_add(c, "H2O_LIQUID", US_SPECIES_H2O_LIQUID);
+    _par_tab_add(c, "CO2", US_SPECIES_CO2);
+    _par_tab_add(c, "CO", US_SPECIES_CO);
+    _par_tab_add(c, "CH4", US_SPECIES_CH4);
+    _par_tab_add(c, "C2H6", US_SPECIES_C2H6);
+    _par_tab_add(c, "C3H8", US_SPECIES_C3H8);
+    _par_tab_add(c, "NH3", US_SPECIES_NH3);
+    _par_tab_add(c, "NO", US_SPECIES_NO);
+    _par_tab_species = c;
+    return 0;
+}
+
+# The index constant of preset [np, np + nl) in table t, or -1.
+fn _par_tab_index(t, np, nl): i64 {
+    var k = 0;
+    while (k < vec_len(t)) {
+        if (_par_eq(np, nl, vec_get(t, k)) == 1) { return vec_get(t, k + 1); }
+        k = k + 2;
+    }
+    return 0 - 1;
+}
+
+# The Rust name of the preset at row r of table t, or 0.
+fn _par_tab_name(t, r): i64 {
+    var k = 0;
+    while (k < vec_len(t)) {
+        if (vec_get(t, k + 1) == r) { return vec_get(t, k); }
+        k = k + 2;
+    }
+    return 0;
+}
+
+# The table row: `<module>::<ALL>` (all = its name) answers the count and each row's preset name; `<module>::<P>`
+# answers the preset's name and fields through `fill(index)`. Returns the dispatcher's result.
+fn _par_table(fp, fl, modn, all, t, count, fill): i64 {
+    var pre = strlen(modn) + 2;
+    if (fl <= pre || memeq(fp, modn, pre - 2) != 1) { return 0 - 1; }
+    var np = fp + pre;
+    var nl = fl - pre;
+    if (_par_eq(np, nl, all) == 1) {
+        _par_got_seq(count);
+        var r = 0;
+        while (r < count) {
+            var n = _par_tab_name(t, r);
+            if (n == 0) { return 0 - 1; }
+            _par_got_text(n, strlen(n));
+            r = r + 1;
+        }
+        return 1;
+    }
+    var idx = _par_tab_index(t, np, nl);
+    if (idx < 0 || idx >= count) { return 0 - 1; }
+    fncall1(fill, idx);
+    return 1;
+}
+
+# Appends name `p` (a NUL-terminated blob entry) as a golden `s:` token.
+fn _par_got_name(p) {
+    _par_got_text(p, strlen(p));
+    return 0;
+}
+
+# One material row's name and fields, in ThermalMaterial's declaration order.
+fn _par_fill_material(i) {
+    _par_got_name(&_US_MATERIAL_NAME_BYTES + _US_MATERIAL_NAME_OFF[i]);
+    var x: f64 = US_MATERIAL_CONDUCTIVITY[i];
+    _par_got_f(x);
+    x = US_MATERIAL_SPECIFIC_HEAT[i];
+    _par_got_f(x);
+    x = US_MATERIAL_DENSITY[i];
+    _par_got_f(x);
+    x = US_MATERIAL_MELTING_POINT[i];
+    _par_got_f(x);
+    x = US_MATERIAL_BOILING_POINT[i];
+    _par_got_f(x);
+    return 0;
+}
+
+# One gas row (GasData order).
+fn _par_fill_gas(i) {
+    _par_got_name(&_US_GAS_NAME_BYTES + _US_GAS_NAME_OFF[i]);
+    var x: f64 = US_GAS_CRITICAL_T[i];
+    _par_got_f(x);
+    x = US_GAS_CRITICAL_P[i];
+    _par_got_f(x);
+    x = US_GAS_ACENTRIC_FACTOR[i];
+    _par_got_f(x);
+    return 0;
+}
+
+# One substance row (SubstanceData order).
+fn _par_fill_substance(i) {
+    _par_got_name(&_US_SUBSTANCE_NAME_BYTES + _US_SUBSTANCE_NAME_OFF[i]);
+    var x: f64 = US_SUBSTANCE_TRIPLE_POINT_T[i];
+    _par_got_f(x);
+    x = US_SUBSTANCE_TRIPLE_POINT_P[i];
+    _par_got_f(x);
+    x = US_SUBSTANCE_CRITICAL_T[i];
+    _par_got_f(x);
+    x = US_SUBSTANCE_CRITICAL_P[i];
+    _par_got_f(x);
+    x = US_SUBSTANCE_CRITICAL_DENSITY[i];
+    _par_got_f(x);
+    x = US_SUBSTANCE_LATENT_HEAT_FUSION[i];
+    _par_got_f(x);
+    x = US_SUBSTANCE_LATENT_HEAT_VAPORIZATION[i];
+    _par_got_f(x);
+    x = US_SUBSTANCE_MELTING_POINT[i];
+    _par_got_f(x);
+    x = US_SUBSTANCE_BOILING_POINT[i];
+    _par_got_f(x);
+    x = US_SUBSTANCE_MOLAR_MASS[i];
+    _par_got_f(x);
+    return 0;
+}
+
+# One species row (Species order).
+fn _par_fill_species(i) {
+    _par_got_name(&_US_SPECIES_NAME_BYTES + _US_SPECIES_NAME_OFF[i]);
+    var x: f64 = US_SPECIES_DELTA_HF[i];
+    _par_got_f(x);
+    x = US_SPECIES_DELTA_GF[i];
+    _par_got_f(x);
+    x = US_SPECIES_CP[i];
+    _par_got_f(x);
+    return 0;
+}
+
+# ── math ────────────────────────────────────────────────────────────────────────────
+# `f64::` rows: the Cyrius counterpart of each Rust std method (port plan §7.1, port-parity.md §1).
+# - Class A, dispatched: sqrt, abs, ceil (builtins); clamp (f64_clamp, Rust's semantics for valid bounds, which is
+#   compared rather than assumed).
+# - Pending until M1's `_us_*` helpers, because the stdlib has none with Rust's semantics: min / max (f64_min /
+#   f64_max return NaN for a NaN second operand; the shadow lines show where), is_finite / is_nan (no stdlib fn),
+#   powi (no stdlib fn), exp_m1 (none in math or ganita).
+# - Class C, dispatched to the stdlib counterparts and MEASURED (no bound): the step-8 baseline of what the stdlib
+#   gives against glibc. ADR 0004 replaces them with the correctly rounded `_us_cr_*` primitives (src/mathx.cyr),
+#   compared at 0 ulp against the corrected oracle.
+fn _par_math(fp, fl): i64 {
+    var x: f64 = _par_in(0);
+    if (_par_eq(fp, fl, "f64::sqrt") == 1) { var r: f64 = f64_sqrt(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::abs") == 1) { var r: f64 = f64_abs(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::ceil") == 1) { var r: f64 = f64_ceil(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::exp") == 1) { var r: f64 = f64_exp(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::ln") == 1) { var r: f64 = f64_ln(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::atan") == 1) { var r: f64 = f64_atan(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::tanh") == 1) { var r: f64 = ganita_f64_tanh(x); _par_got_f(r); return 1; }
+    if (_par_in_n < 2) { return 0; }
+    var y: f64 = _par_in(1);
+    if (_par_eq(fp, fl, "f64::powf") == 1) { var r: f64 = ganita_f64_pow(x, y); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::clamp") == 1) {
+        var hi: f64 = _par_in(2);
+        var r: f64 = f64_clamp(x, y, hi);
+        _par_got_f(r);
+        return 1;
+    }
+    return 0;
+}
+
+# ── routing and hooks ───────────────────────────────────────────────────────────────
+
+# Routes a row to its module's dispatcher. 0 (pending) for a module or function with none yet: the module rows of
+# chem, material, phase and state other than their presets arrive at M1–M5.
+fn _par_dispatch(mp, ml, fp, fl): i64 {
+    _par_got_n = 0;
+    if (_par_eq(mp, ml, "constants") == 1) { return _par_constants(fp, fl); }
+    if (_par_eq(mp, ml, "math") == 1) { return _par_math(fp, fl); }
+    if (_par_in_n != 0) { return 0; }   # a preset row has no inputs; anything else is a module function
+    if (_par_eq(mp, ml, "material") == 1) {
+        return _par_table(fp, fl, "material", "ALL_MATERIALS", _par_tab_material, US_MATERIAL_COUNT,
+            &_par_fill_material);
+    }
+    if (_par_eq(mp, ml, "state") == 1) {
+        return _par_table(fp, fl, "state", "ALL_GASES", _par_tab_gas, US_GAS_COUNT, &_par_fill_gas);
+    }
+    if (_par_eq(mp, ml, "phase") == 1) {
+        return _par_table(fp, fl, "phase", "ALL_SUBSTANCES", _par_tab_substance, US_SUBSTANCE_COUNT,
+            &_par_fill_substance);
+    }
+    if (_par_eq(mp, ml, "chem") == 1) {
+        return _par_table(fp, fl, "chem", "ALL_SPECIES", _par_tab_species, US_SPECIES_COUNT, &_par_fill_species);
+    }
+    return 0;
+}
+
+# Shadow comparisons, never gated: the same golden rows through another Cyrius candidate.
+# - the exp / ln / atan polyfills (the same bits on every target) beside the builtins (x87 on x86_64), and atan as
+#   ganita's atan2(x, 1);
+# - the stdlib min / max that M1's helpers replace, to show where their NaN semantics differ from Rust's.
+fn _par_shadows(mp, ml, fp, fl, cls) {
+    if (_par_eq(mp, ml, "math") != 1) { return 0; }
+    var x: f64 = _par_in(0);
+    if (_par_eq(fp, fl, "f64::exp") == 1) {
+        _par_got_n = 0;
+        var r: f64 = _f64_exp_polyfill(x);
+        _par_got_f(r);
+        _par_shadow_record("f64::exp ~ _f64_exp_polyfill", cls);
+        return 0;
+    }
+    if (_par_eq(fp, fl, "f64::ln") == 1) {
+        _par_got_n = 0;
+        var r: f64 = _f64_ln_polyfill(x);
+        _par_got_f(r);
+        _par_shadow_record("f64::ln ~ _f64_ln_polyfill", cls);
+        return 0;
+    }
+    if (_par_eq(fp, fl, "f64::atan") == 1) {
+        _par_got_n = 0;
+        var r: f64 = _f64_atan_polyfill(x);
+        _par_got_f(r);
+        _par_shadow_record("f64::atan ~ _f64_atan_polyfill", cls);
+        _par_got_n = 0;
+        var r2: f64 = ganita_f64_atan2(x, 1.0);
+        _par_got_f(r2);
+        _par_shadow_record("f64::atan ~ ganita_f64_atan2(x, 1)", cls);
+        return 0;
+    }
+    if (_par_in_n < 2) { return 0; }
+    var y: f64 = _par_in(1);
+    if (_par_eq(fp, fl, "f64::max") == 1) {
+        _par_got_n = 0;
+        var r: f64 = f64_max(x, y);
+        _par_got_f(r);
+        _par_shadow_record("f64::max ~ f64_max", cls);
+        return 0;
+    }
+    if (_par_eq(fp, fl, "f64::min") == 1) {
+        _par_got_n = 0;
+        var r: f64 = f64_min(x, y);
+        _par_got_f(r);
+        _par_shadow_record("f64::min ~ f64_min", cls);
+        return 0;
+    }
+    return 0;
+}
+
+# The class-C bound for a function, in ulps; -1 when none is set yet (the rows are measured). Under ADR 0004 every
+# class-C function is compared at 0 ulp against the corrected oracle once it runs on its correctly rounded primitive
+# (src/mathx.cyr, M0 part 2c); until then the stdlib counterparts are measured, never gated.
+#must_use
+fn _par_c_bound(fp, fl): i64 {
+    return 0 - 1;
+}
+
+# The ADR accepting a divergent row (function and raw input field), or 0. The ADR 0002 rows arrive with their
+# modules (port plan §3.3).
+#must_use
+fn _par_accepted(fp, fl, ip, il): i64 {
+    return 0;
+}
+
+# No ADR's accepted rows are summarised quietly yet.
+#must_use
+fn _par_accepted_quiet(adr): i64 {
+    return 0;
+}
+
+# Every printed accepted row gets its bit pair.
+#must_use
+fn _par_accepted_bits(adr): i64 {
+    return 1;
+}
+
+# No module-specific summary lines yet.
+fn _par_module_done(mp, ml) {
+    return 0;
+}
+
+# ushma has one harness: no module is skipped.
+#must_use
+fn _par_skip(mp, ml): i64 {
+    return 0;
+}
+
+_par_tables_init();
+var exit_code = _par_main();
+sys_exit_group(exit_code);

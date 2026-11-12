@@ -16,7 +16,7 @@ Plan of record: [`ushma-port-plan.md`](ushma-port-plan.md). Decisions P2–P8 we
 
 | Milestone | Status |
 |---|---|
-| M0 Prep & initialize | 🟡 in progress. **Part 1 done (2026-11-11):** oracle verified (Rust code identical to `9528e1f`), Rust bench baseline on the tag, `cyrius port`, repairs, manifest, ADRs 0001–0005. **Part 2a done (2026-11-11):** math check (probe 0, `port-parity.md` §1), the generator `scripts/oracle/` (constants + math sweep: 9 + 15,687 golden rows, `src/constants.cyr`), `validate.py` (5,869 rows re-derived, 0 failures). **Part 2b done (2026-11-11):** the table data: `src/{material,state,phase,chem}_data.cyr` (public, with 42 golden preset rows), `src/steam_data.cyr` and `src/constants_private.cyr` (private, from the Rust literals, with a completeness proof over every `const` item); `probe_tables.py` checks all 1,052 values through the compiler, identical on ELF, aarch64 and PE. **Next, 2c:** parity harness and `src/mathx.cyr`. **Part 3:** baselines on three targets, probes 1–12, upstream filings |
+| M0 Prep & initialize | 🟡 in progress. **Part 1 done (2026-11-11):** oracle verified (Rust code identical to `9528e1f`), Rust bench baseline on the tag, `cyrius port`, repairs, manifest, ADRs 0001–0005. **Part 2a done (2026-11-11):** math check (probe 0, `port-parity.md` §1), the generator `scripts/oracle/` (constants + math sweep: 9 + 15,687 golden rows, `src/constants.cyr`), `validate.py` (5,869 rows re-derived, 0 failures). **Part 2b done (2026-11-11):** the table data: `src/{material,state,phase,chem}_data.cyr` (public, with 42 golden preset rows), `src/steam_data.cyr` and `src/constants_private.cyr` (private, from the Rust literals, with a completeness proof over every `const` item); `probe_tables.py` checks all 1,052 values through the compiler, identical on ELF, aarch64 and PE. **Part 2c-1 done (2026-11-11):** the parity harness (`tests/parity.tcyr` with kimiya's `parity_core.cyr` and `ulp.cyr`): every constant and table preset ok, class-A math ok, the stdlib's class-C counterparts measured against glibc (port-parity.md §2a), summary identical on ELF, `--bounds`, PE, aarch64. **Next, 2c-2:** `src/mathx.cyr` (the Rust-semantics helpers and correctly rounded exp, expm1, ln, pow, atan2 vendored from kimiya) with the MPFR corrected oracle; **2c-3:** a correctly rounded tanh. **Part 3:** baselines on three targets, probes 1–12, upstream filings |
 | M1–M8 | ☐ |
 
 ## Golden corpus
@@ -28,6 +28,17 @@ Plan of record: [`ushma-port-plan.md`](ushma-port-plan.md). Decisions P2–P8 we
 | `tests/golden/{chem,material,phase,state}.tsv` | 13 / 11 / 9 / 9 (table presets; module rows from M1) | A |
 
 Recorded on glibc 2.44 x86_64 fma (ushma 1.4.0, hisab 1.4.0). `--check`, `validate.py` (5,911 values re-derived) and `probe_tables.py --all-targets` (1,052 compiled values) are clean.
+
+## Parity harness
+
+`cyrius test` runs `tests/parity.tcyr` with the smoke test, warning-free on every target:
+
+`=== parity summary: 6 modules, 0 failing | rows: 3374 ok, 0 failed, 8826 measured, 3538 pending, 0 accepted (ADR 4: 0), 0 glibc-matching (failed) ===`
+
+- **ok:** 9 constants, 42 table rows, and the class-A sqrt / abs / ceil / clamp rows.
+- **measured:** the class-C rows, on the stdlib counterparts, until the correctly rounded
+  primitives.
+- **pending:** min / max / is_finite / is_nan / powi / exp_m1 (M1 helpers and mathx).
 
 ## Toolchain
 

@@ -35,6 +35,7 @@ ADRs 0001–0005.
   - `src/constants_private.cyr`: the 8 other private constants.
 
   Private data comes from its Rust literals, with a proof that every `const` item in `rust-old/src` is generated or excused. `scripts/oracle/probe_tables.py` compiles all 1,052 values with the Cyrius compiler and checks them against the golden rows or an independent Python parse, with identical output on ELF, aarch64 and PE
+- **tests/parity.tcyr** (M0 part 2c-1): the parity harness that replays the golden corpus against the port (`tests/parity_core.cyr` and `tests/ulp.cyr` from kimiya, renumbered for ADR 0004). Every constant and table preset matches the oracle; so do sqrt, abs, ceil and clamp on every row. The stdlib's transcendentals are measured against glibc (port-parity.md §2a), and the summary is identical on ELF, `--bounds`, PE and aarch64
 - **scripts/probes/p0_math.cyr** — the math-counterpart probe: `f64_max`/`f64_min` return NaN for a NaN second operand where Rust returns the other value, so the port wraps them; `ganita_f64_pow(2, 0.5)` is 1 ulp off √2 (`docs/development/port-parity.md` §1)
 - **scripts/gates.sh** — the full gate run (oracle, ELF / `--bounds` / PE / aarch64 tests, bench, fmt / lint / doc, vet, lock, audit)
 

@@ -52,7 +52,46 @@ target.
 
 ## 2. Baselines on three targets (M0 step 8)
 
-*Pending (M0 part 3).*
+### 2a. The stdlib against glibc (2026-11-11, `tests/parity.tcyr`)
+
+The parity harness dispatches each class-C math row to its stdlib counterpart and records the
+ulp distance from the oracle (glibc 2.44) without gating it. These numbers measure how far the
+stdlib is from **glibc**, not from the correct result. Which side is right on each differing
+row comes from the corrected oracle (ADR 0004, MPFR, M0 part 2c), and the port replaces every
+one of these with a correctly rounded `_us_cr_*` primitive.
+
+Rows at 1 ulp from glibc (none is further, except the one `pow` row below):
+
+| Function (rows) | Counterpart | x86_64 ELF | x86_64 PE | aarch64 |
+|---|---|---|---|---|
+| exp (1,140) | `f64_exp` builtin | 45 | 45 | 99 |
+| | `_f64_exp_polyfill` | 99 | 99 | 99 |
+| ln (1,587) | `f64_ln` builtin | 1 | 1 | 28 |
+| | `_f64_ln_polyfill` | 28 | 28 | 28 |
+| powf (3,615) | `ganita_f64_pow` | 375 + 1 non-finite | same | same |
+| atan (1,624) | `f64_atan` builtin | 0 | 0 | 11 |
+| | `_f64_atan_polyfill` | 11 | 11 | 11 |
+| | `ganita_f64_atan2(x, 1)` | 0 | 0 | 11 |
+| tanh (860) | `ganita_f64_tanh` | 52 | 52 | 52 |
+| exp_m1 (1,010) | none | — | — | — |
+
+- **Builtins vs polyfills.** On aarch64 the builtins are the polyfills, so the builtins'
+  bits differ by target. The polyfills are target-independent but further from glibc. No
+  stdlib option is both target-independent and as close to glibc as the x87 builtins: ADR
+  0004's case.
+- **The non-finite `pow` row** is `pow(−1, DBL_MAX)`. glibc gives 1 and `ganita_f64_pow`
+  gives +∞: ganita's known defect (tanmatra ADR 0007, kimiya ADR 0004).
+- **Class A.** `f64_sqrt`, `f64_abs`, `f64_ceil` and `f64_clamp` match Rust on every golden
+  row (1,074 / 374 / 1,258 / 617), so `f64_clamp` has Rust's semantics for valid bounds.
+  `f64_max` / `f64_min` differ on 59 of 600 rows each, every one a NaN second operand (the
+  shadow lines). M1's `_us_max` / `_us_min` fix that.
+
+The harness's summary is identical on x86_64 ELF, `--bounds`, PE (wine) and aarch64 (qemu):
+`6 modules, 0 failing | rows: 3374 ok, 0 failed, 8826 measured, 3538 pending`.
+
+### 2b. The correctly rounded primitives against MPFR
+
+*Pending (M0 part 2c-2).*
 
 ## 3. Probes 1–12 (M0 step 9)
 
