@@ -29,8 +29,8 @@ The port reads and writes **the same JSON documents as serde_json 1.0.154**, byt
   `Err(US_ERR_DESERIALIZE)`.
 - **Writers** use `str_builder`.
 - **f64 text** comes from a shortest-digit printer, `src/fmtf.cyr`, vendored from impetus, under
-  zmij's rules for JSON. The same printer, under Rust's `Display` rules, prints `UshmaError`
-  messages.
+  zmij's rules for JSON. It also has Rust's `Display` form, for the f64 text the soorat and log
+  output need.
 - **Parity.** Every document the oracle writes decodes to the oracle's values bit for bit, and
   the port's document for every golden value is serde_json's text byte for byte. Both are
   class A.

@@ -512,6 +512,103 @@ def check_corrections(root, tables, rep, write):
     return per
 
 
+# ── fmtf: the f64 text, checked by its properties ──
+
+def unpct(text):
+    """Decode format 1's `s:` encoding."""
+    out = bytearray()
+    k = 0
+    while k < len(text):
+        if text[k] == "%":
+            out.append(int(text[k + 1:k + 3], 16))
+            k += 3
+        else:
+            out.append(ord(text[k]))
+            k += 1
+    return out.decode()
+
+
+def sig_digits(text):
+    """The significant digits of a decimal text, without sign, point, exponent or leading/trailing zeros."""
+    mant = text.lstrip("-").split("e")[0].replace(".", "")
+    return mant.strip("0") or "0"
+
+
+def dec_exp(x):
+    """The decimal exponent of a finite nonzero x's shortest digits: x = d.ddd × 10^e."""
+    r = repr(abs(x))
+    if "e" in r:
+        m, e = r.split("e")
+        return int(e) + (len(m.split(".")[0]) - 1)
+    ip, _, fp = r.partition(".")
+    if ip != "0":
+        return len(ip) - 1
+    return -(len(fp) - len(fp.lstrip("0")) + 1)
+
+
+def check_fmtf(rows, rep):
+    """Each fmtf row's text reads back to its bits, has the shortest digit count (Python's repr), is a closest
+    shortest decimal (Rust's Display may break an exact tie upward; serde_json's must equal repr's, ties to even), and
+    has its form: Display always positional; serde_json positional while the decimal exponent is in -5..=15."""
+    from fractions import Fraction
+    for n, fn, _cls, ins, outs in rows:
+        where = f"fmtf.tsv:{n}"
+        if fn not in ("fmtf::display", "fmtf::json") or len(ins) != 1 or len(outs) != 1 or not outs[0].startswith("s:"):
+            rep.fail(where, f"unexpected row {fn} {ins} {outs}")
+            continue
+        x = tok_f(ins[0])
+        text = unpct(outs[0][2:])
+        if math.isnan(x) or math.isinf(x):
+            want = "null" if fn == "fmtf::json" else ("NaN" if math.isnan(x) else ("inf" if x > 0 else "-inf"))
+            if text != want:
+                rep.fail(where, f"{text!r} for a non-finite value, expected {want!r}")
+            else:
+                rep.ok()
+            continue
+        try:
+            back = float(text)
+        except ValueError:
+            rep.fail(where, f"{text!r} is not a number")
+            continue
+        if bits(back) != bits(x):
+            rep.fail(where, f"{text!r} reads back as {back!r}, not {x!r}")
+            continue
+        if x == 0.0:
+            want = ("-" if math.copysign(1.0, x) < 0 else "") + ("0.0" if fn == "fmtf::json" else "0")
+            if text != want:
+                rep.fail(where, f"{text!r} for a zero, expected {want!r}")
+            else:
+                rep.ok()
+            continue
+        if len(sig_digits(text)) != len(sig_digits(repr(x))):
+            rep.fail(where, f"{text!r} is not shortest (repr {x!r})")
+            continue
+        exact = Fraction(x)
+        if abs(Fraction(text) - exact) > abs(Fraction(repr(x)) - exact):
+            rep.fail(where, f"{text!r} is farther from the value than {x!r}")
+            continue
+        e = dec_exp(x)
+        if fn == "fmtf::display":
+            if "e" in text or text.endswith(".0"):
+                rep.fail(where, f"{text!r}: Display is positional, with no '.0'")
+                continue
+        else:
+            if sig_digits(text) != sig_digits(repr(x)):
+                rep.fail(where, f"{text!r}: serde_json's digits are repr's (ties to even), {x!r}")
+                continue
+            positional = "e" not in text
+            if positional != (-5 <= e <= 15):
+                rep.fail(where, f"{text!r}: the form for decimal exponent {e}")
+                continue
+            if positional and "." not in text:
+                rep.fail(where, f"{text!r}: serde_json writes '.0' on an integer")
+                continue
+            if not positional and not re.fullmatch(r"-?[0-9](\.[0-9]+)?e[+-][0-9]+", text):
+                rep.fail(where, f"{text!r}: serde_json's exponent form is d.ddde±x")
+                continue
+        rep.ok()
+
+
 def main():
     root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
     rep = Report()
@@ -527,12 +624,14 @@ def main():
     check_constants_cyr(root, golden, rep)
     check_tables(root, tables, rep)
     counts = check_math(tables.get("math.tsv", []), rep)
+    check_fmtf(tables.get("fmtf.tsv", []), rep)
     per = check_corrections(root, tables, rep, "--write-corrections" in sys.argv[2:])
     total = sum(len(v) for v in tables.values())
     print(f"files: {len(files)}; rows: {total}; math classes: {dict(sorted(counts.items()))}")
     print(f"ADR 0004 corrected oracle (MPFR {MPFR.VERSION}): math rows glibc misrounds: "
           f"{sum(per.values())} {dict(sorted(per.items()))}")
-    print(f"independently recomputed: {rep.checked} (constants, src/constants.cyr, table presets, math classes A and B)")
+    print(f"independently recomputed: {rep.checked} (constants, src/constants.cyr, table presets, math classes A and B,"
+          " fmtf's text by its properties)")
     print(f"FAILURES: {rep.failures}")
     return 1 if rep.failures else 0
 

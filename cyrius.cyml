@@ -12,11 +12,11 @@ entry = "src/main.cyr"
 output = "build/ushma"
 dce = true
 
-# Bundles (port plan §3.2, ADR 0001 P5). Added at M1 — `[lib] modules = []` is invalid.
+# Bundles (port plan §3.2, ADR 0001 P5), below:
 #   [lib]     every module except the HTTP client (dist/ushma.cyr)
 #   [lib.ai]  [lib] + src/ai.cyr, the daimon/hoosh client on sandhi (dist/ushma-ai.cyr)
-# Order = dependency order (port plan §4 step 3): error → constants → validate → mathx →
-# fmtf → json → logging → material_data → material → transfer → state_data → state →
+# Order = dependency order (port plan §4 step 3): constants → error → mathx → fmtf →
+# validate → logging → json → material_data → material → transfer → state_data → state →
 # entropy → phase_data → phase → steam_data → steam → cycle → chem_data → chem → stat →
 # numerical → bridge → soorat (→ ai in [lib.ai]).
 
@@ -62,6 +62,43 @@ stdlib = [
 git = "https://github.com/MacCracken/hisab.git"
 tag = "3.4.1"
 modules = ["dist/hisab.cyr"]
+
+# The physics bundle, dist/ushma.cyr, in dependency order (M1 onward; each module joins at its milestone).
+[lib]
+modules = [
+    "src/constants.cyr",
+    "src/constants_private.cyr",
+    "src/error.cyr",
+    "src/mathx_data.cyr",
+    "src/mathx.cyr",
+    "src/fmtf.cyr",
+    "src/validate.cyr",
+    "src/logging.cyr",
+    "src/material_data.cyr",
+    "src/state_data.cyr",
+    "src/phase_data.cyr",
+    "src/chem_data.cyr",
+    "src/steam_data.cyr",
+]
+
+# The physics bundle plus the daimon client (src/ai.cyr from M7, on sandhi): dist/ushma-ai.cyr. Until M7 it holds
+# the same modules as [lib].
+[lib.ai]
+modules = [
+    "src/constants.cyr",
+    "src/constants_private.cyr",
+    "src/error.cyr",
+    "src/mathx_data.cyr",
+    "src/mathx.cyr",
+    "src/fmtf.cyr",
+    "src/validate.cyr",
+    "src/logging.cyr",
+    "src/material_data.cyr",
+    "src/state_data.cyr",
+    "src/phase_data.cyr",
+    "src/chem_data.cyr",
+    "src/steam_data.cyr",
+]
 
 [test]
 stdlib = ["assert", "bench"]

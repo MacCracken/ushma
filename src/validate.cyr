@@ -1,0 +1,110 @@
+# validate.cyr — input predicates and the failure path every fallible ushma function shares.
+#
+# A plain `x <= 0.0` test lets NaN through (every comparison with NaN is false). `_us_finite_gt` / `_us_finite_ge`
+# are 1 only for a finite value that satisfies the bound, so `if (_us_finite_gt(x, 0.0) == 0) { .. }` refuses
+# negatives, zero, NaN and ±∞ in one test.
+#
+# A refusal returns `Err(code)` (src/error.cyr) through `_us_fail*`: when DEBUG is on, it first reports where it
+# failed and on what value, as one sakshi event (`us_conduction: negative thermal conductivity`, with
+# `conductivity=-1`); otherwise it costs one level test. The value is written by fmtf's Display form into a stack
+# buffer, so a refusal never allocates unless a value's text is longer than the buffer.
+
+# 1 when x is finite and strictly greater than `bound`, else 0.
+#must_use
+#pure
+fn _us_finite_gt(x: f64, bound: f64): i64 {
+    if (_us_is_finite(x) == 0) { return 0; }
+    if (x > bound) { return 1; }
+    return 0;
+}
+
+# 1 when x is finite and greater than or equal to `bound`, else 0.
+#must_use
+#pure
+fn _us_finite_ge(x: f64, bound: f64): i64 {
+    if (_us_is_finite(x) == 0) { return 0; }
+    if (x >= bound) { return 1; }
+    return 0;
+}
+
+# A str_builder over a caller's stack buffer: header `hdr` (24 bytes: buf, len, cap) on `buf` of `cap` bytes. It grows
+# onto the heap only past `cap`, as any str_builder does.
+fn _us_sb_on(hdr, buf, cap): i64 {
+    store64(hdr, buf);
+    store64(hdr + 8, 0);
+    store64(hdr + 16, cap);
+    return hdr;
+}
+
+# Emits the failure event for `code` in function `fname` (C strings): the message `<fname>: <error message>` with one
+# field, `what` = the text in builder `vb`.
+fn _us_fail_event(code, fname, what, vb) {
+    var mh[24];
+    var mbuf[160];
+    var mb = _us_sb_on(&mh, &mbuf, 160);
+    str_builder_add_cstr(mb, fname);
+    str_builder_add_cstr(mb, ": ");
+    str_builder_add_cstr(mb, us_error_message(code));
+    sakshi_log_kv(SK_DEBUG, load64(mb), load64(mb + 8), what, strlen(what), load64(vb), load64(vb + 8));
+    return 0;
+}
+
+# The refusal of `fname` with `code`, reporting no value. Returns `code`, for `return Err(_us_fail(..))`.
+#must_use
+fn _us_fail(code, fname): i64 {
+    if (sakshi_get_level() >= SK_DEBUG) {
+        var mh[24];
+        var mbuf[160];
+        var mb = _us_sb_on(&mh, &mbuf, 160);
+        str_builder_add_cstr(mb, fname);
+        str_builder_add_cstr(mb, ": ");
+        str_builder_add_cstr(mb, us_error_message(code));
+        sakshi_debug(load64(mb), load64(mb + 8));
+    }
+    return code;
+}
+
+# The refusal of `fname` with `code` on the f64 `x`, named `what` (`"conductivity"`). Returns `code`.
+#must_use
+fn _us_fail_f(code, fname, what, x: f64): i64 {
+    if (sakshi_get_level() >= SK_DEBUG) {
+        var vh[24];
+        var vbuf[64];
+        var vb = _us_sb_on(&vh, &vbuf, 64);
+        _us_fmt_f64_display(vb, x);
+        _us_fail_event(code, fname, what, vb);
+    }
+    return code;
+}
+
+# The refusal of `fname` with `code` on two f64s, reported as one field `w1=x1, w2=x2` under `what`. Returns `code`.
+#must_use
+fn _us_fail_ff(code, fname, what, w1, x1: f64, w2, x2: f64): i64 {
+    if (sakshi_get_level() >= SK_DEBUG) {
+        var vh[24];
+        var vbuf[96];
+        var vb = _us_sb_on(&vh, &vbuf, 96);
+        str_builder_add_cstr(vb, w1);
+        str_builder_putc(vb, 61);
+        _us_fmt_f64_display(vb, x1);
+        str_builder_add_cstr(vb, ", ");
+        str_builder_add_cstr(vb, w2);
+        str_builder_putc(vb, 61);
+        _us_fmt_f64_display(vb, x2);
+        _us_fail_event(code, fname, what, vb);
+    }
+    return code;
+}
+
+# The refusal of `fname` with `code` on the integer `n`, named `what` (`"num_nodes"`). Returns `code`.
+#must_use
+fn _us_fail_i(code, fname, what, n): i64 {
+    if (sakshi_get_level() >= SK_DEBUG) {
+        var vh[24];
+        var vbuf[32];
+        var vb = _us_sb_on(&vh, &vbuf, 32);
+        str_builder_add_int(vb, n);
+        _us_fail_event(code, fname, what, vb);
+    }
+    return code;
+}

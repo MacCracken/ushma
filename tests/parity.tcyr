@@ -18,8 +18,10 @@
 
 include "tests/ulp.cyr"
 include "src/constants.cyr"
+include "src/error.cyr"
 include "src/mathx_data.cyr"
 include "src/mathx.cyr"
+include "src/fmtf.cyr"
 include "src/material_data.cyr"
 include "src/state_data.cyr"
 include "src/phase_data.cyr"
@@ -29,10 +31,10 @@ alloc_init();
 
 include "tests/parity_core.cyr"
 
-# The Rust variant name of an error code. src/error.cyr arrives in M1; until then no row returns an error.
+# The Rust variant name of an error code (src/error.cyr).
 #must_use
 fn _par_error_name(code): i64 {
-    return "Unknown";
+    return us_error_name(code);
 }
 
 # ── constants ───────────────────────────────────────────────────────────────────────
@@ -283,6 +285,26 @@ fn _par_math(fp, fl): i64 {
     return 0;
 }
 
+# ── fmtf ────────────────────────────────────────────────────────────────────────────
+# `fmtf::display` / `fmtf::json` rows: src/fmtf.cyr's two forms of one f64, against Rust's `{}` and serde_json's text.
+
+var _par_fmtf_sb = 0;
+
+# One fmtf row: 1 when handled, 0 for a function fmtf has no counterpart for (a defect).
+fn _par_fmtf(fp, fl): i64 {
+    if (_par_fmtf_sb == 0) { _par_fmtf_sb = str_builder_new(); }
+    store64(_par_fmtf_sb + 8, 0);
+    var x: f64 = _par_in(0);
+    if (_par_eq(fp, fl, "fmtf::display") == 1) {
+        _us_fmt_f64_display(_par_fmtf_sb, x);
+    } else {
+        if (_par_eq(fp, fl, "fmtf::json") != 1) { return 0; }
+        _us_fmt_f64_json(_par_fmtf_sb, x);
+    }
+    _par_got_s(load64(_par_fmtf_sb), load64(_par_fmtf_sb + 8));
+    return 1;
+}
+
 # ── routing and hooks ───────────────────────────────────────────────────────────────
 
 # Routes a row to its module's dispatcher. 0 (pending) for a module or function with none yet: the module rows of
@@ -291,6 +313,7 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
     _par_got_n = 0;
     if (_par_eq(mp, ml, "constants") == 1) { return _par_constants(fp, fl); }
     if (_par_eq(mp, ml, "math") == 1) { return _par_math(fp, fl); }
+    if (_par_eq(mp, ml, "fmtf") == 1) { return _par_fmtf(fp, fl); }
     if (_par_in_n != 0) { return 0; }   # a preset row has no inputs; anything else is a module function
     if (_par_eq(mp, ml, "material") == 1) {
         return _par_table(fp, fl, "material", "ALL_MATERIALS", _par_tab_material, US_MATERIAL_COUNT,

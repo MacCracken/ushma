@@ -1,6 +1,7 @@
 # ushma golden corpus: one module per line; tests/parity.tcyr replays each
 chem
 constants
+fmtf
 material
 math
 phase

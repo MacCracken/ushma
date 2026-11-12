@@ -48,6 +48,7 @@ if [ -f scripts/oracle/Cargo.toml ]; then
             esac
         fi
     done
+    PAT='vendor_fmtf' run python3 -I -B scripts/vendor_fmtf.py --check
 else
     skip "scripts/oracle/ (M0 part 2)"
 fi
@@ -78,8 +79,9 @@ for t in '' --bounds --win --aarch64; do
     [ "$warns" -eq 0 ] || FAILED+=("cyrius test $t ($warns ushma warning lines)")
 done
 
-# 4. Benchmarks, hygiene, lock, audit.
+# 4. Benchmarks, fuzzing (every reader of untrusted input), hygiene, lock, audit.
 PAT='passed|failed|ns' TAILN=18 run cyrius bench
+PAT='passed|failed|FAIL|fuzz:' run cyrius fuzz --poison --bounds
 echo "=== fmt/lint/doc per file"
 fails=0
 for f in src/*.cyr tests/*.tcyr tests/*.bcyr tests/*.fcyr tests/*.cyr; do

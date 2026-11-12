@@ -1,17 +1,114 @@
-# ushma fuzz harness
+# ushma fuzz harness: every reader of untrusted input (port plan §6). Run with `cyrius fuzz --poison --bounds`.
+#
+# The targets so far: USHMA_LOG parsing (`us_log_parse`). The JSON decoders and the daimon response handling join as
+# they port. Each target must accept any bytes: return a defined result, never crash, never write outside its
+# buffers (the poisoning allocator and --bounds check that).
+#
+# Inputs are seeded and deterministic: mutations (flips, inserts, deletes, truncations, case changes) of the valid
+# forms, and random strings of 0 … 40 bytes.
 
-# Fuzz target: receives one input of len bytes at data. The JSON decoders, USHMA_LOG parsing and
-# daimon response handling are added here as they port (port plan §6).
+include "src/constants.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+
+var _fz_state = 0x2545F4914F6CDD1D;
+var _fz_bad = 0;
+
+# xorshift64*: the next pseudo-random word.
+fn fz_next(): i64 {
+    var x = _fz_state;
+    x = x ^ ((x >> 12) & 0x000FFFFFFFFFFFFF);
+    x = x ^ (x << 25);
+    x = x ^ ((x >> 27) & 0x0000001FFFFFFFFF);
+    _fz_state = x;
+    return x * 0x2545F4914F6CDD1D;
+}
+
+# A pseudo-random integer in 0 .. n - 1.
+fn fz_below(n): i64 {
+    var r = fz_next() & 0x7FFFFFFFFFFFFFFF;
+    return r % n;
+}
+
+# Fuzz target: one input of `len` bytes at `data`, through every reader.
 fn fuzz_main(data, len) {
-    if (len == 0) { return 0; }
+    var lv = us_log_parse(data, len);
+    if (lv < 0 - 1 || lv > LOG_FATAL + 1) { _fz_bad = _fz_bad + 1; }
     return 0;
 }
 
-# Fuzz entry point: runs the target once on a fixed seed input.
+# Copies seed `s` into `buf` and mutates it in place; returns the new length (at most `cap`).
+fn fz_mutate(buf, cap, s): i64 {
+    var n = strlen(s);
+    memcpy(buf, s, n);
+    var edits = fz_below(4);
+    var k = 0;
+    while (k < edits) {
+        var op = fz_below(5);
+        if (op == 0 && n > 0) { store8(buf + fz_below(n), fz_below(256)); }
+        if (op == 1 && n < cap) {
+            var at = fz_below(n + 1);
+            var j = n;
+            while (j > at) { store8(buf + j, load8(buf + j - 1)); j = j - 1; }
+            store8(buf + at, fz_below(256));
+            n = n + 1;
+        }
+        if (op == 2 && n > 0) {
+            var at2 = fz_below(n);
+            var j2 = at2;
+            while (j2 + 1 < n) { store8(buf + j2, load8(buf + j2 + 1)); j2 = j2 + 1; }
+            n = n - 1;
+        }
+        if (op == 3) { n = fz_below(n + 1); }
+        if (op == 4 && n > 0) {
+            var at3 = fz_below(n);
+            var c = load8(buf + at3);
+            if (c >= 97 && c <= 122) { store8(buf + at3, c - 32); }
+        }
+        k = k + 1;
+    }
+    return n;
+}
+
+# Runs the targets over 50,000 seeded inputs and reports.
 fn main() {
     alloc_init();
-    fuzz_main("test", 4);
-    println("fuzz: ok");
+    var cap = 48;
+    var buf = alloc(cap + 1);
+    var seeds = alloc(8 * 10);
+    store64(seeds, "trace");
+    store64(seeds + 8, "debug");
+    store64(seeds + 16, "info");
+    store64(seeds + 24, "warn");
+    store64(seeds + 32, "error");
+    store64(seeds + 40, "off");
+    store64(seeds + 48, "ushma=debug");
+    store64(seeds + 56, " ushma=Warn\t");
+    store64(seeds + 64, "ushma=");
+    store64(seeds + 72, "debug,info");
+    var i = 0;
+    while (i < 50000) {
+        var n = 0;
+        if (fz_below(4) == 0) {
+            n = fz_below(41);
+            var k = 0;
+            while (k < n) { store8(buf + k, fz_below(256)); k = k + 1; }
+        } else {
+            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(10)));
+        }
+        fuzz_main(buf, n);
+        i = i + 1;
+    }
+    if (_fz_bad != 0) {
+        print("fuzz: out-of-range results: ", 28);
+        println_int(_fz_bad);
+        return 1;
+    }
+    println("fuzz: ok (50000 inputs)");
     return 0;
 }
 

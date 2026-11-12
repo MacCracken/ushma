@@ -83,6 +83,11 @@ impl Rng {
         x.wrapping_mul(0x2545_f491_4f6c_dd1d)
     }
 
+    /// The next 64 raw bits (a random f64 bit pattern, for the printers' sweep).
+    pub fn bits(&mut self) -> u64 {
+        self.next_u64()
+    }
+
     /// Uniform in [0, 1): the top 53 bits as a fraction.
     pub fn unit(&mut self) -> f64 {
         #[allow(clippy::cast_precision_loss)]

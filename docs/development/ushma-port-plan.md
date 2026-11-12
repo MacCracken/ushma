@@ -189,7 +189,7 @@
 |---|---|---|---|---|---|
 | M1 | *(correctly rounded primitives, P3)* | — | — | — | `src/mathx.cyr` (private `_us_cr_*`) |
 | M1 | *(JSON infrastructure, P7)* | — | — | — | `src/fmtf.cyr` (vendored), `src/json.cyr` (shared reader/writer helpers) |
-| M1 | `error.rs` | 37 | — | 18 | `src/error.cyr` (+ its JSON codec) |
+| M1 | `error.rs` | 37 | — | 18 | `src/error.cyr` (codes, names, messages) |
 | M1 | `validate.rs` | 19 | (private) | 2 | `src/validate.cyr` |
 | M1 | `logging.rs` | 14 | 2 | 1 | `src/logging.cyr` (log + sakshi, `USHMA_LOG`) |
 | M1 | *(8 public constants in 4 modules)* | — | (consts) | — | `src/constants.cyr` (generated) |
@@ -212,8 +212,7 @@ benchmarks and 5 examples (M8). `lib.rs` (29 lines of module wiring and re-expor
 `[lib]` / `[lib.ai]` module lists.
 
 Each module's types get their serde-compatible JSON codecs in that module's milestone. The 28
-types are:
-- `UshmaError`;
+types (`UshmaError` derives no serde) are:
 - `ThermalMaterial`;
 - `GasData`;
 - `Phase`, `SubstanceData`;
@@ -242,14 +241,14 @@ and anything that moves results noticeably goes to the maintainer first.
 
 | # | Rust 1.4.0 | Cyrius 2.0.0 | Golden comparison |
 |---|---|---|---|
-| 1 | `UshmaError` variants with `String` payloads (`DivisionByZero`, `InvalidParameter`, `SubstanceNotFound`) and f64 payloads | `US_ERR_*` code enum (append-only) carried in the value-form `Result`'s one payload word; the detail fields go in an error record (an out-pointer or a per-call error slot, as prakash's `err_out`). The JSON stays serde's shape, and `us_error_message` prints thiserror's Display text | code class A; JSON document class A; message text class A |
+| 1 | `UshmaError` variants (thiserror) with `String` and f64 payloads, and formatted Display text | `US_ERR_*` codes (append-only) in the value-form `Result`'s payload; `us_error_name` / `us_error_message` give each code a fixed message; the failing values go to a level-gated sakshi event at the failure site. Rust's formatted message strings are Rust machinery and are not reproduced | the error code, class A; message text not compared |
 | 2 | `ThermalGrid2D` stores `Vec<Vec<f64>>`; Crank–Nicolson allocates per step (roadmap backlog: breaking in Rust) | flat row-major buffer + dims; caller-reusable scratch; the JSON keeps Rust's nested-array shape | state dump flattened the same way, class B; JSON class A |
 | 3 | lookups by `&str` name | table index (−1 when absent) plus a name search | same index set, class A |
 | 4 | `register_agent` is `async` (tokio + reqwest) | synchronous `sandhi_http_post_opts` with the same 30 s timeout | request bytes (method, headers, body) class A against the oracle's captured request; the path is mapped by #6 |
 | 5 | `EnvFilter` directives in `USHMA_LOG` (`ushma=debug,…`) | the level names trace / debug / info / warn / error, and `ushma=<level>`; other directive syntax is refused with a warning | parsing rows class A; log line format is sakshi's, not compared |
-| 6 | `POST /v1/agents/register`, reads `agent_id` (matches no daimon that exists) | `POST /v1/agents`, reads `id`, as daimon 2.5.6 serves (P8) | the oracle's path is mapped to `/v1/agents`; response handling is checked against a stub answering as daimon 2.5.6
+| 6 | `POST /v1/agents/register`, reads `agent_id` (matches no daimon that exists) | `POST /v1/agents`, reads `id`, as daimon 2.5.6 serves (P8) | the oracle's path is mapped to `/v1/agents`; response handling is checked against a stub answering as daimon 2.5.6 (`{"id":N}`, 401, 500, malformed, missing `id`) |
 | 7 | reqwest's `timeout(30 s)` bounds the whole request | `total_ms` **and** `read_ms`, 30 s each: `total_ms` alone doesn't bound a server silent before its first byte (probe 7) | stub rows: a silent server gives the timeout error |
-| 8 | reqwest sends exactly host, content-type, content-length, authorization, `accept: */*` | sandhi adds `User-Agent`, `Accept-Encoding: identity`, `TE: trailers`, `Connection: close`; the port sets `Accept: */*` | body bytes class A; the oracle's five headers by value (names case-insensitive); sandhi's four listed as extra (probe 7) | (`{"id":N}`, 401, 500, malformed, missing `id`) |
+| 8 | reqwest sends exactly host, content-type, content-length, authorization, `accept: */*` | sandhi adds `User-Agent`, `Accept-Encoding: identity`, `TE: trailers`, `Connection: close`; the port sets `Accept: */*` | body bytes class A; the oracle's five headers by value (names case-insensitive); sandhi's four listed as extra (probe 7) |
 | — | exponents written as rounded decimals (`powf(1.0/3.0)`, `powf(1.0/6.0)`) and similar exact-constant misses | fixed under the accuracy policy as each module ports (P2) | mapped per row, as kimiya's ADR 0002 #12 |
 
 ### 3.4 Not carried
@@ -550,7 +549,7 @@ Every milestone ends with these gates:
 
 | Milestone | Modules | Key work | Golden grid (minimum) |
 |---|---|---|---|
-| **M1 Foundation, logging & transfer** | error, constants, validate, mathx, fmtf, json, logging, material, transfer | `US_ERR_*` + detail and the error's JSON; `finite_gt`/`finite_ge`; correctly rounded primitives; the shortest-digit printer and JSON helpers; `us_log_init`/`_with_level` (`USHMA_LOG`); the span macro pattern every later module uses; 10-material table; 32 transfer functions (conduction, convection, radiation, resistance networks, fins, LMTD, ε-NTU, Re/Pr/Nu, Blasius, three view factors) | every material × field + JSON; each function over seeded physical grids plus NaN/±∞/0/negative edges; LMTD at ΔT₁ = ΔT₂ and 1 ulp apart; NTU 0…100 × C_r 0…1; view factors across the 0.01 switch; every `USHMA_LOG` form |
+| **M1 Foundation, logging & transfer** | error, constants, validate, mathx, fmtf, json, logging, material, transfer | `US_ERR_*` codes, names and fixed messages, failure detail to sakshi; `finite_gt`/`finite_ge`; correctly rounded primitives; the shortest-digit printer and JSON helpers; `us_log_init`/`_with_level` (`USHMA_LOG`); the span macro pattern every later module uses; 10-material table; 32 transfer functions (conduction, convection, radiation, resistance networks, fins, LMTD, ε-NTU, Re/Pr/Nu, Blasius, three view factors) | every material × field + JSON; each function over seeded physical grids plus NaN/±∞/0/negative edges; LMTD at ΔT₁ = ΔT₂ and 1 ulp apart; NTU 0…100 × C_r 0…1; view factors across the 0.01 switch; every `USHMA_LOG` form |
 | **M2 Equations of state & entropy** | state, entropy | Ideal gas, Van der Waals, Redlich–Kwong, Peng–Robinson; virial; Pitzer–Abbott Z; Kay's rule; work and adiabatic relations; entropy changes; Carnot; Helmholtz/Gibbs; Clausius inequality; `GasData` JSON | every gas × T × V_m incl. near-critical; Pitzer Tr × Pr incl. Z ≤ 0; mixtures with zero/NaN/negative fractions; Carnot at T_c ≥ T_h |
 | **M3 Phase & steam** (M3a phase, M3b tables + Region 4, M3c superheated) | phase, steam | substance table; `phase_at`'s piecewise curves and sublimation; latent heats (CO₂ sublimation); Clausius–Clapeyron; generated steam tables; exact IF97 Region 4 both ways; saturated by T/P; quality with the clamp; ln-P tier interpolation; `superheated_by_entropy`; JSON for `Phase`, `SubstanceData` and the three steam types | `phase_at` T × P per substance across every join; every steam row through the lookups; Region 4 over 273.16…647.096 K and back; between-row/-tier points; every tier through `superheated_by_entropy`; x = 1 + 2e-16 |
 | **M4 Cycles** (M4a gas, M4b steam, M4c diagrams + comparison) | cycle | Otto, Diesel, Brayton, Rankine (s-inversion), refrigeration (negative net work), heat-pump COP, `compare_cycles`, T-s/P-v diagrams; results through out-pointers (probe 3); JSON for the 7 cycle types | r, γ, T grids; Rankine/refrigeration over the table range incl. 13.2 % and COP ≤ Carnot; every diagram's point list; `processes` shorter than `state_points` |
@@ -591,7 +590,7 @@ Every std f64 method in non-test `src/`, 1.4.0, whole crate:
 | hisab 1.4.0 `calc::integral_simpson` (`debye_cv`, n = 200) | hisab `calc_integral_simpson(f, a, b, steps, out)` | class D (probe 1) |
 | hisab 1.4.0 `num::gaussian_elimination` (`ThermalNetwork::solve`) | ganita `ganita_mat_lu` + `ganita_mat_lu_solve` (P4, ADR 0003 amendment) | class B, 0 ulp and the same refusals (probe 9) |
 | serde + serde_json (28 types; `ai` bodies) | bayan (`bayan_json_parse`, `bayan_json_v_*`, `bayan_json_build`) + `str_builder` writers + vendored `fmtf.cyr` (P7) | class A |
-| thiserror (`UshmaError` Display) | `US_ERR_*` codes + `us_error_message`, with f64 values printed by `fmtf.cyr` under Rust's Display rules | class A (message bytes) |
+| thiserror (`UshmaError` Display) | `US_ERR_*` codes, `us_error_name` / `us_error_message` (fixed text per code); the values at the failure site go to sakshi | the code, class A |
 | tracing (`#[instrument]` ×28, all DEBUG) | sakshi `sakshi_span_enter(name, len)` / `sakshi_span_exit()` | span names and levels: reference tests |
 | tracing-subscriber (`EnvFilter`, `USHMA_LOG`) | `log_init(level)`, `log_set_level`, io `getenv("USHMA_LOG")` | class A on parsing (§3.3 #5) |
 | reqwest 0.13 (POST, JSON, bearer, 30 s, `error_for_status`) | sandhi `sandhi_http_post_opts(url, headers, body, len, opts)`, `sandhi_headers_new`/`_set`, `sandhi_http_options_*` (timeouts), `sandhi_http_status`/`_body`/`_err_kind` | request bytes class A |
@@ -606,7 +605,7 @@ the mapping.
 
 | Rust | Cyrius |
 |---|---|
-| `Result<T, UshmaError>` + `?` | value-form `Result` (`Ok`/`Err` return a (tag, payload) register pair with zero allocation; bind both halves, `var t, v = f();`) + `?`, in fns declared `: Result` (L6995–7131, L7244–7294). The payload is one word, so it carries the code, and details go to an error record (§3.3 #1) |
+| `Result<T, UshmaError>` + `?` | value-form `Result` (`Ok`/`Err` return a (tag, payload) register pair with zero allocation; bind both halves, `var t, v = f();`) + `?`, in fns declared `: Result` (L6995–7131, L7244–7294). The payload is one word: the code (§3.3 #1) |
 | structs of f64 fields | `struct S { cp: f64; … }`, with typed fields doing float arithmetic (L1676–1753). Every field must be initialized, and a struct literal is legal only as a declaration's initializer (L1514–1573) |
 | `pub const` struct instances (`WATER`, `GAS_NITROGEN`, …) and `ALL_*: &[&T]` slices | `const` holds only an integer, f64 or string (L7737–7772). An instance becomes a top-level `var` with constant fields, which is baked into the image (L8711–8761). Array initializers refuse struct elements (L429–432), so the tables are generated typed **column arrays** plus named index constants, and `ALL_*` is an index range |
 | `Phase`, `ProcessKind`, `CycleKind`, `Side` | integer enums with `US_`-prefixed variants (P6); variant names are global (L391–396); `match` with `_ =>` where Rust's `#[non_exhaustive]` mattered (L7451–7465) |
@@ -690,7 +689,7 @@ ports filed, and the note for kimiya.
 | Milestone | Status | Golden rows | Reference tests | Benches | Notes |
 |---|---|---|---|---|---|
 | M0 Prep & initialize | 🟡 part 1 done 2026-11-11 (steps 0–3: tag verified, Rust bench baseline, `cyrius port`, repairs, manifest, ADRs 0001–0005; gates green on ELF, `--bounds`, PE, aarch64) | 15,738 (constants 9, math 15,687, table presets 42) | — | Rust baseline: 63 | Parts 2a (math check, generator, validate.py), 2b (table data, probe_tables.py), 2c-1 (parity harness: 3,374 ok, 0 failed) 2c-2a (MPFR corrected oracle: 26 rows), 2c-2b (mathx vendored) and 2c-3 (CR tanh, cr_verify: every golden row gated, 15,712 ok + 26 accepted) done. Part 3a (probes 2, 3, 4, 5, 6, 8, 12) done; P6 settled as a written prefix. Part 3b (probes 1, 7, 9, 10, 11) done: Simpson class D, P4 moved to LU (class B), the ai client sets `read_ms`, both bundles link on three targets, P7 stands with the ADR 0005 amendment's decoder rules. Upstream filed (step 10, §8: 11 issues with verified repros, 7 addenda, a kimiya note; `upstream/README.md`), uncommitted in the targets. Next: M1 |
-| M1 Foundation, logging & transfer | ☐ | | | | |
+| M1 Foundation, logging & transfer | 🟡 M1a done 2026-11-11 | fmtf 26,088 | foundation 68 | — | Parts: **M1a** error (codes, names, messages; detail to sakshi), validate, fmtf (vendored), logging (`USHMA_LOG`, level-gated spans), the `[lib]` / `[lib.ai]` profiles; **M1b** json helpers, material + its JSON, the first fuzz target; **M1c** transfer 1 (conduction to boundary layers, 18 fns); **M1d** transfer 2 (fins, exchangers, view factors, 14 fns), benches against Rust, coverage, surface parity, the M1 gates |
 | M2 Equations of state & entropy | ☐ | | | | |
 | M3 Phase & steam | ☐ | | | | M3a/b/c |
 | M4 Cycles | ☐ | | | | M4a/b/c |

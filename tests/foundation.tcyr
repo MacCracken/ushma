@@ -1,0 +1,190 @@
+# M1a foundation tests: src/error.cyr, src/validate.cyr, src/logging.cyr.
+#
+# Rust 1.4.0's error.rs tests (18) check that each variant's Display text names its value. ushma's errors are
+# codes with fixed messages (ADR 0002 row 1), so these check the codes instead: one per Rust variant, in Rust's
+# order, each with its Rust name and a message; and that a refusal reports its value through sakshi at DEBUG and
+# stays silent otherwise. validate.rs's two tests (finite_gt / finite_ge on NaN and ±∞) and logging.rs's one
+# (init is safe to call twice) port as they are, with every USHMA_LOG form.
+
+include "src/constants.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+
+# The ring's raw bytes contain the C string `s`: 1 or 0.
+fn ring_has(s): i64 {
+    var cap = 4096;
+    var buf = alloc(cap);
+    var n = sakshi_ring_read_raw(buf, cap);
+    var sl = strlen(s);
+    var k = 0;
+    while (k + sl <= n) {
+        if (memeq(buf + k, s, sl) == 1) { return 1; }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# The codes: Rust's 16 variants in order, then Deserialize; names and messages.
+fn test_error_codes() {
+    test_group("error codes");
+    assert_eq(US_ERR_NONE, 0, "US_ERR_NONE is 0");
+    assert_eq(US_ERR_INVALID_TEMPERATURE, 1, "InvalidTemperature is Rust's first variant");
+    assert_eq(US_ERR_INVALID_CYCLE_PARAMETER, 16, "InvalidCycleParameter is Rust's sixteenth");
+    assert_eq(US_ERR_DESERIALIZE, 17, "Deserialize is appended after them");
+    assert_eq(US_ERR_COUNT, 18, "18 codes");
+    assert_streq(us_error_name(US_ERR_INVALID_TEMPERATURE), "InvalidTemperature", "name of InvalidTemperature");
+    assert_streq(us_error_name(US_ERR_SUPERHEAT_OUT_OF_RANGE), "SuperheatOutOfRange", "name of SuperheatOutOfRange");
+    assert_streq(us_error_name(US_ERR_NONE), "None", "name of US_ERR_NONE");
+    assert_streq(us_error_name(US_ERR_COUNT), "Unknown", "a value past the codes is Unknown");
+    assert_streq(us_error_name(0 - 1), "Unknown", "a negative value is Unknown");
+    assert_streq(us_error_message(US_ERR_COUNT), "unknown error", "message past the codes");
+    assert_streq(us_error_message(US_ERR_INVALID_PRESSURE), "pressure must be positive", "message of InvalidPressure");
+    var k = 1;
+    var named = 0;
+    var distinct = 1;
+    while (k < US_ERR_COUNT) {
+        if (streq(us_error_name(k), "Unknown") == 0) { named = named + 1; }
+        if (streq(us_error_message(k), "unknown error") == 1) { distinct = 0; }
+        var j = 1;
+        while (j < k) {
+            if (streq(us_error_name(j), us_error_name(k)) == 1) { distinct = 0; }
+            if (streq(us_error_message(j), us_error_message(k)) == 1) { distinct = 0; }
+            j = j + 1;
+        }
+        k = k + 1;
+    }
+    assert_eq(named, US_ERR_COUNT - 1, "every code has a name");
+    assert_eq(distinct, 1, "names and messages are distinct, and every code has a message");
+}
+
+# finite_gt / finite_ge: NaN, ±∞ and the bound itself.
+fn test_validate_predicates() {
+    test_group("validate predicates");
+    var nan: f64 = 0.0 / 0.0;
+    var inf: f64 = 1.0 / 0.0;
+    var ninf: f64 = 0.0 - inf;
+    var nz: f64 = 0.0 - 0.0;
+    assert_eq(_us_finite_gt(1.0, 0.0), 1, "1 > 0");
+    assert_eq(_us_finite_gt(0.0, 0.0), 0, "0 is not > 0");
+    assert_eq(_us_finite_gt(nz, 0.0), 0, "-0 is not > 0");
+    assert_eq(_us_finite_gt(-1.0, 0.0), 0, "-1 is not > 0");
+    assert_eq(_us_finite_gt(nan, 0.0), 0, "NaN is refused by finite_gt");
+    assert_eq(_us_finite_gt(inf, 0.0), 0, "+inf is refused by finite_gt");
+    assert_eq(_us_finite_gt(ninf, 0.0), 0, "-inf is refused by finite_gt");
+    assert_eq(_us_finite_ge(0.0, 0.0), 1, "0 >= 0");
+    assert_eq(_us_finite_ge(nz, 0.0), 1, "-0 >= 0");
+    assert_eq(_us_finite_ge(-1.0, 0.0), 0, "-1 is not >= 0");
+    assert_eq(_us_finite_ge(nan, 0.0), 0, "NaN is refused by finite_ge");
+    assert_eq(_us_finite_ge(inf, 0.0), 0, "+inf is refused by finite_ge");
+}
+
+# A refusal returns its code, reports its value at DEBUG, and is silent at INFO.
+fn test_validate_failures() {
+    test_group("validate failures");
+    sakshi_output_buffer();
+    sakshi_set_level(SK_INFO);
+    sakshi_ring_clear();
+    assert_eq(_us_fail_f(US_ERR_INVALID_CONDUCTIVITY, "us_conduction", "conductivity", -1.0),
+        US_ERR_INVALID_CONDUCTIVITY, "the refusal returns its code");
+    assert_eq(sakshi_ring_event_count(), 0, "at INFO a refusal emits nothing");
+    sakshi_set_level(SK_DEBUG);
+    sakshi_ring_clear();
+    var c = _us_fail_f(US_ERR_INVALID_CONDUCTIVITY, "us_conduction", "conductivity", -1.0);
+    assert_eq(sakshi_ring_event_count(), 1, "at DEBUG a refusal emits one event");
+    assert_eq(ring_has("us_conduction: negative thermal conductivity"), 1, "the event names the fn and the error");
+    assert_eq(ring_has("conductivity"), 1, "the event names the value");
+    assert_eq(ring_has("-1"), 1, "the event carries the value's Display text");
+    sakshi_ring_clear();
+    var c2 = _us_fail_ff(US_ERR_STEAM_TABLE_OUT_OF_RANGE, "us_steam", "state", "T", 1000.5, "P", 0.25);
+    assert_eq(c2, US_ERR_STEAM_TABLE_OUT_OF_RANGE, "the two-value refusal returns its code");
+    assert_eq(ring_has("T=1000.5, P=0.25"), 1, "the two values, in Display form");
+    sakshi_ring_clear();
+    var c3 = _us_fail_i(US_ERR_INVALID_PARAMETER, "us_grid", "num_nodes", 2);
+    assert_eq(c3, US_ERR_INVALID_PARAMETER, "the integer refusal returns its code");
+    assert_eq(ring_has("num_nodes"), 1, "the integer refusal names its value");
+    sakshi_ring_clear();
+    assert_eq(_us_fail(US_ERR_DIVISION_BY_ZERO, "us_x"), US_ERR_DIVISION_BY_ZERO, "the bare refusal returns its code");
+    assert_eq(ring_has("us_x: division by zero in thermal calculation"), 1, "the bare refusal's event");
+    sakshi_set_level(SK_INFO);
+    sakshi_ring_clear();
+}
+
+# Every USHMA_LOG form.
+fn test_log_parse() {
+    test_group("USHMA_LOG parsing");
+    assert_eq(us_log_parse("trace", 5), LOG_TRACE, "trace");
+    assert_eq(us_log_parse("debug", 5), LOG_DEBUG, "debug");
+    assert_eq(us_log_parse("info", 4), LOG_INFO, "info");
+    assert_eq(us_log_parse("warn", 4), LOG_WARN, "warn");
+    assert_eq(us_log_parse("error", 5), LOG_ERROR, "error");
+    assert_eq(us_log_parse("off", 3), LOG_FATAL + 1, "off");
+    assert_eq(us_log_parse("INFO", 4), LOG_INFO, "case-insensitive");
+    assert_eq(us_log_parse("  Debug\t", 8), LOG_DEBUG, "surrounding spaces and tabs");
+    assert_eq(us_log_parse("ushma=warn", 10), LOG_WARN, "ushma=<level>");
+    assert_eq(us_log_parse("ushma=OFF", 9), LOG_FATAL + 1, "ushma=OFF");
+    assert_eq(us_log_parse("", 0), 0 - 1, "empty is refused");
+    assert_eq(us_log_parse("verbose", 7), 0 - 1, "an unknown level is refused");
+    assert_eq(us_log_parse("ushma=", 6), 0 - 1, "ushma= without a level is refused");
+    assert_eq(us_log_parse("ushma=x", 7), 0 - 1, "ushma= with no level word is refused");
+    assert_eq(us_log_parse("other=debug", 11), 0 - 1, "another target is refused");
+    assert_eq(us_log_parse("debug,info", 10), 0 - 1, "a directive list is refused");
+    assert_eq(us_log_parse("deb", 3), 0 - 1, "a prefix is refused");
+}
+
+# init applies the default with USHMA_LOG unset, and is safe to call twice (logging.rs's test).
+fn test_log_init() {
+    test_group("logging init");
+    if (getenv("USHMA_LOG") == 0) {
+        assert_eq(us_log_init(), LOG_INFO, "us_log_init defaults to info");
+        assert_eq(us_log_init_with_level("debug"), LOG_DEBUG, "the default level applies");
+        assert_eq(sakshi_get_level(), SK_DEBUG, "and reaches sakshi");
+        assert_eq(us_log_init_with_level("nonsense"), LOG_INFO, "a default that names no level is info");
+        assert_eq(us_log_init_with_level("off"), LOG_FATAL + 1, "off");
+        assert_eq(sakshi_get_level(), SK_ERROR, "off leaves sakshi at its quietest");
+    }
+    assert(us_log_init() >= 0, "init twice is safe");
+    sakshi_set_level(SK_INFO);
+    log_init(LOG_INFO);
+}
+
+# Spans: silent below DEBUG, an enter and an exit at DEBUG.
+fn test_spans() {
+    test_group("spans");
+    sakshi_output_buffer();
+    sakshi_set_level(SK_INFO);
+    sakshi_ring_clear();
+    _us_span_enter("us_conduction", 13);
+    _us_span_exit();
+    assert_eq(sakshi_ring_event_count(), 0, "no span event at INFO");
+    assert_eq(sakshi_span_depth(), 0, "no span opened at INFO");
+    sakshi_set_level(SK_DEBUG);
+    sakshi_ring_clear();
+    _us_span_enter("us_conduction", 13);
+    assert_eq(sakshi_span_depth(), 1, "a span opened at DEBUG");
+    _us_span_exit();
+    assert_eq(sakshi_span_depth(), 0, "and closed");
+    assert_eq(sakshi_ring_event_count(), 2, "ENTER and EXIT at DEBUG");
+    assert_eq(ring_has("us_conduction"), 1, "the span carries its name");
+    sakshi_set_level(SK_INFO);
+    sakshi_ring_clear();
+}
+
+# Runs every group and returns the failure count.
+fn main() {
+    alloc_init();
+    test_error_codes();
+    test_validate_predicates();
+    test_validate_failures();
+    test_log_parse();
+    test_log_init();
+    test_spans();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

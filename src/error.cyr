@@ -1,0 +1,93 @@
+# error.cyr — ushma's error codes (ADR 0002 row 1).
+#
+# A fallible ushma function returns a value-form Result whose Err payload is one of these codes:
+# `var t, v = us_f(..); if (is_err_result(t) == 1) { .. v is the code .. }`. The values follow the order of Rust 1.4.0's
+# `UshmaError` variants and are append-only (the Cyrius form of #[non_exhaustive]); codes Cyrius needs that Rust has
+# no variant for are appended after them. Each code has a fixed message. The values that made a call fail (the
+# temperature, the ratio, the reason) are not carried in the error: the failing function reports them in a
+# level-gated sakshi event at DEBUG (`_us_fail_*`, src/validate.cyr), so they cost nothing unless asked for.
+#
+# The golden corpus names an error by its Rust variant (`E:InvalidTemperature`), so us_error_name gives that name and
+# the parity is on the code.
+
+enum UsError {
+    US_ERR_NONE = 0;
+    US_ERR_INVALID_TEMPERATURE = 1;
+    US_ERR_INVALID_PRESSURE = 2;
+    US_ERR_INVALID_VOLUME = 3;
+    US_ERR_INVALID_CONDUCTIVITY = 4;
+    US_ERR_INVALID_SPECIFIC_HEAT = 5;
+    US_ERR_UNDEFINED_PHASE_TRANSITION = 6;
+    US_ERR_DIVISION_BY_ZERO = 7;
+    US_ERR_INVALID_PARAMETER = 8;
+    US_ERR_SUBSTANCE_NOT_FOUND = 9;
+    US_ERR_STEAM_TABLE_OUT_OF_RANGE = 10;
+    US_ERR_INVALID_QUALITY = 11;
+    US_ERR_SUPERHEAT_OUT_OF_RANGE = 12;
+    US_ERR_INVALID_COMPRESSION_RATIO = 13;
+    US_ERR_INVALID_CUTOFF_RATIO = 14;
+    US_ERR_INVALID_PRESSURE_RATIO = 15;
+    US_ERR_INVALID_CYCLE_PARAMETER = 16;
+    US_ERR_DESERIALIZE = 17;
+}
+
+# The number of codes, US_ERR_NONE included: every code is in 0 .. US_ERR_COUNT - 1.
+const US_ERR_COUNT = 18;
+
+# The name of an error code: Rust 1.4.0's variant name (`"InvalidTemperature"`) for the codes that mirror one,
+# `"Deserialize"` for the JSON decoders' code, `"None"` for US_ERR_NONE, and `"Unknown"` for a value that is no code.
+#must_use
+#pure
+fn us_error_name(code): cstring {
+    match code {
+        US_ERR_NONE => { return "None"; }
+        US_ERR_INVALID_TEMPERATURE => { return "InvalidTemperature"; }
+        US_ERR_INVALID_PRESSURE => { return "InvalidPressure"; }
+        US_ERR_INVALID_VOLUME => { return "InvalidVolume"; }
+        US_ERR_INVALID_CONDUCTIVITY => { return "InvalidConductivity"; }
+        US_ERR_INVALID_SPECIFIC_HEAT => { return "InvalidSpecificHeat"; }
+        US_ERR_UNDEFINED_PHASE_TRANSITION => { return "UndefinedPhaseTransition"; }
+        US_ERR_DIVISION_BY_ZERO => { return "DivisionByZero"; }
+        US_ERR_INVALID_PARAMETER => { return "InvalidParameter"; }
+        US_ERR_SUBSTANCE_NOT_FOUND => { return "SubstanceNotFound"; }
+        US_ERR_STEAM_TABLE_OUT_OF_RANGE => { return "SteamTableOutOfRange"; }
+        US_ERR_INVALID_QUALITY => { return "InvalidQuality"; }
+        US_ERR_SUPERHEAT_OUT_OF_RANGE => { return "SuperheatOutOfRange"; }
+        US_ERR_INVALID_COMPRESSION_RATIO => { return "InvalidCompressionRatio"; }
+        US_ERR_INVALID_CUTOFF_RATIO => { return "InvalidCutoffRatio"; }
+        US_ERR_INVALID_PRESSURE_RATIO => { return "InvalidPressureRatio"; }
+        US_ERR_INVALID_CYCLE_PARAMETER => { return "InvalidCycleParameter"; }
+        US_ERR_DESERIALIZE => { return "Deserialize"; }
+        _ => { return "Unknown"; }
+    }
+    return "Unknown";
+}
+
+# The fixed message of an error code (`"temperature must be positive"`): `"no error"` for US_ERR_NONE and
+# `"unknown error"` for a value that is no code.
+#must_use
+#pure
+fn us_error_message(code): cstring {
+    match code {
+        US_ERR_NONE => { return "no error"; }
+        US_ERR_INVALID_TEMPERATURE => { return "temperature must be positive (absolute zero is 0 K)"; }
+        US_ERR_INVALID_PRESSURE => { return "pressure must be positive"; }
+        US_ERR_INVALID_VOLUME => { return "volume must be positive"; }
+        US_ERR_INVALID_CONDUCTIVITY => { return "negative thermal conductivity"; }
+        US_ERR_INVALID_SPECIFIC_HEAT => { return "negative specific heat"; }
+        US_ERR_UNDEFINED_PHASE_TRANSITION => { return "phase transition undefined"; }
+        US_ERR_DIVISION_BY_ZERO => { return "division by zero in thermal calculation"; }
+        US_ERR_INVALID_PARAMETER => { return "invalid parameter"; }
+        US_ERR_SUBSTANCE_NOT_FOUND => { return "substance not found"; }
+        US_ERR_STEAM_TABLE_OUT_OF_RANGE => { return "steam table out of range"; }
+        US_ERR_INVALID_QUALITY => { return "invalid quality (dryness fraction), must be in [0, 1]"; }
+        US_ERR_SUPERHEAT_OUT_OF_RANGE => { return "superheated steam lookup out of range"; }
+        US_ERR_INVALID_COMPRESSION_RATIO => { return "invalid compression ratio, must be > 1"; }
+        US_ERR_INVALID_CUTOFF_RATIO => { return "invalid cutoff ratio, must be > 1"; }
+        US_ERR_INVALID_PRESSURE_RATIO => { return "invalid pressure ratio, must be > 1"; }
+        US_ERR_INVALID_CYCLE_PARAMETER => { return "invalid cycle parameter"; }
+        US_ERR_DESERIALIZE => { return "malformed JSON document"; }
+        _ => { return "unknown error"; }
+    }
+    return "unknown error";
+}

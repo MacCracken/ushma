@@ -1,0 +1,89 @@
+# logging.cyr — ushma's logging setup and its spans, on lib/log.cyr and sakshi.
+#
+# us_log_init / us_log_init_with_level set the level from the USHMA_LOG environment variable, or from a default when
+# it is unset. USHMA_LOG takes a level name, `trace` `debug` `info` `warn` `error` or `off` (any case), optionally as
+# `ushma=<level>`, ushma being the only target there is. Anything else is refused with one warning, and the default
+# applies (ADR 0002 row 5).
+#
+# Spans: every function Rust 1.4.0 instrumented at DEBUG opens `_us_span_enter("us_<name>", len)` and closes
+# `_us_span_exit()` around its work. sakshi's span calls never test the level (M0 probe 8: 192 ns into the ring
+# buffer), so these do: with DEBUG off a span costs one level test, about 1.6 ns.
+
+# The LOG_* level a USHMA_LOG word names (`p`, `n` bytes; case-insensitive), or -1. `off` is LOG_FATAL + 1, which no
+# event reaches.
+#must_use
+fn _us_log_level_word(p, n): i64 {
+    var buf[8];
+    if (n < 3 || n > 5) { return 0 - 1; }
+    var k = 0;
+    while (k < n) {
+        var c = load8(p + k);
+        if (c >= 65 && c <= 90) { c = c + 32; }
+        store8(&buf + k, c);
+        k = k + 1;
+    }
+    if (n == 5 && memeq(&buf, "trace", 5) == 1) { return LOG_TRACE; }
+    if (n == 5 && memeq(&buf, "debug", 5) == 1) { return LOG_DEBUG; }
+    if (n == 4 && memeq(&buf, "info", 4) == 1) { return LOG_INFO; }
+    if (n == 4 && memeq(&buf, "warn", 4) == 1) { return LOG_WARN; }
+    if (n == 5 && memeq(&buf, "error", 5) == 1) { return LOG_ERROR; }
+    if (n == 3 && memeq(&buf, "off", 3) == 1) { return LOG_FATAL + 1; }
+    return 0 - 1;
+}
+
+# The LOG_* level a USHMA_LOG value names (`p`, `n` bytes): a level word, or `ushma=<level word>`, with surrounding
+# spaces and tabs ignored. -1 when it is neither.
+#must_use
+fn us_log_parse(p, n): i64 {
+    var s = 0;
+    var e = n;
+    while (s < e && (load8(p + s) == 32 || load8(p + s) == 9)) { s = s + 1; }
+    while (e > s && (load8(p + e - 1) == 32 || load8(p + e - 1) == 9)) { e = e - 1; }
+    if (e - s > 6 && memeq(p + s, "ushma=", 6) == 1) { s = s + 6; }
+    return _us_log_level_word(p + s, e - s);
+}
+
+# Applies a LOG_* level to lib/log.cyr and sakshi (`off`: sakshi's ERROR threshold, and log.cyr past FATAL).
+fn _us_log_apply(level): i64 {
+    if (level > LOG_FATAL) {
+        log_init(LOG_FATAL);
+        sakshi_set_level(SK_ERROR);
+        return level;
+    }
+    log_init(level);
+    return level;
+}
+
+# Sets ushma's log level from USHMA_LOG, or `default_level` (a level name, as a C string) when USHMA_LOG is unset.
+# A USHMA_LOG value that names no level warns once and uses the default; a default that names none is `info`.
+# Returns the LOG_* level applied (LOG_FATAL + 1 for `off`).
+fn us_log_init_with_level(default_level): i64 {
+    var dl = us_log_parse(default_level, strlen(default_level));
+    if (dl < 0) { dl = LOG_INFO; }
+    var env = getenv("USHMA_LOG");
+    if (env == 0) { return _us_log_apply(dl); }
+    var lv = us_log_parse(env, strlen(env));
+    if (lv < 0) {
+        _us_log_apply(dl);
+        log_warn("USHMA_LOG names no level (trace/debug/info/warn/error/off, or ushma=<level>): default used");
+        return dl;
+    }
+    return _us_log_apply(lv);
+}
+
+# Sets ushma's log level from USHMA_LOG, defaulting to `info`. Returns the LOG_* level applied.
+fn us_log_init(): i64 {
+    return us_log_init_with_level("info");
+}
+
+# Opens a DEBUG span named `name` (`len` bytes) when DEBUG is on.
+fn _us_span_enter(name, len) {
+    if (sakshi_get_level() >= SK_DEBUG) { sakshi_span_enter(name, len); }
+    return 0;
+}
+
+# Closes the span `_us_span_enter` opened, when DEBUG is on.
+fn _us_span_exit() {
+    if (sakshi_get_level() >= SK_DEBUG) { sakshi_span_exit(); }
+    return 0;
+}

@@ -18,7 +18,7 @@ that moves results noticeably goes to the maintainer first, and the decision is 
 
 | # | Rust 1.4.0 | Cyrius 2.0.0 | Golden comparison |
 |---|---|---|---|
-| 1 | `UshmaError` variants with `String` and f64 payloads | `US_ERR_*` code enum (append-only) in the value-form `Result`'s one payload word. The detail fields go in an error record (out-pointer or per-call error slot). serde's JSON shape is kept, and `us_error_message` prints thiserror's Display text | code, JSON document and message text: class A |
+| 1 | `UshmaError` variants (thiserror) with `String` and f64 payloads, and formatted Display text | `US_ERR_*` codes (append-only) in the value-form `Result`'s payload; `us_error_name(code)` and `us_error_message(code)` give each code a fixed message. The failing values go to a level-gated sakshi event at the failure site, not into the error. Rust's formatted message strings are Rust machinery, not a capability, so they are not reproduced (the port is Cyrius-native: Rust is the oracle for results) | the error **code**, class A; message text is ushma's own and not compared |
 | 2 | `ThermalGrid2D` stores `Vec<Vec<f64>>`; Crank–Nicolson allocates per step | flat row-major buffer + dims; caller-reusable scratch; the JSON keeps the nested-array shape | state dump flattened the same way, class B; JSON class A |
 | 3 | lookups by `&str` name | table index (−1 when absent) plus a name search | same index set, class A |
 | 4 | `register_agent` is `async` (tokio + reqwest) | synchronous `sandhi_http_post_opts`, same 30 s timeout. Cyrius async doesn't run on aarch64 | request bytes (method, headers, body) class A; path per #6 |

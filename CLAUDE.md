@@ -49,6 +49,7 @@ cargo test --manifest-path rust-old/Cargo.toml --all-features   # the Rust oracl
 cargo run --release --locked --manifest-path scripts/oracle/Cargo.toml -- --check   # golden corpus + generated .cyr up to date
 python3 -I -B scripts/oracle/validate.py .                                         # independent check of the corpus
 python3 -I -B scripts/oracle/mathx_tables.py --check                               # src/mathx_data.cyr current
+python3 -I -B scripts/vendor_fmtf.py --check                                      # src/fmtf.cyr is impetus's, renamed
 OUT=/tmp/ushma-gates bash scripts/gates.sh                                         # every gate, every target
 ```
 
@@ -126,6 +127,10 @@ each one is a bug:
 - **Everything ports.** Every Rust module, feature, test, benchmark and example has a Cyrius
   counterpart. Nothing is dropped or deferred. If something seems to have no Cyrius counterpart,
   grep `lib/` and the Cyrius docs first, then show the evidence and ask.
+- **Cyrius-native, not Rust-shaped.** Rust is the oracle for *results*, not the design. Port each capability the
+  way a Cyrius library builds it (stdlib and sibling idioms), never Rust's mechanics: no thiserror-style formatted
+  error strings, no trait or derive plumbing recreated for its own sake. Decide the Cyrius form, record it in an ADR,
+  and compare against Rust only on results.
 - **The Rust code is frozen.** `rust-old/` is never edited and never re-released. When the
   oracle is wrong, the port does it right and an ADR 0002 row maps the oracle's rows.
 - **Cross-check against `rust-old/`.** The correctness bar is "matches what Rust did", within the
