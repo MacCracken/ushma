@@ -191,6 +191,9 @@ each one is a bug:
 - Build with `cyrius build`, not raw `cat file | cc5` — the manifest auto-resolves deps
 - Source files only need project includes — stdlib auto-resolves from `cyrius.cyml`
 - `var buf[N]` = N **bytes**, not N entries
+- `p + n` on a typed pointer (a `p: *T` parameter, `&s` of a struct-typed local) steps `n · sizeof(T)`, not n bytes. A
+  byte offset into a struct goes through an untyped copy (`var q = p;` then `q + 8`); `&buf + n` on a byte array is
+  bytes already. Getting it wrong reads or writes far outside the struct (M4a: a SIGSEGV and wrong state points)
 
 ## DO NOT
 

@@ -50,6 +50,10 @@ TYPES = {
     "SaturatedEntry": ("UsSaturated", "saturated"),
     "WetSteamProperties": ("UsWetSteam", "wet_steam"),
     "SuperheatedEntry": ("UsSuperheated", "superheated"),
+    "StatePoint": ("UsStatePoint", "state_point"),
+    "ProcessKind": ("UsProcess", "process"),
+    "CycleKind": ("UsCycle", "cycle"),
+    "CycleResult": ("UsCycleResult", "cycle_result"),
 }
 # Rust item -> the Cyrius names that carry it ("fn x", "const X", "enum X", "struct X"), where the rules give none.
 MAPPED = {

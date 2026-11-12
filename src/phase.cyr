@@ -64,46 +64,13 @@ fn us_phase_to_json(sb, ph) {
     return 0;
 }
 
-# The phase a JSON string node names, or -1.
-fn _us_phase_of_str(v): i64 {
-    if (v == 0 || bayan_json_v_tag(v) != JTAG_STR) { return 0 - 1; }
-    var s = bayan_json_v_str(v);
-    var k = 0;
-    while (k < US_PHASE_COUNT) {
-        var name = us_phase_name(k);
-        var nl = strlen(name);
-        if (str_len(s) == nl && memeq(str_data(s), name, nl) == 1) { return k; }
-        k = k + 1;
-    }
-    return 0 - 1;
-}
-
 # Reads a `Phase` document (`n` bytes at `buf`; its tree on allocator `a`): Ok(US_PHASE_*), or Err(US_ERR_DESERIALIZE).
 # serde's forms: the variant name as a string, or an object of that one key with a `null` value.
 #must_use
 fn us_phase_from_json_a(a, buf, n): Result {
-    var v = _us_jr_parse(a, buf, n);
-    if (v == 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_phase_from_json")); }
-    var t = bayan_json_v_tag(v);
-    if (t == JTAG_STR) {
-        var ph = _us_phase_of_str(v);
-        if (ph < 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_phase_from_json")); }
-        return Ok(ph);
-    }
-    if (t == JTAG_OBJ && bayan_json_v_obj_len(v) == 1) {
-        var key = bayan_json_v_obj_key(v, 0);
-        var val = bayan_json_v_obj_val(v, 0);
-        if (val != 0 && bayan_json_v_tag(val) == JTAG_NULL) {
-            var k = 0;
-            while (k < US_PHASE_COUNT) {
-                var name = us_phase_name(k);
-                var nl = strlen(name);
-                if (str_len(key) == nl && memeq(str_data(key), name, nl) == 1) { return Ok(k); }
-                k = k + 1;
-            }
-        }
-    }
-    return Err(_us_fail(US_ERR_DESERIALIZE, "us_phase_from_json"));
+    var ph = _us_jr_unit_enum(_us_jr_parse(a, buf, n), &us_phase_name, US_PHASE_COUNT);
+    if (ph < 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_phase_from_json")); }
+    return Ok(ph);
 }
 
 # us_phase_from_json_a on the global heap.

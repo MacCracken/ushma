@@ -27,6 +27,7 @@ ADRs 0001–0005.
   rewritten for the port; ADRs 0001–0005 (port with a frozen oracle, API divergences, ganita
   Gaussian elimination, correct rounding, serde-compatible JSON)
 
+- **CLAUDE.md** — a new rule. `p + n` on a typed pointer (a `p: *T` parameter, or `&s` of a struct-typed local) steps `n · sizeof(T)` bytes, so a byte offset goes through an untyped copy (`var q = p;`). M4a's first build wrote state points at `out + 8·k` on a `*UsStatePoint`, which gave a SIGSEGV and wrong points. The fuzz harness's `fz_substance` read the same way, out of bounds, and is fixed
 - **transfer** — `us_lmtd_parallel` and `us_lmtd_counter` return `Err(v)` / `Ok(v)` from their helper's result instead of the pair `(t, v)`. The pair form worked where it was the only return, but cyrius warns that beside an `Err(..)` path it is read as a single value, so the port uses one form throughout (found writing `superheated_by_entropy`)
 - **transfer** — `us_conduction` and `us_radiation` now open their spans as `conduction` and `radiation`, Rust's span names (CLAUDE.md); M1c had named them `us_conduction` and `us_radiation`
 - **scripts/gates.sh, CI** — the gates now run `cyrius coverage --exec --min 80`, `scripts/surface_parity.py` and `scripts/rust_test_ledger.py --check` (both were SKIP "from M1"). CI gains `distlib --check`, `fuzz --poison --bounds`, the coverage gate and both parity scripts
@@ -41,6 +42,28 @@ ADRs 0001–0005.
 - **scripts/oracle** — serde_json is built with `float_roundtrip`: its default float parse reads 35,970 of 160,320 of its own shortest texts back 1–2 ulp off (probe 11). Writing is unchanged, and the golden corpus is unaffected
 
 ### Added
+- **M4a, the cycle types and the ideal-gas cycles** (port plan §6): `src/cycle.cyr`'s first 15 functions and its first 4 types.
+  - **Types:** `UsProcess` and `UsCycle` hold Rust's `ProcessKind` and `CycleKind` (`US_PROCESS_ISENTROPIC` …, `US_CYCLE_OTTO` …, append-only), with `us_process_name` / `us_cycle_name`. `UsStatePoint` holds a `StatePoint`, and `UsCycleResult` a `CycleResult`. All four have JSON.
+  - **Functions:** the process helpers (`us_isochoric_heat`, `us_isobaric_heat`, `us_adiabatic_work`, `us_adiabatic_temp_from_pressure`) and the ideal-gas cycles (`us_otto_cycle`, `us_diesel_cycle`, `us_brayton_cycle`).
+  - **Behaviour:** Rust's operation order, with ln and pow correctly rounded. The three cycles open spans under Rust's names.
+  - **Results:** the caller owns a `UsCycleResult`, and each analysis fills it (ADR 0002 row 10). Its state points and processes are two stdlib vecs on the result's own allocator, sized and stored in place, so a reused result allocates nothing after its first analysis (1,000 analyses, 0 heap bytes). `us_cycle_state` / `us_cycle_process` read a result; `us_cycle_push_state` / `us_cycle_push_process` build one by hand.
+  - **Golden rows:** `tests/golden/cycle.tsv` (new, 2,839 rows: A 144, B 747, C 1,948; 395 refusals).
+    - The helpers on seeded grids and at their edges.
+    - The three cycles over r, γ and T grids, with Diesel's cutoff ratio at r ± 1 ulp and Brayton's T₃ at T₂ ± 1 ulp.
+    - 144 JSON rows.
+    - Every row passes. glibc's `log` misrounds inside one Otto row (`tests/golden/cycle.cr.tsv`), and 10 JSON rows are accepted under ADR 5's mapped divergences.
+  - **`validate.py`** models all 7 functions and reproduces their 2,695 rows.
+  - **Tests:** `tests/cycle.tcyr` (104 assertions) ports 30 of Rust's 59 cycle tests, every one due at M4a, and checks each refusal's code. M4b and M4c bring the rest. Reference tests cover:
+    - a result's document;
+    - the three spans;
+    - a reused result;
+    - every allocation refused in turn.
+  - **Fuzzing:** the harness reads `StatePoint`, `ProcessKind`, `CycleKind` and `CycleResult` documents (691 results read and round-tripped in 50,000 inputs). Its targets are grouped by shape (`fz_enum`, `fz_f64`), and its buffer is 2,048 bytes for the 1.4 KB result documents.
+  - **Benches:** Rust's three ideal-gas cycle benchmarks, recorded against Rust's.
+  - **The review:** storing the state points in place cut Otto from 746 to 510 ns. 24 `vec_push` calls had cost 266 ns, and the stdlib's byte-loop `memcpy` was no faster (274 ns for 160 B, against 45 ns for a word loop; cyrius's open `memcpy` issue).
+  - **`US_ERR_OUT_OF_MEMORY`** (new, `src/error.cyr`): code 18, `"OutOfMemory"`, for a refused allocation where Rust would abort the process. The cycle analyses return it, and so do the result's init, its push accessors and its decoder. No library code calls `vec_push`, which aborts on a refused grow.
+  - **`src/json.cyr`:** `_us_jr_unit_enum` reads a unit enum through its name fn, and phase's decoder uses it too.
+  - **`scripts/surface_parity.py`:** the four cycle types are in TYPES. cycle stays scheduled until M4c. Probed as ported, it lacks only M4b's and M4c's 15 items (29 of 44 present).
 - **M3c, superheated steam and the M3 gates** (port plan §6): `us_superheated_lookup` (filling a `UsSuperheated`: within a tier linearly in T from the saturated-vapor anchor; between tiers h and s linearly in ln P and v log-linearly) and `us_superheated_by_entropy` (the exact inverse for the table's model: its breakpoints sorted, bisected, the segment solved), with `SuperheatedEntry`'s JSON. steam is 10 of 10, and M3 is complete.
   - **Behaviour:** Rust's operation order, ln and exp correctly rounded; every `?` of Rust's propagates the inner refusal; `superheated_by_entropy` opens its span under Rust's name. Where Rust's `SuperheatOutOfRange` carries the requested (T, P), the refusal's DEBUG event does (`T=…, P=…`).
   - **Golden rows:** `tests/golden/steam.tsv` grows to 31,113 (B 13,880, C 17,036, A 197; 8,806 refusals). The lookup runs at every tier pressure ± 1 ulp and between tiers, at every table temperature ± 1 ulp, the midpoints and around each pressure's saturation temperature (10,999 rows); `superheated_by_entropy` at those pressures over every breakpoint's entropy ± 1 ulp, the midpoints and past the range (6,037). Every row passes; glibc misrounds a ln or exp inside 10 of them (`tests/golden/steam.cr.tsv`: 6 lookups, 4 inversions), and the port matches MPFR there.

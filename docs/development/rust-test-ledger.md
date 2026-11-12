@@ -5,14 +5,14 @@
 > (`# rust <file>: <test>`), at its module's milestone. Nothing is deferred: a test not ported yet is one whose
 > milestone hasn't come. The golden corpus (`tests/golden/`) checks every ported function on its grid besides.
 
-**479 Rust tests:** 275 ported; 64 at M4, 62 at M5, 27 at M6, 51 at M7.
+**479 Rust tests:** 305 ported; 34 at M4, 62 at M5, 27 at M6, 51 at M7.
 
 | Rust file | Tests | Ported | Due, unported | Later (milestone) |
 |---|---:|---:|---:|---|
 | `src/ai.rs` | 7 | 0 | 0 | 7 (M7) |
 | `src/bridge.rs` | 31 | 0 | 0 | 31 (M7) |
 | `src/chem.rs` | 23 | 0 | 0 | 23 (M5) |
-| `src/cycle.rs` | 59 | 0 | 0 | 59 (M4) |
+| `src/cycle.rs` | 59 | 30 | 0 | 29 (M4) |
 | `src/entropy.rs` | 23 | 23 | 0 | — |
 | `src/error.rs` | 18 | 18 | 0 | — |
 | `src/integration/soorat.rs` | 13 | 0 | 0 | 13 (M7) |
@@ -26,12 +26,42 @@
 | `src/transfer.rs` | 67 | 67 | 0 | — |
 | `src/validate.rs` | 2 | 2 | 0 | — |
 | `tests/integration.rs` | 30 | 19 | 0 | 5 (M4), 6 (M5) |
-| **Total** | **479** | **275** | **0** | |
+| **Total** | **479** | **305** | **0** | |
 
 ## Where each is ported
 
 | Rust test | Cyrius test |
 |---|---|
+| `src/cycle.rs` `test_adiabatic_temp_from_pressure_invalid` | `tests/cycle.tcyr` `test_helpers` |
+| `src/cycle.rs` `test_adiabatic_temp_from_pressure_roundtrip` | `tests/cycle.tcyr` `test_helpers` |
+| `src/cycle.rs` `test_adiabatic_work_compression` | `tests/cycle.tcyr` `test_helpers` |
+| `src/cycle.rs` `test_adiabatic_work_expansion` | `tests/cycle.tcyr` `test_helpers` |
+| `src/cycle.rs` `test_brayton_back_work_ratio` | `tests/cycle.tcyr` `test_brayton` |
+| `src/cycle.rs` `test_brayton_efficiency_analytical` | `tests/cycle.tcyr` `test_brayton` |
+| `src/cycle.rs` `test_brayton_energy_conservation` | `tests/cycle.tcyr` `test_brayton` |
+| `src/cycle.rs` `test_brayton_invalid_inputs` | `tests/cycle.tcyr` `test_brayton` |
+| `src/cycle.rs` `test_brayton_t3_must_exceed_t2` | `tests/cycle.tcyr` `test_brayton` |
+| `src/cycle.rs` `test_cycle_kind_serde_roundtrip` | `tests/cycle.tcyr` `test_types` |
+| `src/cycle.rs` `test_cycle_kind_traits` | `tests/cycle.tcyr` `test_types` |
+| `src/cycle.rs` `test_diesel_efficiency_analytical` | `tests/cycle.tcyr` `test_diesel` |
+| `src/cycle.rs` `test_diesel_energy_conservation` | `tests/cycle.tcyr` `test_diesel` |
+| `src/cycle.rs` `test_diesel_invalid_inputs` | `tests/cycle.tcyr` `test_diesel` |
+| `src/cycle.rs` `test_diesel_isobaric_pressures` | `tests/cycle.tcyr` `test_diesel` |
+| `src/cycle.rs` `test_ideal_gas_cycles_first_law` | `tests/cycle.tcyr` `test_brayton` |
+| `src/cycle.rs` `test_isobaric_heat` | `tests/cycle.tcyr` `test_helpers` |
+| `src/cycle.rs` `test_isochoric_heat` | `tests/cycle.tcyr` `test_helpers` |
+| `src/cycle.rs` `test_otto_efficiency_analytical` | `tests/cycle.tcyr` `test_otto` |
+| `src/cycle.rs` `test_otto_energy_conservation` | `tests/cycle.tcyr` `test_otto` |
+| `src/cycle.rs` `test_otto_four_state_points` | `tests/cycle.tcyr` `test_otto` |
+| `src/cycle.rs` `test_otto_higher_compression_higher_efficiency` | `tests/cycle.tcyr` `test_otto` |
+| `src/cycle.rs` `test_otto_invalid_inputs` | `tests/cycle.tcyr` `test_otto` |
+| `src/cycle.rs` `test_otto_isentropic_entropy` | `tests/cycle.tcyr` `test_otto` |
+| `src/cycle.rs` `test_otto_isochoric_volumes` | `tests/cycle.tcyr` `test_otto` |
+| `src/cycle.rs` `test_otto_temperature_ordering` | `tests/cycle.tcyr` `test_otto` |
+| `src/cycle.rs` `test_process_kind_serde_roundtrip` | `tests/cycle.tcyr` `test_types` |
+| `src/cycle.rs` `test_process_kind_traits` | `tests/cycle.tcyr` `test_types` |
+| `src/cycle.rs` `test_state_point_construction` | `tests/cycle.tcyr` `test_types` |
+| `src/cycle.rs` `test_state_point_serde_roundtrip` | `tests/cycle.tcyr` `test_types` |
 | `src/entropy.rs` `test_carnot_cop` | `tests/entropy.tcyr` `test_carnot` |
 | `src/entropy.rs` `test_carnot_cop_invalid` | `tests/entropy.tcyr` `test_carnot` |
 | `src/entropy.rs` `test_carnot_efficiency` | `tests/entropy.tcyr` `test_carnot` |

@@ -1,0 +1,430 @@
+# cycle tests (M4a: the types, the process helpers, the Otto, Diesel and Brayton cycles).
+#
+# Rust 1.4.0's cycle.rs tests for these, one for one (30 of its 59; the steam cycles, comparison and diagrams join
+# with M4b and M4c), each also checking the refusal's code. Then reference tests of a result's document, of the three
+# cycles' spans, of a result reused across calls (its vecs refilled, no allocation after the first), and of every
+# allocation refused in turn.
+
+include "src/constants.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+include "src/json.cyr"
+include "src/cycle.cyr"
+
+# |a − b| as an f64.
+fn absdiff(a: f64, b: f64): f64 {
+    var d: f64 = a - b;
+    if (d < 0.0) { d = 0.0 - d; }
+    return d;
+}
+
+# Asserts a Result is Err(code).
+fn errc(t, v, code, name) {
+    assert_eq(is_err_result(t), 1, name);
+    if (is_err_result(t) == 1) { assert_streq(us_error_name(v), us_error_name(code), name); }
+    return 0;
+}
+
+# The ring's raw bytes contain the C string `s`: 1 or 0.
+fn ring_has(s): i64 {
+    var cap = 8192;
+    var buf = alloc(cap);
+    var n = sakshi_ring_read_raw(buf, cap);
+    var sl = strlen(s);
+    var k = 0;
+    while (k + sl <= n) {
+        if (memeq(buf + k, s, sl) == 1) { return 1; }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# The types: a state point, the process and cycle kinds, and their JSON round trips.
+# rust src/cycle.rs: test_state_point_construction, test_process_kind_traits, test_cycle_kind_traits
+# rust src/cycle.rs: test_state_point_serde_roundtrip, test_cycle_kind_serde_roundtrip
+# rust src/cycle.rs: test_process_kind_serde_roundtrip
+fn test_types() {
+    test_group("types");
+    var sp: UsStatePoint;
+    sp.temperature = 300.0;
+    sp.pressure = 101325.0;
+    sp.volume = 0.02241;
+    sp.entropy = 150.0;
+    sp.enthalpy = 6000.0;
+    var t0: f64 = sp.temperature;
+    var d0: f64 = absdiff(t0, 300.0);
+    assert(d0 < 0.0000000001, "a state point holds its temperature");
+    assert(US_PROCESS_ISENTROPIC != US_PROCESS_ISOCHORIC, "Isentropic is not Isochoric");
+    assert_streq(us_process_name(US_PROCESS_ISENTROPIC), "Isentropic", "the Debug name");
+    assert(US_CYCLE_OTTO != US_CYCLE_DIESEL, "Otto is not Diesel");
+    assert_streq(us_cycle_name(US_CYCLE_DIESEL), "Diesel", "a cycle's name");
+    assert_eq(us_process_name(US_PROCESS_COUNT), 0, "no name past the last process");
+    sp.temperature = 500.0;
+    sp.pressure = 200000.0;
+    sp.volume = 0.05;
+    sp.entropy = 200.0;
+    sp.enthalpy = 10000.0;
+    var sb = str_builder_new();
+    us_state_point_to_json(sb, &sp);
+    var back: UsStatePoint;
+    var t, v = us_state_point_from_json(load64(sb), load64(sb + 8), &back);
+    assert_eq(is_ok(t), 1, "a state point's document reads back");
+    var bt: f64 = back.temperature;
+    var d1: f64 = absdiff(bt, 500.0);
+    assert(d1 < 0.0000000001, "its temperature");
+    var sb2 = str_builder_new();
+    us_cycle_to_json(sb2, US_CYCLE_BRAYTON);
+    var t2, v2 = us_cycle_from_json(load64(sb2), load64(sb2 + 8));
+    assert_eq(v2, US_CYCLE_BRAYTON, "a cycle kind's document reads back");
+    var sb3 = str_builder_new();
+    us_process_to_json(sb3, US_PROCESS_ISENTHALPIC);
+    var t3, v3 = us_process_from_json(load64(sb3), load64(sb3 + 8));
+    assert_eq(v3, US_PROCESS_ISENTHALPIC, "a process's document reads back");
+}
+
+# The process heats and works, and the isentropic temperature from a pressure ratio.
+# rust src/cycle.rs: test_isochoric_heat, test_isobaric_heat, test_adiabatic_work_expansion
+# rust src/cycle.rs: test_adiabatic_work_compression, test_adiabatic_temp_from_pressure_roundtrip
+# rust src/cycle.rs: test_adiabatic_temp_from_pressure_invalid
+fn test_helpers() {
+    test_group("process helpers");
+    var q: f64 = us_isochoric_heat(1.0, 20.8, 300.0, 400.0);
+    var d: f64 = absdiff(q, 2080.0);
+    assert(d < 0.0000000001, "isochoric: 2080 J");
+    var q2: f64 = us_isobaric_heat(1.0, 29.1, 300.0, 400.0);
+    var d2: f64 = absdiff(q2, 2910.0);
+    assert(d2 < 0.0000000001, "isobaric: 2910 J");
+    var w: f64 = us_adiabatic_work(1.0, 20.8, 500.0, 300.0);
+    var want: f64 = 20.8 * 200.0;
+    var d3: f64 = absdiff(w, want);
+    assert(w > 0.0 && d3 < 0.0000000001, "an adiabatic expansion does positive work");
+    var w2: f64 = us_adiabatic_work(1.0, 20.8, 300.0, 500.0);
+    assert(w2 < 0.0, "a compression, negative");
+    var t, v = us_adiabatic_temp_from_pressure(300.0, 100000.0, 1000000.0, 1.4);
+    var t2v: f64 = v;
+    var tb, vb = us_adiabatic_temp_from_pressure(t2v, 1000000.0, 100000.0, 1.4);
+    var back: f64 = vb;
+    var d4: f64 = absdiff(back, 300.0);
+    assert(is_ok(t) == 1 && is_ok(tb) == 1 && d4 < 0.0000000001, "up and back down: 300 K");
+    var e1, f1 = us_adiabatic_temp_from_pressure(0.0, 100000.0, 200000.0, 1.4);
+    errc(e1, f1, US_ERR_INVALID_TEMPERATURE, "T1 = 0");
+    var e2, f2 = us_adiabatic_temp_from_pressure(300.0, 0.0, 200000.0, 1.4);
+    errc(e2, f2, US_ERR_INVALID_PRESSURE, "P1 = 0");
+    var e3, f3 = us_adiabatic_temp_from_pressure(300.0, 100000.0, 0.0, 1.4);
+    errc(e3, f3, US_ERR_INVALID_PRESSURE, "P2 = 0");
+    var e4, f4 = us_adiabatic_temp_from_pressure(300.0, 100000.0, 200000.0, 1.0);
+    errc(e4, f4, US_ERR_INVALID_PARAMETER, "gamma = 1");
+}
+
+# State point `i`'s field at byte offset `off` (0 T, 8 P, 16 V, 24 S, 32 H) of *r.
+fn spf(r: *UsCycleResult, i, off): f64 {
+    var sp: UsStatePoint;
+    us_cycle_state(r, i, &sp);
+    var base = &sp;
+    var x: f64 = load64(base + off);
+    return x;
+}
+
+# |heat_in − net_work − heat_out| of *r.
+fn balance(r: *UsCycleResult): f64 {
+    var qi: f64 = r.heat_in;
+    var w: f64 = r.net_work;
+    var qo: f64 = r.heat_out;
+    var b: f64 = absdiff(qi - w, qo);
+    return b;
+}
+
+# The Otto cycle: its analytical efficiency, the first law, four states and processes, the temperature order, the
+# isochores, the isentropes, compression ratio against efficiency, and the refusals.
+# rust src/cycle.rs: test_otto_efficiency_analytical, test_otto_energy_conservation, test_otto_four_state_points
+# rust src/cycle.rs: test_otto_temperature_ordering, test_otto_isochoric_volumes, test_otto_isentropic_entropy
+# rust src/cycle.rs: test_otto_higher_compression_higher_efficiency, test_otto_invalid_inputs
+fn test_otto() {
+    test_group("Otto");
+    var r: UsCycleResult;
+    var ti, vi = us_cycle_result_init(&r);
+    var t, v = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, &r);
+    assert_eq(is_ok(t), 1, "r = 8 is Ok");
+    var e8: f64 = r.efficiency;
+    var p: f64 = _us_cr_pow(8.0, 0.4);
+    var want: f64 = 1.0 - 1.0 / p;
+    var d: f64 = absdiff(e8, want);
+    assert(d < 0.000001, "eta = 1 - 1/r^(gamma-1)");
+    assert_eq(us_cycle_state_count(&r), 4, "four state points");
+    assert_eq(us_cycle_process_count(&r), 4, "four processes");
+    var t1: f64 = spf(&r, 0, 0);
+    var t2: f64 = spf(&r, 1, 0);
+    var t3: f64 = spf(&r, 2, 0);
+    var t4: f64 = spf(&r, 3, 0);
+    assert(t2 > t1 && t3 > t2 && t4 < t3, "compression heats, heat addition heats, expansion cools");
+    var v1: f64 = spf(&r, 0, 16);
+    var v2: f64 = spf(&r, 1, 16);
+    var v3: f64 = spf(&r, 2, 16);
+    var v4: f64 = spf(&r, 3, 16);
+    var dv23: f64 = absdiff(v2, v3);
+    var dv41: f64 = absdiff(v4, v1);
+    assert(dv23 < 0.0000000001 && dv41 < 0.0000000001, "V2 = V3 and V4 = V1");
+    var s1: f64 = spf(&r, 0, 24);
+    var s2: f64 = spf(&r, 1, 24);
+    var s3: f64 = spf(&r, 2, 24);
+    var s4: f64 = spf(&r, 3, 24);
+    var ds12: f64 = absdiff(s1, s2);
+    var ds34: f64 = absdiff(s3, s4);
+    assert(ds12 < 0.0000000001 && ds34 < 0.0000000001, "S1 = S2 and S3 = S4");
+    var t5, v5 = us_otto_cycle(300.0, 101325.0, 10.0, 40000.0, 1.4, 1.0, &r);
+    var b: f64 = balance(&r);
+    assert(b < 0.000001, "the first law: q_in = w + q_out");
+    var e10: f64 = r.efficiency;
+    assert(e10 > e8, "a higher compression ratio, a higher efficiency");
+    var t6, v6 = us_otto_cycle(0.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, &r);
+    errc(t6, v6, US_ERR_INVALID_TEMPERATURE, "T1 = 0");
+    var t7, v7 = us_otto_cycle(300.0, 0.0, 8.0, 50000.0, 1.4, 1.0, &r);
+    errc(t7, v7, US_ERR_INVALID_PRESSURE, "P1 = 0");
+    var t8, v8 = us_otto_cycle(300.0, 101325.0, 1.0, 50000.0, 1.4, 1.0, &r);
+    errc(t8, v8, US_ERR_INVALID_COMPRESSION_RATIO, "r = 1");
+    var t9, v9 = us_otto_cycle(300.0, 101325.0, 0.5, 50000.0, 1.4, 1.0, &r);
+    errc(t9, v9, US_ERR_INVALID_COMPRESSION_RATIO, "r = 0.5");
+    var ta, va = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.0, 1.0, &r);
+    errc(ta, va, US_ERR_INVALID_PARAMETER, "gamma = 1");
+    var tb, vb = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 0.0, &r);
+    errc(tb, vb, US_ERR_INVALID_PARAMETER, "n = 0");
+    var tc, vc = us_otto_cycle(300.0, 101325.0, 8.0, 0.0, 1.4, 1.0, &r);
+    errc(tc, vc, US_ERR_INVALID_PARAMETER, "heat_in = 0");
+    var td, vd = us_otto_cycle(300.0, 101325.0, 8.0, -100.0, 1.4, 1.0, &r);
+    errc(td, vd, US_ERR_INVALID_PARAMETER, "negative heat_in");
+    var b2: f64 = balance(&r);
+    assert(b2 < 0.000001, "a refusal leaves the result as it was");
+}
+
+# The Diesel cycle: its analytical efficiency, the first law, the isobar, and the refusals.
+# rust src/cycle.rs: test_diesel_efficiency_analytical, test_diesel_energy_conservation
+# rust src/cycle.rs: test_diesel_isobaric_pressures, test_diesel_invalid_inputs
+fn test_diesel() {
+    test_group("Diesel");
+    var r: UsCycleResult;
+    var ti, vi = us_cycle_result_init(&r);
+    var t, v = us_diesel_cycle(300.0, 101325.0, 20.0, 2.0, 1.4, 1.0, &r);
+    assert_eq(is_ok(t), 1, "r = 20, rc = 2 is Ok");
+    var eta: f64 = r.efficiency;
+    var rcg: f64 = _us_cr_pow(2.0, 1.4);
+    var rg: f64 = _us_cr_pow(20.0, 0.4);
+    var want: f64 = 1.0 - (rcg - 1.0) / (1.4 * (2.0 - 1.0) * rg);
+    var d: f64 = absdiff(eta, want);
+    assert(d < 0.000001, "eta = 1 - (rc^g - 1)/(g (rc - 1) r^(g-1))");
+    var p2: f64 = spf(&r, 1, 8);
+    var p3: f64 = spf(&r, 2, 8);
+    var dp: f64 = absdiff(p2, p3);
+    var rel: f64 = dp / p2;
+    assert(rel < 0.0000000001, "P2 = P3");
+    var t2, v2 = us_diesel_cycle(300.0, 101325.0, 18.0, 2.5, 1.4, 1.0, &r);
+    var b: f64 = balance(&r);
+    assert(b < 0.000001, "the first law");
+    var t3, v3 = us_diesel_cycle(300.0, 101325.0, 1.0, 2.0, 1.4, 1.0, &r);
+    errc(t3, v3, US_ERR_INVALID_COMPRESSION_RATIO, "r = 1");
+    var t4, v4 = us_diesel_cycle(300.0, 101325.0, 20.0, 1.0, 1.4, 1.0, &r);
+    errc(t4, v4, US_ERR_INVALID_CUTOFF_RATIO, "rc = 1");
+    var t5, v5 = us_diesel_cycle(300.0, 101325.0, 20.0, 25.0, 1.4, 1.0, &r);
+    errc(t5, v5, US_ERR_INVALID_CYCLE_PARAMETER, "rc >= r");
+}
+
+# The Brayton cycle: its analytical efficiency, the first law, the back-work ratio, T3 > T2, and the refusals; then the
+# first law of all three cycles.
+# rust src/cycle.rs: test_brayton_efficiency_analytical, test_brayton_energy_conservation
+# rust src/cycle.rs: test_brayton_back_work_ratio, test_brayton_t3_must_exceed_t2, test_brayton_invalid_inputs
+# rust src/cycle.rs: test_ideal_gas_cycles_first_law
+fn test_brayton() {
+    test_group("Brayton");
+    var r: UsCycleResult;
+    var ti, vi = us_cycle_result_init(&r);
+    var t, v = us_brayton_cycle(300.0, 101325.0, 10.0, 1400.0, 1.4, 1.0, &r);
+    assert_eq(is_ok(t), 1, "rp = 10 is Ok");
+    var eta: f64 = r.efficiency;
+    var e: f64 = 0.4 / 1.4;
+    var p: f64 = _us_cr_pow(10.0, e);
+    var want: f64 = 1.0 - 1.0 / p;
+    var d: f64 = absdiff(eta, want);
+    assert(d < 0.000001, "eta = 1 - 1/rp^((g-1)/g)");
+    var b: f64 = balance(&r);
+    assert(b < 0.000001, "the first law");
+    var bwr: f64 = r.back_work_ratio;
+    assert(bwr > 0.3 && bwr < 0.9, "a back-work ratio of 30-90%");
+    var t2, v2 = us_brayton_cycle(300.0, 101325.0, 10.0, 500.0, 1.4, 1.0, &r);
+    errc(t2, v2, US_ERR_INVALID_CYCLE_PARAMETER, "T3 = 500 K < T2 = 579 K");
+    var t3, v3 = us_brayton_cycle(300.0, 101325.0, 1.0, 1400.0, 1.4, 1.0, &r);
+    errc(t3, v3, US_ERR_INVALID_PRESSURE_RATIO, "rp = 1");
+    var t4, v4 = us_brayton_cycle(300.0, 101325.0, 0.5, 1400.0, 1.4, 1.0, &r);
+    errc(t4, v4, US_ERR_INVALID_PRESSURE_RATIO, "rp = 0.5");
+    var t5, v5 = us_brayton_cycle(300.0, 101325.0, 10.0, -100.0, 1.4, 1.0, &r);
+    errc(t5, v5, US_ERR_INVALID_TEMPERATURE, "a negative T3 is a temperature refusal");
+    var ok = 1;
+    var t6, v6 = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, &r);
+    var b1: f64 = balance(&r);
+    var q1: f64 = r.heat_in;
+    if (b1 >= 0.000001 * q1) { ok = 0; }
+    var t7, v7 = us_diesel_cycle(300.0, 101325.0, 18.0, 2.0, 1.4, 1.0, &r);
+    var b2: f64 = balance(&r);
+    var q2: f64 = r.heat_in;
+    if (b2 >= 0.000001 * q2) { ok = 0; }
+    var t8, v8 = us_brayton_cycle(300.0, 101325.0, 10.0, 1400.0, 1.4, 1.0, &r);
+    var b3: f64 = balance(&r);
+    var q3: f64 = r.heat_in;
+    if (b3 >= 0.000001 * q3) { ok = 0; }
+    assert_eq(ok, 1, "Otto, Diesel and Brayton close the first law within 1e-6");
+}
+
+# A whole result's document reads back on the global heap: the same kind, points, processes and numbers, and the same
+# bytes when written again.
+fn test_result_json() {
+    test_group("a result's document");
+    var r: UsCycleResult;
+    var ti, vi = us_cycle_result_init(&r);
+    var t, v = us_diesel_cycle(300.0, 101325.0, 20.0, 2.0, 1.4, 1.0, &r);
+    var sb = str_builder_new();
+    us_cycle_result_to_json(sb, &r);
+    var back: UsCycleResult;
+    var tb, vb = us_cycle_result_from_json(load64(sb), load64(sb + 8), &back);
+    assert_eq(is_ok(tb), 1, "a Diesel result's document reads back");
+    assert_eq(back.kind, US_CYCLE_DIESEL, "its kind");
+    assert_eq(us_cycle_state_count(&back), 4, "its four state points");
+    assert_eq(us_cycle_process(&back, 1), US_PROCESS_ISOBARIC, "its isobaric heat addition");
+    var e1: f64 = r.efficiency;
+    var e2: f64 = back.efficiency;
+    assert(e1 == e2, "its efficiency, exactly");
+    var p1: f64 = spf(&r, 2, 8);
+    var p2: f64 = spf(&back, 2, 8);
+    assert(p1 == p2, "state 3's pressure, exactly");
+    var sb2 = str_builder_new();
+    us_cycle_result_to_json(sb2, &back);
+    var n = load64(sb + 8);
+    assert(n == load64(sb2 + 8) && memeq(load64(sb), load64(sb2), n) == 1, "written again, the same bytes");
+}
+
+# A result reused across calls refills its vecs: no heap after the first; and the three cycles' spans.
+fn test_reuse_and_spans() {
+    test_group("reuse and spans");
+    var r: UsCycleResult;
+    var ti, vi = us_cycle_result_init(&r);
+    var t, v = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, &r);
+    var before = alloc_used();
+    var k = 0;
+    while (k < 1000) {
+        var tk, vk = us_brayton_cycle(300.0, 101325.0, 10.0, 1400.0, 1.4, 1.0, &r);
+        k = k + 1;
+    }
+    assert_eq(alloc_used() - before, 0, "1,000 analyses into one result: 0 heap bytes");
+    sakshi_output_buffer();
+    sakshi_set_level(SK_DEBUG);
+    sakshi_ring_clear();
+    var t1, v1 = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, &r);
+    assert_eq(ring_has("otto_cycle"), 1, "otto_cycle's span");
+    var t2, v2 = us_diesel_cycle(300.0, 101325.0, 20.0, 2.0, 1.4, 1.0, &r);
+    assert_eq(ring_has("diesel_cycle"), 1, "diesel_cycle's span");
+    var t3, v3 = us_brayton_cycle(300.0, 101325.0, 10.0, 500.0, 1.4, 1.0, &r);
+    assert_eq(ring_has("brayton_cycle"), 1, "brayton_cycle's span, refused");
+    assert_eq(sakshi_span_depth(), 0, "every span closed");
+    assert_eq(sakshi_ring_event_count(), 7, "three pairs and one refusal");
+    sakshi_set_level(SK_INFO);
+    sakshi_ring_clear();
+}
+
+# A refused allocation, at each point in turn: the result's init, an analysis's first grow, the push accessors and the
+# decoder return Err(US_ERR_OUT_OF_MEMORY) (the decoder Err(US_ERR_DESERIALIZE) where bayan's parser was refused), and
+# nothing aborts. Rust aborts the process instead.
+fn test_out_of_memory() {
+    test_group("refused allocations");
+    var ta = test_allocator();
+    var r: UsCycleResult;
+    test_allocator_fail_after(ta, 0);
+    var t0, v0 = us_cycle_result_init_a(ta, &r);
+    errc(t0, v0, US_ERR_OUT_OF_MEMORY, "init, its first vec refused");
+    test_allocator_fail_after(ta, 0 - 1);
+    var n0 = test_allocator_alloc_count(ta);
+    var t1, v1 = us_cycle_result_init_a(ta, &r);
+    assert_eq(test_allocator_alloc_count(ta) - n0, 4, "init: two vecs, two allocations each");
+    test_allocator_fail_after(ta, test_allocator_alloc_count(ta));
+    var t2, v2 = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, &r);
+    errc(t2, v2, US_ERR_OUT_OF_MEMORY, "Otto, its 20 state words past the vec's 16 refused");
+    assert_eq(us_cycle_state_count(&r) + us_cycle_process_count(&r), 0, "which leaves the result empty");
+    test_allocator_fail_after(ta, 0 - 1);
+    var t3, v3 = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, &r);
+    assert(is_ok(t3) == 1 && us_cycle_state_count(&r) == 4, "allowed, the same result fills");
+    var r2: UsCycleResult;
+    var t4, v4 = us_cycle_result_init_a(ta, &r2);
+    var sp: UsStatePoint;
+    us_cycle_state(&r, 0, &sp);
+    test_allocator_fail_after(ta, test_allocator_alloc_count(ta));
+    var k = 0;
+    var oks = 0;
+    while (k < 3) {
+        var tk, vk = us_cycle_push_state(&r2, &sp);
+        if (is_ok(tk) == 1) { oks = oks + 1; }
+        k = k + 1;
+    }
+    var t5, v5 = us_cycle_push_state(&r2, &sp);
+    assert_eq(oks, 3, "three state points fit the vec's 16 words");
+    errc(t5, v5, US_ERR_OUT_OF_MEMORY, "a fourth needs a grow");
+    assert_eq(us_cycle_state_count(&r2), 3, "which leaves the three");
+    k = 0;
+    oks = 0;
+    while (k < 16) {
+        var tp, vp = us_cycle_push_process(&r2, US_PROCESS_ISOBARIC);
+        if (is_ok(tp) == 1) { oks = oks + 1; }
+        k = k + 1;
+    }
+    var t6, v6 = us_cycle_push_process(&r2, US_PROCESS_ISOBARIC);
+    assert_eq(oks, 16, "sixteen processes fit");
+    errc(t6, v6, US_ERR_OUT_OF_MEMORY, "a seventeenth needs a grow");
+    assert_eq(us_cycle_process_count(&r2), 16, "which leaves the sixteen");
+    test_allocator_fail_after(ta, 0 - 1);
+    var sb = str_builder_new();
+    us_cycle_result_to_json(sb, &r);
+    var doc = load64(sb);
+    var dn = load64(sb + 8);
+    var out: UsCycleResult;
+    var c0 = test_allocator_alloc_count(ta);
+    var t7, v7 = us_cycle_result_from_json_a(ta, doc, dn, &out);
+    var total = test_allocator_alloc_count(ta) - c0;
+    assert(is_ok(t7) == 1 && total > 0, "the decoder allocates");
+    var clean = 1;
+    var ooms = 0;
+    k = 0;
+    while (k < total) {
+        test_allocator_fail_after(ta, test_allocator_alloc_count(ta) + k);
+        var tj, vj = us_cycle_result_from_json_a(ta, doc, dn, &out);
+        var known = 0;
+        if (is_err_result(tj) == 1 && vj == US_ERR_OUT_OF_MEMORY) {
+            ooms = ooms + 1;
+            known = 1;
+        }
+        if (is_err_result(tj) == 1 && vj == US_ERR_DESERIALIZE) { known = 1; }
+        if (known == 0) { clean = 0; }
+        k = k + 1;
+    }
+    test_allocator_fail_after(ta, 0 - 1);
+    assert_eq(clean, 1, "the decoder, each of its allocations refused in turn: an Err every time");
+    assert_eq(ooms, 5, "its two vecs and the state vec's grow: OutOfMemory");
+    var t8, v8 = us_cycle_result_from_json_a(ta, doc, dn, &out);
+    assert(is_ok(t8) == 1 && us_cycle_state_count(&out) == 4, "allowed again, the document reads");
+}
+
+# Runs every group and returns the failure count.
+fn main() {
+    alloc_init();
+    test_types();
+    test_helpers();
+    test_otto();
+    test_diesel();
+    test_brayton();
+    test_result_json();
+    test_reuse_and_spans();
+    test_out_of_memory();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

@@ -29,13 +29,15 @@ enum UsError {
     US_ERR_INVALID_PRESSURE_RATIO = 15;
     US_ERR_INVALID_CYCLE_PARAMETER = 16;
     US_ERR_DESERIALIZE = 17;
+    US_ERR_OUT_OF_MEMORY = 18;
 }
 
 # The number of codes, US_ERR_NONE included: every code is in 0 .. US_ERR_COUNT - 1.
-const US_ERR_COUNT = 18;
+const US_ERR_COUNT = 19;
 
 # The name of an error code: Rust 1.4.0's variant name (`"InvalidTemperature"`) for the codes that mirror one,
-# `"Deserialize"` for the JSON decoders' code, `"None"` for US_ERR_NONE, and `"Unknown"` for a value that is no code.
+# `"Deserialize"` for the JSON decoders' code, `"OutOfMemory"` for a refused allocation (where Rust aborts the process),
+# `"None"` for US_ERR_NONE, and `"Unknown"` for a value that is no code.
 #must_use
 #pure
 fn us_error_name(code): cstring {
@@ -58,6 +60,7 @@ fn us_error_name(code): cstring {
         US_ERR_INVALID_PRESSURE_RATIO => { return "InvalidPressureRatio"; }
         US_ERR_INVALID_CYCLE_PARAMETER => { return "InvalidCycleParameter"; }
         US_ERR_DESERIALIZE => { return "Deserialize"; }
+        US_ERR_OUT_OF_MEMORY => { return "OutOfMemory"; }
         _ => { return "Unknown"; }
     }
     return "Unknown";
@@ -87,6 +90,7 @@ fn us_error_message(code): cstring {
         US_ERR_INVALID_PRESSURE_RATIO => { return "invalid pressure ratio, must be > 1"; }
         US_ERR_INVALID_CYCLE_PARAMETER => { return "invalid cycle parameter"; }
         US_ERR_DESERIALIZE => { return "malformed JSON document"; }
+        US_ERR_OUT_OF_MEMORY => { return "an allocation was refused"; }
         _ => { return "unknown error"; }
     }
     return "unknown error";

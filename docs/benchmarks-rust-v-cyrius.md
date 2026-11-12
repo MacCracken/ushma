@@ -109,3 +109,21 @@ anyway (3 parameters: cyrius's open `#inline` issue).
 **M3c.** Between tiers the lookup pays for correct rounding: four ln and one exp are about 285 of its 483 ns. One of
 the four, ln(P_hi/P_lo), depends only on the tier pair; caching it would save about 60 ns but adds state or a
 generated table, so it is left as measured. `superheated_by_entropy` is about seven of those lookups.
+
+## M4
+
+| Benchmark | Rust 1.4.0 (ns) | Cyrius (ns) | Notes |
+|---|---|---|---|
+| cycle/otto | 64.26 | 510 | six checks; two correctly rounded pow and one ln (about 340 ns, ADR 0004); four state points stored into the reused result; the span |
+| cycle/diesel | 77.29 | 513 | seven checks (r_c < r among them), then as Otto |
+| cycle/brayton | 60.20 | 516 | seven checks (T₃ > T₂ among them), then as Otto |
+
+Each analysis fills one result, reused across the batch, as a caller reusing it would. Rust builds and drops two
+`Vec`s per call. In the gates' run the three measured 490–501 ns.
+
+**M4a's review.** The first build measured 746 ns for each cycle. Timed in parts (`pow` 146 ns, `ln` 54, the span
+11), the result's commit took 300 ns, 266 of them in its 24 `vec_push` calls (about 11 ns each). Staging the points
+and copying them was no better: the stdlib `memcpy` copies one byte per iteration, 274 ns for the 160 bytes against
+45 ns for a word loop (cyrius's open `memcpy` issue, port plan §8). A word-loop copy brought the commit to 92 ns and
+Otto to 557. Then each analysis sized the result's vecs (a truncate, once they are big enough) and stored its points
+in place, with no staging at all: 510 ns. Every row is unchanged.

@@ -22,6 +22,7 @@ include "src/phase_data.cyr"
 include "src/phase.cyr"
 include "src/steam_data.cyr"
 include "src/steam.cyr"
+include "src/cycle.cyr"
 
 # Keeps results observable, so no call can be dropped.
 var _bn_sink = 0;
@@ -356,6 +357,27 @@ fn b_sh_by_s(x): i64 {
     return tt;
 }
 
+# otto_cycle(300 K, 101325 Pa, r 8, 50 kJ, 1.4, 1 mol), into one reused result.
+fn b_otto(r: *UsCycleResult): i64 {
+    var t, v = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, r);
+    var e: f64 = r.efficiency;
+    return e;
+}
+
+# diesel_cycle(300 K, 101325 Pa, r 20, rc 2, 1.4, 1 mol).
+fn b_diesel(r: *UsCycleResult): i64 {
+    var t, v = us_diesel_cycle(300.0, 101325.0, 20.0, 2.0, 1.4, 1.0, r);
+    var e: f64 = r.efficiency;
+    return e;
+}
+
+# brayton_cycle(300 K, 101325 Pa, rp 10, 1400 K, 1.4, 1 mol).
+fn b_brayton(r: *UsCycleResult): i64 {
+    var t, v = us_brayton_cycle(300.0, 101325.0, 10.0, 1400.0, 1.4, 1.0, r);
+    var e: f64 = r.efficiency;
+    return e;
+}
+
 # Fills the two resistance lists the benchmarks use.
 fn bn_lists() {
     _bn_series = alloc(40);
@@ -462,6 +484,11 @@ fn main(): i64 {
     bn_run("steam/superheated_lookup", &b_sh_lookup, 0, 1000000);
     bn_run("steam/superheated_between_tiers", &b_sh_between, 0, 1000000);
     bn_run("steam/superheated_by_entropy", &b_sh_by_s, 0, 100000);
+    var cr: UsCycleResult;
+    var tci, vci = us_cycle_result_init(&cr);
+    bn_run("cycle/otto", &b_otto, &cr, 1000000);
+    bn_run("cycle/diesel", &b_diesel, &cr, 1000000);
+    bn_run("cycle/brayton", &b_brayton, &cr, 1000000);
     return 0;
 }
 

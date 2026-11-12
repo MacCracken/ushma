@@ -555,3 +555,31 @@ The harness's summary at the end of M3 is `10 modules, 0 failing | rows: 132784 
     (total_cmp)` for these finite positive temperatures.
   - **`steam.cr.tsv`:** 10 rows (log 5, exp 5). **Surface parity:** steam 19 of 19. **Tests:** all 46 of steam's and
     M3's 5 integration tests (ledger: 275 of 479, every one due).
+
+## 7. M4 (2026-11-12)
+
+After M4a the harness's summary is `11 modules, 0 failing | rows: 135612 ok, 0 failed, 0 measured, 0 pending, 87
+accepted (ADR 4: 47)`. It is identical on x86_64 ELF, `--bounds`, PE and aarch64.
+
+- **cycle, the ideal-gas part** (M4a): 2,839 rows (class A 144, B 747, C 1,948; 395 refusals).
+  - **The helpers:** the isochoric and isobaric heats and the adiabatic work, on seeded grids and every argument at
+    each edge, are bit-identical. `adiabatic_temp_from_pressure` has 0 ulp against MPFR, each refusal checked in
+    Rust's order.
+  - **The cycles:** Otto, Diesel and Brayton over grids of r (or r_p), γ, T₁ and the heat input. Diesel's cutoff
+    ratio runs at r ± 1 ulp, where `rc >= r` starts refusing. Brayton's T₃ runs at the T₂ it implies ± 1 ulp, where
+    `T₃ <= T₂` starts refusing. Each row carries the whole result: its kind, four state points (20 words), four
+    processes and six numbers. 0 ulp against MPFR. glibc's `log` misrounds ln(T₃/T₂) inside one Otto row
+    (`cycle.cr.tsv`), and the port matches MPFR there.
+  - **JSON:** `StatePoint`, `ProcessKind`, `CycleKind` and `CycleResult`, 144 rows. 10 are accepted under ADR 5's
+    mapped divergences: 5 for each struct decoder.
+  - **The result's shape** (ADR 0002 row 10): the caller owns it, and its vecs are refilled in place. Parity compares
+    every word the result holds, so the shape has no mapped rows.
+  - **Found in porting:** typed-pointer arithmetic. `out + 8·k` on a `*UsStatePoint` steps 8·k *points*, not bytes.
+    The first build wrote past the result, which showed as a SIGSEGV and as wrong state points. The fuzz harness's
+    `fz_substance` read past its stack struct the same way, with nothing flagging it, and is fixed. CLAUDE.md now has
+    the rule, and every byte offset goes through an untyped copy.
+  - **Allocation:** Rust aborts when an allocation is refused. The port returns `Err(US_ERR_OUT_OF_MEMORY)` (code 18,
+    appended). `tests/cycle.tcyr` refuses each allocation of the result's init, an analysis's first grow, the two
+    push accessors and every decoder allocation in turn. Each refusal is an Err, never an abort.
+  - **Surface parity:** cycle is scheduled until M4c. Probed as ported, it has 29 of its 44 items, and the missing
+    15 are M4b's and M4c's.

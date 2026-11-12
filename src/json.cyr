@@ -199,3 +199,33 @@ fn _us_jr_f64_struct(a, buf, len, w, n, field): i64 {
     }
     return 1;
 }
+
+# ── unit enums ──────────────────────────────────────────────────────────────────────
+
+# The code (0 … count − 1) whose name, `name(k)` (a fn returning variant k's C-string name), the string node `s` holds,
+# or -1.
+fn _us_jr_enum_name(s, name, count): i64 {
+    var k = 0;
+    while (k < count) {
+        var nm = fncall1(name, k);
+        var nl = strlen(nm);
+        if (str_len(s) == nl && memeq(str_data(s), nm, nl) == 1) { return k; }
+        k = k + 1;
+    }
+    return 0 - 1;
+}
+
+# A serde unit variant read from value node `v`, by serde's two forms: the variant's name as a string, or an object of
+# that one key with a `null` value. Its code (0 … count − 1, named by `name(k)`), or -1 when serde would refuse it.
+fn _us_jr_unit_enum(v, name, count): i64 {
+    if (v == 0) { return 0 - 1; }
+    var t = bayan_json_v_tag(v);
+    if (t == JTAG_STR) { return _us_jr_enum_name(bayan_json_v_str(v), name, count); }
+    if (t == JTAG_OBJ && bayan_json_v_obj_len(v) == 1) {
+        var val = bayan_json_v_obj_val(v, 0);
+        if (val != 0 && bayan_json_v_tag(val) == JTAG_NULL) {
+            return _us_jr_enum_name(bayan_json_v_obj_key(v, 0), name, count);
+        }
+    }
+    return 0 - 1;
+}

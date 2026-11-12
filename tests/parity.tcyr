@@ -36,6 +36,7 @@ include "src/phase.cyr"
 include "src/chem_data.cyr"
 include "src/steam_data.cyr"
 include "src/steam.cyr"
+include "src/cycle.cyr"
 
 alloc_init();
 
@@ -1014,6 +1015,233 @@ fn _par_steam(fp, fl): i64 {
     return 0;
 }
 
+# ── cycle ───────────────────────────────────────────────────────────────────────────
+
+# A cycle kind's golden text ("CycleKind.Otto"), or 0.
+fn _par_cycle_text(k): i64 {
+    match k {
+        US_CYCLE_OTTO => { return "CycleKind.Otto"; }
+        US_CYCLE_DIESEL => { return "CycleKind.Diesel"; }
+        US_CYCLE_BRAYTON => { return "CycleKind.Brayton"; }
+        US_CYCLE_RANKINE => { return "CycleKind.Rankine"; }
+        US_CYCLE_REFRIGERATION => { return "CycleKind.Refrigeration"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# A process's golden text ("ProcessKind.Isobaric"), or 0.
+fn _par_process_text(k): i64 {
+    match k {
+        US_PROCESS_ISENTROPIC => { return "ProcessKind.Isentropic"; }
+        US_PROCESS_ISOCHORIC => { return "ProcessKind.Isochoric"; }
+        US_PROCESS_ISOBARIC => { return "ProcessKind.Isobaric"; }
+        US_PROCESS_ISOTHERMAL => { return "ProcessKind.Isothermal"; }
+        US_PROCESS_ISENTHALPIC => { return "ProcessKind.Isenthalpic"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# The code whose golden text input token k holds (`e:` + text(code)), searching codes 0 … count − 1, or -1.
+fn _par_in_enum(k, text, count): i64 {
+    if (k >= _par_in_n || load64(_par_in_k + k * 8) != 101) { return 0 - 1; }
+    var c = 0;
+    while (c < count) {
+        if (_par_eq(load64(_par_in_v + k * 8), load64(_par_in_l + k * 8), fncall1(text, c)) == 1) { return c; }
+        c = c + 1;
+    }
+    return 0 - 1;
+}
+
+# Appends *r as its golden tokens: kind, v:n and the state points' words, v:m and the processes, the six numbers.
+fn _par_got_cycle(r: *UsCycleResult) {
+    _par_got_e(_par_cycle_text(r.kind));
+    var n = us_cycle_state_count(r);
+    _par_got_seq(n);
+    var j = 0;
+    while (j < 5 * n) {
+        _par_got_f(vec_get(r.states, j));
+        j = j + 1;
+    }
+    var m = us_cycle_process_count(r);
+    _par_got_seq(m);
+    j = 0;
+    while (j < m) {
+        _par_got_e(_par_process_text(us_cycle_process(r, j)));
+        j = j + 1;
+    }
+    var base = r;
+    _par_got_words(base + _US_CR_NUMS, 6);
+    return 0;
+}
+
+# A UsCycleResult from the row's input tokens (as _par_got_cycle writes them) into *r: 1, or 0.
+fn _par_cycle_in(r: *UsCycleResult): i64 {
+    var kind = _par_in_enum(0, &_par_cycle_text, US_CYCLE_COUNT);
+    if (kind < 0) { return 0; }
+    vec_truncate(r.states, 0);
+    vec_truncate(r.processes, 0);
+    r.kind = kind;
+    var n = _par_in(1);
+    var at = 2;
+    var j = 0;
+    while (j < 5 * n) {
+        vec_push(r.states, _par_in(at + j));
+        j = j + 1;
+    }
+    at = at + 5 * n;
+    var m = _par_in(at);
+    at = at + 1;
+    j = 0;
+    while (j < m) {
+        var pk = _par_in_enum(at + j, &_par_process_text, US_PROCESS_COUNT);
+        if (pk < 0) { return 0; }
+        vec_push(r.processes, pk);
+        j = j + 1;
+    }
+    at = at + m;
+    var base = r;
+    _par_in_words(at, 6, base + _US_CR_NUMS);
+    return 1;
+}
+
+var _par_cyc = 0;
+
+# One cycle JSON row: 1 when handled, 0 for none, -1 for unusable inputs.
+fn _par_cycle_json(fp, fl): i64 {
+    if (_par_mat_sb == 0) {
+        _par_mat_sb = str_builder_new();
+        _par_mat_arena = arena_allocator_growable(65536);
+    }
+    var dn[8];
+    var sp: UsStatePoint;
+    if (_par_eq(fp, fl, "cycle::StatePoint::to_json") == 1) {
+        if (_par_in_n != 5) { return 0 - 1; }
+        _par_in_words(0, 5, &sp);
+        store64(_par_mat_sb + 8, 0);
+        us_state_point_to_json(_par_mat_sb, &sp);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "cycle::ProcessKind::to_json") == 1) {
+        var pk = _par_in_enum(0, &_par_process_text, US_PROCESS_COUNT);
+        if (pk < 0) { return 0 - 1; }
+        store64(_par_mat_sb + 8, 0);
+        us_process_to_json(_par_mat_sb, pk);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "cycle::CycleKind::to_json") == 1) {
+        var ck = _par_in_enum(0, &_par_cycle_text, US_CYCLE_COUNT);
+        if (ck < 0) { return 0 - 1; }
+        store64(_par_mat_sb + 8, 0);
+        us_cycle_to_json(_par_mat_sb, ck);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "cycle::CycleResult::to_json") == 1) {
+        if (_par_cycle_in(_par_cyc) == 0) { return 0 - 1; }
+        store64(_par_mat_sb + 8, 0);
+        us_cycle_result_to_json(_par_mat_sb, _par_cyc);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    var kind = 0;
+    if (_par_eq(fp, fl, "cycle::StatePoint::from_json") == 1) { kind = 1; }
+    if (_par_eq(fp, fl, "cycle::ProcessKind::from_json") == 1) { kind = 2; }
+    if (_par_eq(fp, fl, "cycle::CycleKind::from_json") == 1) { kind = 3; }
+    if (_par_eq(fp, fl, "cycle::CycleResult::from_json") == 1) { kind = 4; }
+    if (kind == 0) { return 0; }
+    var doc = _par_in_text(0, &dn);
+    if (doc == 0) { return 0 - 1; }
+    var n = load64(&dn);
+    reset_via(_par_mat_arena);
+    var ok = 0;
+    if (kind == 1) {
+        var t1, v1 = us_state_point_from_json_a(_par_mat_arena, doc, n, &sp);
+        if (is_ok(t1) == 1) { _par_got_words(&sp, 5); } else { _par_got_err(v1); }
+        ok = is_ok(t1);
+    }
+    if (kind == 2) {
+        var t2, v2 = us_process_from_json_a(_par_mat_arena, doc, n);
+        if (is_ok(t2) == 1) { _par_got_e(_par_process_text(v2)); } else { _par_got_err(v2); }
+        ok = is_ok(t2);
+    }
+    if (kind == 3) {
+        var t3, v3 = us_cycle_from_json_a(_par_mat_arena, doc, n);
+        if (is_ok(t3) == 1) { _par_got_e(_par_cycle_text(v3)); } else { _par_got_err(v3); }
+        ok = is_ok(t3);
+    }
+    if (kind == 4) {
+        var r: UsCycleResult;
+        var t4, v4 = us_cycle_result_from_json_a(_par_mat_arena, doc, n, &r);
+        if (is_ok(t4) == 1) { _par_got_cycle(&r); } else { _par_got_err(v4); }
+        ok = is_ok(t4);
+    }
+    if (ok == 0 && _par_bayan_mapped_refusal(doc, n) == 1) { _par_adr5 = 1; }
+    if (ok == 1 && _par_has_int_neg_zero(doc, n) == 1) { _par_adr5 = 1; }
+    return 1;
+}
+
+# Appends a cycle analysis's Result: the result's tokens, or `E:Variant`.
+fn _par_got_cycle_res(t, v) {
+    if (is_ok(t) == 1) { _par_got_cycle(_par_cyc); } else { _par_got_err(v); }
+    return 0;
+}
+
+# One cycle row: 1 when handled, 0 for a function with no counterpart yet, -1 for unusable inputs.
+fn _par_cycle(fp, fl): i64 {
+    if (_par_cyc == 0) {
+        _par_cyc = alloc(sizeof(UsCycleResult));
+        var ti, vi = us_cycle_result_init(_par_cyc);
+    }
+    var j = _par_cycle_json(fp, fl);
+    if (j != 0) { return j; }
+    var a: f64 = _par_in(0);
+    var b: f64 = _par_in(1);
+    var c: f64 = _par_in(2);
+    var d: f64 = _par_in(3);
+    var e: f64 = _par_in(4);
+    var g: f64 = _par_in(5);
+    if (_par_eq(fp, fl, "cycle::isochoric_heat") == 1) {
+        var q: f64 = us_isochoric_heat(a, b, c, d);
+        _par_got_f(q);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "cycle::isobaric_heat") == 1) {
+        var q2: f64 = us_isobaric_heat(a, b, c, d);
+        _par_got_f(q2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "cycle::adiabatic_work") == 1) {
+        var w: f64 = us_adiabatic_work(a, b, c, d);
+        _par_got_f(w);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "cycle::adiabatic_temp_from_pressure") == 1) {
+        var t, v = us_adiabatic_temp_from_pressure(a, b, c, d);
+        _par_got_res(t, v);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "cycle::otto_cycle") == 1) {
+        var t1, v1 = us_otto_cycle(a, b, c, d, e, g, _par_cyc);
+        _par_got_cycle_res(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "cycle::diesel_cycle") == 1) {
+        var t2, v2 = us_diesel_cycle(a, b, c, d, e, g, _par_cyc);
+        _par_got_cycle_res(t2, v2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "cycle::brayton_cycle") == 1) {
+        var t3, v3 = us_brayton_cycle(a, b, c, d, e, g, _par_cyc);
+        _par_got_cycle_res(t3, v3);
+        return 1;
+    }
+    return 0;
+}
+
 # ── entropy ─────────────────────────────────────────────────────────────────────────
 
 # One entropy row: 1 when handled, 0 for a function with no counterpart yet.
@@ -1279,6 +1507,7 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "transfer") == 1) { return _par_transfer(fp, fl); }
     if (_par_eq(mp, ml, "entropy") == 1) { return _par_entropy(fp, fl); }
     if (_par_eq(mp, ml, "steam") == 1) { return _par_steam(fp, fl); }
+    if (_par_eq(mp, ml, "cycle") == 1) { return _par_cycle(fp, fl); }
     _par_adr5 = 0;
     if (_par_eq(mp, ml, "material") == 1 && _par_in_n != 0) { return _par_material(fp, fl); }
     if (_par_eq(mp, ml, "state") == 1 && _par_in_n != 0) { return _par_state(fp, fl); }
@@ -1390,12 +1619,13 @@ fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "f64::powf") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::atan") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::tanh") == 1) { return 0; }
-    # Every class-C transfer, state, entropy, phase and steam function computes on the _us_cr_* primitives.
+    # Every class-C function of the ported modules computes on the _us_cr_* primitives.
     if (fl > 10 && _par_eq(fp, 10, "transfer::") == 1) { return 0; }
     if (fl > 7 && _par_eq(fp, 7, "state::") == 1) { return 0; }
     if (fl > 9 && _par_eq(fp, 9, "entropy::") == 1) { return 0; }
     if (fl > 7 && _par_eq(fp, 7, "phase::") == 1) { return 0; }
     if (fl > 7 && _par_eq(fp, 7, "steam::") == 1) { return 0; }
+    if (fl > 7 && _par_eq(fp, 7, "cycle::") == 1) { return 0; }
     return 0 - 1;
 }
 

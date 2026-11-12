@@ -1489,6 +1489,132 @@ def m_sh_by_s(a, p):
     return _sh_out(_sh_lookup(rust_clamp(tt, t_min, t_max), pr, p))
 
 
+def _cycle_toks(kind, states, procs, nums):
+    toks = [f"e:CycleKind.{kind}", f"v:{len(states)}"]
+    for st in states:
+        toks += [fbits(x) for x in st]
+    toks += [f"v:{len(procs)}"] + [f"e:ProcessKind.{k}" for k in procs]
+    return toks + [fbits(x) for x in nums]
+
+
+def _gas_ok(g, n):
+    return fgt(g, 1.0) and fgt(n, 0.0)
+
+
+def m_otto(a, p):
+    t1, p1, r, q, g, n = a
+    if not fgt(t1, 0.0):
+        return E("InvalidTemperature")
+    if not fgt(p1, 0.0):
+        return E("InvalidPressure")
+    if not fgt(r, 1.0):
+        return E("InvalidCompressionRatio")
+    if not _gas_ok(g, n) or not fgt(q, 0.0):
+        return E("InvalidParameter")
+    cv = fdiv(GAS_R, g - 1.0)
+    cp = g * cv
+    v1 = fdiv(n * GAS_R * t1, p1)
+    v2 = fdiv(v1, r)
+    t2 = t1 * p.pow(r, g - 1.0)
+    p2 = fdiv(n * GAS_R * t2, v2)
+    v3 = v2
+    q_in = q * n
+    t3 = t2 + fdiv(q_in, n * cv)
+    p3 = fdiv(n * GAS_R * t3, v3)
+    v4 = v1
+    t4 = t3 * p.pow(fdiv(1.0, r), g - 1.0)
+    p4 = fdiv(n * GAS_R * t4, v4)
+    q_out = n * cv * (t4 - t1)
+    w = q_in - q_out
+    s3 = 0.0 + n * cv * p.log(fdiv(t3, t2))
+    st = [[t1, p1, v1, 0.0, n * cp * t1], [t2, p2, v2, 0.0, n * cp * t2], [t3, p3, v3, s3, n * cp * t3],
+          [t4, p4, v4, s3, n * cp * t4]]
+    return _cycle_toks("Otto", st, ["Isentropic", "Isochoric", "Isentropic", "Isochoric"],
+                       [q_in, q_out, w, fdiv(w, q_in), 0.0, g])
+
+
+def m_diesel(a, p):
+    t1, p1, r, rc, g, n = a
+    if not fgt(t1, 0.0):
+        return E("InvalidTemperature")
+    if not fgt(p1, 0.0):
+        return E("InvalidPressure")
+    if not fgt(r, 1.0):
+        return E("InvalidCompressionRatio")
+    if not fgt(rc, 1.0):
+        return E("InvalidCutoffRatio")
+    if rc >= r:
+        return E("InvalidCycleParameter")
+    if not _gas_ok(g, n):
+        return E("InvalidParameter")
+    cv = fdiv(GAS_R, g - 1.0)
+    cp = g * cv
+    v1 = fdiv(n * GAS_R * t1, p1)
+    v2 = fdiv(v1, r)
+    t2 = t1 * p.pow(r, g - 1.0)
+    p2 = fdiv(n * GAS_R * t2, v2)
+    p3, v3, t3 = p2, v2 * rc, t2 * rc
+    v4 = v1
+    t4 = t3 * p.pow(fdiv(v3, v4), g - 1.0)
+    p4 = fdiv(n * GAS_R * t4, v4)
+    q_in = n * cp * (t3 - t2)
+    q_out = n * cv * (t4 - t1)
+    w = q_in - q_out
+    s3 = 0.0 + n * cp * p.log(fdiv(t3, t2))
+    st = [[t1, p1, v1, 0.0, n * cp * t1], [t2, p2, v2, 0.0, n * cp * t2], [t3, p3, v3, s3, n * cp * t3],
+          [t4, p4, v4, s3, n * cp * t4]]
+    return _cycle_toks("Diesel", st, ["Isentropic", "Isobaric", "Isentropic", "Isochoric"],
+                       [q_in, q_out, w, fdiv(w, q_in), 0.0, g])
+
+
+def m_brayton(a, p):
+    t1, p1, rp, t3, g, n = a
+    if not fgt(t1, 0.0):
+        return E("InvalidTemperature")
+    if not fgt(p1, 0.0):
+        return E("InvalidPressure")
+    if not fgt(t3, 0.0):
+        return E("InvalidTemperature")
+    if not fgt(rp, 1.0):
+        return E("InvalidPressureRatio")
+    if not _gas_ok(g, n):
+        return E("InvalidParameter")
+    cv = fdiv(GAS_R, g - 1.0)
+    cp = g * cv
+    ex = fdiv(g - 1.0, g)
+    v1 = fdiv(n * GAS_R * t1, p1)
+    p2 = p1 * rp
+    t2 = t1 * p.pow(rp, ex)
+    v2 = fdiv(n * GAS_R * t2, p2)
+    if not fgt(t3, t2):
+        return E("InvalidCycleParameter")
+    p3 = p2
+    v3 = fdiv(n * GAS_R * t3, p3)
+    p4 = p1
+    t4 = t3 * p.pow(fdiv(1.0, rp), ex)
+    v4 = fdiv(n * GAS_R * t4, p4)
+    q_in = n * cp * (t3 - t2)
+    q_out = n * cp * (t4 - t1)
+    w = q_in - q_out
+    bwr = fdiv(n * cp * (t2 - t1), n * cp * (t3 - t4))
+    s3 = 0.0 + n * cp * p.log(fdiv(t3, t2))
+    st = [[t1, p1, v1, 0.0, n * cp * t1], [t2, p2, v2, 0.0, n * cp * t2], [t3, p3, v3, s3, n * cp * t3],
+          [t4, p4, v4, s3, n * cp * t4]]
+    return _cycle_toks("Brayton", st, ["Isentropic", "Isobaric", "Isentropic", "Isobaric"],
+                       [q_in, q_out, w, fdiv(w, q_in), bwr, g])
+
+
+def m_adiabatic_p(a, p):
+    t1, p1, p2, g = a
+    if not fgt(t1, 0.0):
+        return E("InvalidTemperature")
+    if not fgt(p1, 0.0) or not fgt(p2, 0.0):
+        return E("InvalidPressure")
+    if not fgt(g, 1.0):
+        return E("InvalidParameter")
+    return F(t1 * p.pow(fdiv(p2, p1), fdiv(g - 1.0, g)))
+
+
 def unmodelled(fn, ins):
     """Rows of a modelled module that other checks own: the table presets (no inputs; check_tables) and the JSON
     documents (serde_json's text and verdicts, which the harness compares byte for byte; ADR 0005)."""
@@ -1496,6 +1622,15 @@ def unmodelled(fn, ins):
 
 
 MODELS = {
+    "cycle": {
+        "cycle::isochoric_heat": lambda a, p: F(a[0] * a[1] * (a[3] - a[2])),
+        "cycle::isobaric_heat": lambda a, p: F(a[0] * a[1] * (a[3] - a[2])),
+        "cycle::adiabatic_work": lambda a, p: F(a[0] * a[1] * (a[2] - a[3])),
+        "cycle::adiabatic_temp_from_pressure": m_adiabatic_p,
+        "cycle::otto_cycle": m_otto,
+        "cycle::diesel_cycle": m_diesel,
+        "cycle::brayton_cycle": m_brayton,
+    },
     "steam": {
         "steam::saturation_pressure": m_sat_p,
         "steam::saturation_temperature": m_sat_t,

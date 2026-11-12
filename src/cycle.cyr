@@ -1,0 +1,740 @@
+# cycle.cyr — thermodynamic cycles: the ideal-gas process heats and works, the Otto, Diesel and Brayton cycles (Rust
+# 1.4.0 `cycle`). All SI: kelvins, pascals, joules, moles; the ideal-gas cycles use the calorically perfect gas.
+#
+# Each function computes in the order Rust 1.4.0 writes, so its arithmetic is bit-identical (class B), and its ln and
+# pow are correctly rounded (ADR 0004, class C). A refusal returns Err(US_ERR_*) and reports its value at DEBUG
+# (src/validate.cyr). The three cycles open a DEBUG span under Rust's span name.
+#
+# A process is a UsProcess code and a cycle kind a UsCycle code (Rust's variant order; append-only). A state point is
+# a UsStatePoint. A cycle's result is a UsCycleResult that the caller owns and the analyses fill: its state points
+# and processes are two stdlib vecs (five f64 words per point, flat, and the process codes) that grow on the
+# allocator the result was made with and are overwritten in place on every call, so a result reused across calls
+# allocates nothing after its first (ADR 0002 row 10). us_cycle_result_init makes one; us_cycle_state /
+# us_cycle_process read it, us_cycle_push_state / us_cycle_push_process build one by hand. A refused analysis leaves
+# the result unchanged; a refused allocation is Err(US_ERR_OUT_OF_MEMORY), where Rust would abort the process. JSON
+# is serde_json's: the enums as their variant names, the structs as their documents (ADR 0005; src/json.cyr has the
+# rules).
+
+enum UsProcess {
+    US_PROCESS_ISENTROPIC = 0;
+    US_PROCESS_ISOCHORIC = 1;
+    US_PROCESS_ISOBARIC = 2;
+    US_PROCESS_ISOTHERMAL = 3;
+    US_PROCESS_ISENTHALPIC = 4;
+}
+
+# The number of process kinds.
+const US_PROCESS_COUNT = 5;
+
+enum UsCycle {
+    US_CYCLE_OTTO = 0;
+    US_CYCLE_DIESEL = 1;
+    US_CYCLE_BRAYTON = 2;
+    US_CYCLE_RANKINE = 3;
+    US_CYCLE_REFRIGERATION = 4;
+}
+
+# The number of cycle kinds.
+const US_CYCLE_COUNT = 5;
+
+struct UsStatePoint {
+    temperature: f64;
+    pressure: f64;
+    volume: f64;
+    entropy: f64;
+    enthalpy: f64;
+}
+
+struct UsCycleResult {
+    kind;
+    alloc;
+    states;
+    processes;
+    heat_in: f64;
+    heat_out: f64;
+    net_work: f64;
+    efficiency: f64;
+    back_work_ratio: f64;
+    gamma: f64;
+}
+
+# The byte offset of a UsCycleResult's six numbers (heat_in … gamma), after its kind, allocator and two vecs. Add it
+# to an untyped address: `p + n` on a `*UsCycleResult` steps n results, not n bytes.
+const _US_CR_NUMS = 32;
+
+# --- Names ---
+
+# The Rust name of process `k` ("Isentropic" …), or 0 when `k` is no process.
+#must_use
+#pure
+fn us_process_name(k): cstring {
+    match k {
+        US_PROCESS_ISENTROPIC => { return "Isentropic"; }
+        US_PROCESS_ISOCHORIC => { return "Isochoric"; }
+        US_PROCESS_ISOBARIC => { return "Isobaric"; }
+        US_PROCESS_ISOTHERMAL => { return "Isothermal"; }
+        US_PROCESS_ISENTHALPIC => { return "Isenthalpic"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# The Rust name of cycle kind `k` ("Otto" …), or 0 when `k` is no cycle kind.
+#must_use
+#pure
+fn us_cycle_name(k): cstring {
+    match k {
+        US_CYCLE_OTTO => { return "Otto"; }
+        US_CYCLE_DIESEL => { return "Diesel"; }
+        US_CYCLE_BRAYTON => { return "Brayton"; }
+        US_CYCLE_RANKINE => { return "Rankine"; }
+        US_CYCLE_REFRIGERATION => { return "Refrigeration"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# --- The cycle result ---
+
+# Makes *r an empty result (no state points, no processes, every number 0) whose two vecs grow on the global heap:
+# Ok(0), or Err(US_ERR_OUT_OF_MEMORY) when a vec was refused (*r is then not usable).
+#must_use
+fn us_cycle_result_init(r: *UsCycleResult): Result {
+    return us_cycle_result_init_a(default_alloc(), r);
+}
+
+# us_cycle_result_init with the vecs on allocator `a`, which *r keeps and grows them on.
+#must_use
+fn us_cycle_result_init_a(a, r: *UsCycleResult): Result {
+    r.kind = US_CYCLE_OTTO;
+    r.alloc = a;
+    r.states = vec_new_a(a);
+    r.processes = vec_new_a(a);
+    r.heat_in = 0.0;
+    r.heat_out = 0.0;
+    r.net_work = 0.0;
+    r.efficiency = 0.0;
+    r.back_work_ratio = 0.0;
+    r.gamma = 0.0;
+    if (r.states == 0 || r.processes == 0) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_cycle_result_init")); }
+    return Ok(0);
+}
+
+# The number of state points in *r.
+#must_use
+fn us_cycle_state_count(r: *UsCycleResult): i64 {
+    return vec_len(r.states) / 5;
+}
+
+# Copies state point `i` of *r into *out: 1, or 0 when there is none.
+fn us_cycle_state(r: *UsCycleResult, i, out: *UsStatePoint): i64 {
+    if (i < 0 || i >= us_cycle_state_count(r)) { return 0; }
+    var o = out;
+    var k = 0;
+    while (k < 5) {
+        store64(o + (8 * k), vec_get(r.states, 5 * i + k));
+        k = k + 1;
+    }
+    return 1;
+}
+
+# Appends state point *sp to *r: Ok(0), or Err(US_ERR_OUT_OF_MEMORY) when a grow was refused (*r is then unchanged).
+#must_use
+fn us_cycle_push_state(r: *UsCycleResult, sp: *UsStatePoint): Result {
+    var n = vec_len(r.states);
+    var q = sp;
+    var k = 0;
+    while (k < 5) {
+        if (vec_push_a(r.alloc, r.states, load64(q + (8 * k))) < 0) {
+            vec_truncate(r.states, n);
+            return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_cycle_push_state"));
+        }
+        k = k + 1;
+    }
+    return Ok(0);
+}
+
+# The number of processes in *r.
+#must_use
+fn us_cycle_process_count(r: *UsCycleResult): i64 {
+    return vec_len(r.processes);
+}
+
+# Process `i` of *r (a US_PROCESS_* code), or -1 when there is none.
+#must_use
+fn us_cycle_process(r: *UsCycleResult, i): i64 {
+    if (i < 0 || i >= vec_len(r.processes)) { return 0 - 1; }
+    return vec_get(r.processes, i);
+}
+
+# Appends process `kind` to *r: Ok(0), or Err(US_ERR_OUT_OF_MEMORY) when a grow was refused (*r is then unchanged).
+#must_use
+fn us_cycle_push_process(r: *UsCycleResult, kind): Result {
+    if (vec_push_a(r.alloc, r.processes, kind) < 0) {
+        return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_cycle_push_process"));
+    }
+    return Ok(0);
+}
+
+# Sizes vec `v` to `n` words, growing it on allocator `a` (new words 0): 1, or 0 when a grow was refused (`v` is then
+# empty). A vec that holds n words or more already, as a reused result's do, is only truncated.
+fn _us_vec_size(a, v, n): i64 {
+    if (vec_len(v) >= n) {
+        vec_truncate(v, n);
+        return 1;
+    }
+    while (vec_len(v) < n) {
+        if (vec_push_a(a, v, 0) < 0) {
+            vec_truncate(v, 0);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+# Readies *r for a four-state cycle of kind `kind` and processes p0 … p3: sizes its state vec to 20 words, for the
+# caller to store the four points into in place (_us_sp_store), and fills its processes. The state words' address, or
+# 0 when a grow was refused (*r then has no state points or processes).
+fn _us_cycle_begin(r: *UsCycleResult, kind, p0, p1, p2, p3): i64 {
+    var ok = _us_vec_size(r.alloc, r.states, 20);
+    if (ok == 1) { ok = _us_vec_size(r.alloc, r.processes, 4); }
+    if (ok == 0) {
+        vec_truncate(r.states, 0);
+        vec_truncate(r.processes, 0);
+        return 0;
+    }
+    var pp = slice_ptr(r.processes);
+    store64(pp, p0);
+    store64(pp + 8, p1);
+    store64(pp + 16, p2);
+    store64(pp + 24, p3);
+    r.kind = kind;
+    return slice_ptr(r.states);
+}
+
+# Sets *r's six numbers.
+fn _us_cycle_nums(r: *UsCycleResult, q_in: f64, q_out: f64, w: f64, eff: f64, bwr: f64, gamma: f64) {
+    r.heat_in = q_in;
+    r.heat_out = q_out;
+    r.net_work = w;
+    r.efficiency = eff;
+    r.back_work_ratio = bwr;
+    r.gamma = gamma;
+    return 0;
+}
+
+# Stores state point i (T, P, V, S, H) into the state words at `st`.
+fn _us_sp_store(st, i, t: f64, p: f64, v: f64, s: f64, h: f64) {
+    var at = st + (40 * i);
+    store64(at, t);
+    store64(at + 8, p);
+    store64(at + 16, v);
+    store64(at + 24, s);
+    store64(at + 32, h);
+    return 0;
+}
+
+# --- Ideal-gas process heats and works ---
+
+# Heat at constant volume, Q = n·C_v·(T₂ − T₁) (J).
+#must_use
+#pure
+fn us_isochoric_heat(moles: f64, cv: f64, t1: f64, t2: f64): f64 {
+    var q: f64 = moles * cv * (t2 - t1);
+    return q;
+}
+
+# Heat at constant pressure, Q = n·C_p·(T₂ − T₁) (J).
+#must_use
+#pure
+fn us_isobaric_heat(moles: f64, cp: f64, t1: f64, t2: f64): f64 {
+    var q: f64 = moles * cp * (t2 - t1);
+    return q;
+}
+
+# Work of an adiabatic process, W = n·C_v·(T₁ − T₂) (J): positive for an expansion, negative for a compression.
+#must_use
+#pure
+fn us_adiabatic_work(moles: f64, cv: f64, t1: f64, t2: f64): f64 {
+    var w: f64 = moles * cv * (t1 - t2);
+    return w;
+}
+
+# The isentropic temperature after a pressure change, T₂ = T₁·(P₂/P₁)^((γ−1)/γ) (K). Err(US_ERR_INVALID_TEMPERATURE)
+# unless T₁ > 0, Err(US_ERR_INVALID_PRESSURE) unless P₁ > 0 and P₂ > 0, Err(US_ERR_INVALID_PARAMETER) unless γ > 1.
+#must_use
+fn us_adiabatic_temp_from_pressure(t1: f64, p1: f64, p2: f64, gamma: f64): Result {
+    if (_us_finite_gt(t1, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_adiabatic_temp_from_pressure", "t1", t1));
+    }
+    if (_us_finite_gt(p1, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE, "us_adiabatic_temp_from_pressure", "p1", p1));
+    }
+    if (_us_finite_gt(p2, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE, "us_adiabatic_temp_from_pressure", "p2", p2));
+    }
+    if (_us_finite_gt(gamma, 1.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_adiabatic_temp_from_pressure", "gamma", gamma));
+    }
+    var e: f64 = (gamma - 1.0) / gamma;
+    var pw: f64 = _us_cr_pow(p2 / p1, e);
+    var t2: f64 = t1 * pw;
+    return Ok(t2);
+}
+
+# The checks the three ideal-gas cycles share, after their own: γ > 1 and n > 0, Err(US_ERR_INVALID_PARAMETER)
+# reported by `fname`, or 0.
+fn _us_gas_check(gamma: f64, moles: f64, fname): i64 {
+    if (_us_finite_gt(gamma, 1.0) == 0) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, "gamma", gamma); }
+    if (_us_finite_gt(moles, 0.0) == 0) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, "moles", moles); }
+    return 0;
+}
+
+# --- The ideal-gas cycles ---
+
+# Fills *r with the Otto cycle (a spark-ignition engine) on n mol of ideal gas: 1→2 isentropic compression by
+# r = V₁/V₂, 2→3 isochoric heat addition of `heat_in` J/mol, 3→4 isentropic expansion, 4→1 isochoric rejection.
+# Entropies are relative to state 1, enthalpies n·C_p·T. Ok(0), or Err(US_ERR_INVALID_TEMPERATURE) unless T₁ > 0,
+# Err(US_ERR_INVALID_PRESSURE) unless P₁ > 0, Err(US_ERR_INVALID_COMPRESSION_RATIO) unless r > 1,
+# Err(US_ERR_INVALID_PARAMETER) unless γ > 1, n > 0 and heat_in > 0, Err(US_ERR_OUT_OF_MEMORY) when *r's vecs
+# could not grow.
+#must_use
+fn us_otto_cycle(t1: f64, p1: f64, compression_ratio: f64, heat_in: f64, gamma: f64, moles: f64,
+  r: *UsCycleResult): Result {
+    _us_span_enter("otto_cycle", 10);
+    if (_us_finite_gt(t1, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_otto_cycle", "t1", t1));
+    }
+    if (_us_finite_gt(p1, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE, "us_otto_cycle", "p1", p1));
+    }
+    if (_us_finite_gt(compression_ratio, 1.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_COMPRESSION_RATIO, "us_otto_cycle", "compression_ratio",
+            compression_ratio));
+    }
+    var code = _us_gas_check(gamma, moles, "us_otto_cycle");
+    if (code != 0) {
+        _us_span_exit();
+        return Err(code);
+    }
+    if (_us_finite_gt(heat_in, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_otto_cycle", "heat_in", heat_in));
+    }
+    var rr: f64 = compression_ratio;
+    var cv: f64 = US_GAS_CONSTANT / (gamma - 1.0);
+    var cp: f64 = gamma * cv;
+    var n: f64 = moles;
+    var v1: f64 = n * US_GAS_CONSTANT * t1 / p1;
+    var v2: f64 = v1 / rr;
+    var pr: f64 = _us_cr_pow(rr, gamma - 1.0);
+    var t2: f64 = t1 * pr;
+    var p2: f64 = n * US_GAS_CONSTANT * t2 / v2;
+    var v3: f64 = v2;
+    var q_in: f64 = heat_in * n;
+    var t3: f64 = t2 + q_in / (n * cv);
+    var p3: f64 = n * US_GAS_CONSTANT * t3 / v3;
+    var v4: f64 = v1;
+    var pr4: f64 = _us_cr_pow(1.0 / rr, gamma - 1.0);
+    var t4: f64 = t3 * pr4;
+    var p4: f64 = n * US_GAS_CONSTANT * t4 / v4;
+    var q_out: f64 = n * cv * (t4 - t1);
+    var w: f64 = q_in - q_out;
+    var eff: f64 = w / q_in;
+    var s1: f64 = 0.0;
+    var s2: f64 = s1;
+    var lt: f64 = _us_cr_ln(t3 / t2);
+    var s3: f64 = s2 + n * cv * lt;
+    var s4: f64 = s3;
+    var st = _us_cycle_begin(r, US_CYCLE_OTTO, US_PROCESS_ISENTROPIC, US_PROCESS_ISOCHORIC, US_PROCESS_ISENTROPIC,
+      US_PROCESS_ISOCHORIC);
+    if (st == 0) {
+        _us_span_exit();
+        return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_otto_cycle"));
+    }
+    _us_sp_store(st, 0, t1, p1, v1, s1, n * cp * t1);
+    _us_sp_store(st, 1, t2, p2, v2, s2, n * cp * t2);
+    _us_sp_store(st, 2, t3, p3, v3, s3, n * cp * t3);
+    _us_sp_store(st, 3, t4, p4, v4, s4, n * cp * t4);
+    _us_cycle_nums(r, q_in, q_out, w, eff, 0.0, gamma);
+    _us_span_exit();
+    return Ok(0);
+}
+
+# Fills *r with the Diesel cycle (a compression-ignition engine): 1→2 isentropic compression by r, 2→3 isobaric heat
+# addition to the cutoff ratio r_c = V₃/V₂, 3→4 isentropic expansion, 4→1 isochoric rejection. Ok(0), or
+# Err(US_ERR_INVALID_TEMPERATURE) unless T₁ > 0, Err(US_ERR_INVALID_PRESSURE) unless P₁ > 0,
+# Err(US_ERR_INVALID_COMPRESSION_RATIO) unless r > 1, Err(US_ERR_INVALID_CUTOFF_RATIO) unless r_c > 1,
+# Err(US_ERR_INVALID_CYCLE_PARAMETER) unless r_c < r, Err(US_ERR_INVALID_PARAMETER) unless γ > 1 and n > 0,
+# Err(US_ERR_OUT_OF_MEMORY) when *r's vecs could not grow.
+#must_use
+fn us_diesel_cycle(t1: f64, p1: f64, compression_ratio: f64, cutoff_ratio: f64, gamma: f64, moles: f64,
+  r: *UsCycleResult): Result {
+    _us_span_enter("diesel_cycle", 12);
+    if (_us_finite_gt(t1, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_diesel_cycle", "t1", t1));
+    }
+    if (_us_finite_gt(p1, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE, "us_diesel_cycle", "p1", p1));
+    }
+    if (_us_finite_gt(compression_ratio, 1.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_COMPRESSION_RATIO, "us_diesel_cycle", "compression_ratio",
+            compression_ratio));
+    }
+    if (_us_finite_gt(cutoff_ratio, 1.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_CUTOFF_RATIO, "us_diesel_cycle", "cutoff_ratio", cutoff_ratio));
+    }
+    if (cutoff_ratio >= compression_ratio) {
+        _us_span_exit();
+        return Err(_us_fail_ff(US_ERR_INVALID_CYCLE_PARAMETER, "us_diesel_cycle", "cutoff >= compression", "rc",
+            cutoff_ratio, "r", compression_ratio));
+    }
+    var code = _us_gas_check(gamma, moles, "us_diesel_cycle");
+    if (code != 0) {
+        _us_span_exit();
+        return Err(code);
+    }
+    var rr: f64 = compression_ratio;
+    var rc: f64 = cutoff_ratio;
+    var cv: f64 = US_GAS_CONSTANT / (gamma - 1.0);
+    var cp: f64 = gamma * cv;
+    var n: f64 = moles;
+    var v1: f64 = n * US_GAS_CONSTANT * t1 / p1;
+    var v2: f64 = v1 / rr;
+    var pr: f64 = _us_cr_pow(rr, gamma - 1.0);
+    var t2: f64 = t1 * pr;
+    var p2: f64 = n * US_GAS_CONSTANT * t2 / v2;
+    var p3: f64 = p2;
+    var v3: f64 = v2 * rc;
+    var t3: f64 = t2 * rc;
+    var v4: f64 = v1;
+    var pr4: f64 = _us_cr_pow(v3 / v4, gamma - 1.0);
+    var t4: f64 = t3 * pr4;
+    var p4: f64 = n * US_GAS_CONSTANT * t4 / v4;
+    var q_in: f64 = n * cp * (t3 - t2);
+    var q_out: f64 = n * cv * (t4 - t1);
+    var w: f64 = q_in - q_out;
+    var eff: f64 = w / q_in;
+    var s1: f64 = 0.0;
+    var s2: f64 = s1;
+    var lt: f64 = _us_cr_ln(t3 / t2);
+    var s3: f64 = s2 + n * cp * lt;
+    var s4: f64 = s3;
+    var st = _us_cycle_begin(r, US_CYCLE_DIESEL, US_PROCESS_ISENTROPIC, US_PROCESS_ISOBARIC, US_PROCESS_ISENTROPIC,
+      US_PROCESS_ISOCHORIC);
+    if (st == 0) {
+        _us_span_exit();
+        return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_diesel_cycle"));
+    }
+    _us_sp_store(st, 0, t1, p1, v1, s1, n * cp * t1);
+    _us_sp_store(st, 1, t2, p2, v2, s2, n * cp * t2);
+    _us_sp_store(st, 2, t3, p3, v3, s3, n * cp * t3);
+    _us_sp_store(st, 3, t4, p4, v4, s4, n * cp * t4);
+    _us_cycle_nums(r, q_in, q_out, w, eff, 0.0, gamma);
+    _us_span_exit();
+    return Ok(0);
+}
+
+# Fills *r with the Brayton cycle (a gas turbine): 1→2 isentropic compression by r_p = P₂/P₁, 2→3 isobaric heat
+# addition to the turbine inlet T₃, 3→4 isentropic expansion, 4→1 isobaric rejection; its back-work ratio is
+# W_compressor / W_turbine. Ok(0), or Err(US_ERR_INVALID_TEMPERATURE) unless T₁ > 0 and T₃ > 0,
+# Err(US_ERR_INVALID_PRESSURE) unless P₁ > 0, Err(US_ERR_INVALID_PRESSURE_RATIO) unless r_p > 1,
+# Err(US_ERR_INVALID_PARAMETER) unless γ > 1 and n > 0, Err(US_ERR_INVALID_CYCLE_PARAMETER) unless T₃ > T₂,
+# Err(US_ERR_OUT_OF_MEMORY) when *r's vecs could not grow.
+#must_use
+fn us_brayton_cycle(t1: f64, p1: f64, pressure_ratio: f64, t3: f64, gamma: f64, moles: f64,
+  r: *UsCycleResult): Result {
+    _us_span_enter("brayton_cycle", 13);
+    if (_us_finite_gt(t1, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_brayton_cycle", "t1", t1));
+    }
+    if (_us_finite_gt(p1, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE, "us_brayton_cycle", "p1", p1));
+    }
+    if (_us_finite_gt(t3, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_brayton_cycle", "t3", t3));
+    }
+    if (_us_finite_gt(pressure_ratio, 1.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PRESSURE_RATIO, "us_brayton_cycle", "pressure_ratio", pressure_ratio));
+    }
+    var code = _us_gas_check(gamma, moles, "us_brayton_cycle");
+    if (code != 0) {
+        _us_span_exit();
+        return Err(code);
+    }
+    var rp: f64 = pressure_ratio;
+    var cv: f64 = US_GAS_CONSTANT / (gamma - 1.0);
+    var cp: f64 = gamma * cv;
+    var n: f64 = moles;
+    var e: f64 = (gamma - 1.0) / gamma;
+    var v1: f64 = n * US_GAS_CONSTANT * t1 / p1;
+    var p2: f64 = p1 * rp;
+    var pr: f64 = _us_cr_pow(rp, e);
+    var t2: f64 = t1 * pr;
+    var v2: f64 = n * US_GAS_CONSTANT * t2 / p2;
+    if (_us_finite_gt(t3, t2) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_ff(US_ERR_INVALID_CYCLE_PARAMETER, "us_brayton_cycle", "T3 <= T2", "t3", t3, "t2", t2));
+    }
+    var p3: f64 = p2;
+    var v3: f64 = n * US_GAS_CONSTANT * t3 / p3;
+    var p4: f64 = p1;
+    var pr4: f64 = _us_cr_pow(1.0 / rp, e);
+    var t4: f64 = t3 * pr4;
+    var v4: f64 = n * US_GAS_CONSTANT * t4 / p4;
+    var q_in: f64 = n * cp * (t3 - t2);
+    var q_out: f64 = n * cp * (t4 - t1);
+    var w: f64 = q_in - q_out;
+    var eff: f64 = w / q_in;
+    var w_c: f64 = n * cp * (t2 - t1);
+    var w_t: f64 = n * cp * (t3 - t4);
+    var bwr: f64 = w_c / w_t;
+    var s1: f64 = 0.0;
+    var s2: f64 = s1;
+    var lt: f64 = _us_cr_ln(t3 / t2);
+    var s3: f64 = s2 + n * cp * lt;
+    var s4: f64 = s3;
+    var st = _us_cycle_begin(r, US_CYCLE_BRAYTON, US_PROCESS_ISENTROPIC, US_PROCESS_ISOBARIC, US_PROCESS_ISENTROPIC,
+      US_PROCESS_ISOBARIC);
+    if (st == 0) {
+        _us_span_exit();
+        return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_brayton_cycle"));
+    }
+    _us_sp_store(st, 0, t1, p1, v1, s1, n * cp * t1);
+    _us_sp_store(st, 1, t2, p2, v2, s2, n * cp * t2);
+    _us_sp_store(st, 2, t3, p3, v3, s3, n * cp * t3);
+    _us_sp_store(st, 3, t4, p4, v4, s4, n * cp * t4);
+    _us_cycle_nums(r, q_in, q_out, w, eff, bwr, gamma);
+    _us_span_exit();
+    return Ok(0);
+}
+
+# --- JSON ---
+
+# The field names of a StatePoint, in declaration order.
+fn _us_sp_field(k): cstring {
+    match k {
+        0 => { return "temperature"; }
+        1 => { return "pressure"; }
+        2 => { return "volume"; }
+        3 => { return "entropy"; }
+        4 => { return "enthalpy"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# Appends *sp as serde_json writes a `StatePoint`.
+fn us_state_point_to_json(sb, sp: *UsStatePoint) {
+    return _us_jw_f64_struct(sb, sp, 5, &_us_sp_field);
+}
+
+# Reads a `StatePoint` document (`n` bytes at `buf`; its tree on allocator `a`) into *out: Ok(0), or
+# Err(US_ERR_DESERIALIZE), leaving *out unchanged.
+#must_use
+fn us_state_point_from_json_a(a, buf, n, out: *UsStatePoint): Result {
+    var w[40];
+    if (_us_jr_f64_struct(a, buf, n, &w, 5, &_us_sp_field) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_state_point_from_json"));
+    }
+    memcpy(out, &w, 40);
+    return Ok(0);
+}
+
+# us_state_point_from_json_a on the global heap.
+#must_use
+fn us_state_point_from_json(buf, n, out: *UsStatePoint): Result {
+    return us_state_point_from_json_a(default_alloc(), buf, n, out);
+}
+
+# Appends process `k` as serde_json writes a `ProcessKind`: its name as a JSON string.
+fn us_process_to_json(sb, k) {
+    var name = us_process_name(k);
+    if (name == 0) { name = ""; }
+    _us_jw_str(sb, name, strlen(name));
+    return 0;
+}
+
+# Reads a `ProcessKind` document (`n` bytes at `buf`; its tree on allocator `a`): Ok(US_PROCESS_*), or
+# Err(US_ERR_DESERIALIZE).
+#must_use
+fn us_process_from_json_a(a, buf, n): Result {
+    var k = _us_jr_unit_enum(_us_jr_parse(a, buf, n), &us_process_name, US_PROCESS_COUNT);
+    if (k < 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_process_from_json")); }
+    return Ok(k);
+}
+
+# us_process_from_json_a on the global heap.
+#must_use
+fn us_process_from_json(buf, n): Result {
+    return us_process_from_json_a(default_alloc(), buf, n);
+}
+
+# Appends cycle kind `k` as serde_json writes a `CycleKind`: its name as a JSON string.
+fn us_cycle_to_json(sb, k) {
+    var name = us_cycle_name(k);
+    if (name == 0) { name = ""; }
+    _us_jw_str(sb, name, strlen(name));
+    return 0;
+}
+
+# Reads a `CycleKind` document (`n` bytes at `buf`; its tree on allocator `a`): Ok(US_CYCLE_*), or
+# Err(US_ERR_DESERIALIZE).
+#must_use
+fn us_cycle_from_json_a(a, buf, n): Result {
+    var k = _us_jr_unit_enum(_us_jr_parse(a, buf, n), &us_cycle_name, US_CYCLE_COUNT);
+    if (k < 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_cycle_from_json")); }
+    return Ok(k);
+}
+
+# us_cycle_from_json_a on the global heap.
+#must_use
+fn us_cycle_from_json(buf, n): Result {
+    return us_cycle_from_json_a(default_alloc(), buf, n);
+}
+
+# The six f64 fields of a CycleResult after its lists, in declaration order (indices 3 … 8 of its nine fields).
+fn _us_cr_field(k): cstring {
+    match k {
+        0 => { return "kind"; }
+        1 => { return "state_points"; }
+        2 => { return "processes"; }
+        3 => { return "heat_in"; }
+        4 => { return "heat_out"; }
+        5 => { return "net_work"; }
+        6 => { return "efficiency"; }
+        7 => { return "back_work_ratio"; }
+        8 => { return "gamma"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# Appends *r as serde_json writes a `CycleResult`.
+fn us_cycle_result_to_json(sb, r: *UsCycleResult) {
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "kind", 1);
+    us_cycle_to_json(sb, r.kind);
+    _us_jw_key(sb, "state_points", 0);
+    str_builder_putc(sb, 91);
+    var n = us_cycle_state_count(r);
+    var sp: UsStatePoint;
+    var i = 0;
+    while (i < n) {
+        if (i > 0) { str_builder_putc(sb, 44); }
+        us_cycle_state(r, i, &sp);
+        us_state_point_to_json(sb, &sp);
+        i = i + 1;
+    }
+    str_builder_putc(sb, 93);
+    _us_jw_key(sb, "processes", 0);
+    str_builder_putc(sb, 91);
+    var m = us_cycle_process_count(r);
+    i = 0;
+    while (i < m) {
+        if (i > 0) { str_builder_putc(sb, 44); }
+        us_process_to_json(sb, us_cycle_process(r, i));
+        i = i + 1;
+    }
+    str_builder_putc(sb, 93);
+    var base = r;
+    var nums = base + _US_CR_NUMS;
+    var k = 0;
+    while (k < 6) {
+        _us_jw_key(sb, _us_cr_field(k + 3), 0);
+        var x: f64 = load64(nums + (8 * k));
+        _us_jw_f64(sb, x);
+        k = k + 1;
+    }
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# A StatePoint node `v` (object or 5-element sequence) into the five words at `w`: 1, or 0.
+fn _us_jr_state_point(v, w): i64 {
+    var form = _us_jr_form(v, 5);
+    if (form == 0) { return 0; }
+    var k = 0;
+    while (k < 5) {
+        if (_us_jr_f64(_us_jr_at(v, form, k, _us_sp_field(k)), w + (8 * k)) == 0) { return 0; }
+        k = k + 1;
+    }
+    return 1;
+}
+
+# Reads a `CycleResult` document (`n` bytes at `buf`) into *out, its two vecs (which then grow on `a`) and the parse
+# tree on allocator `a`: Ok(0), or Err(US_ERR_DESERIALIZE) for a malformed document (an allocation bayan's parser was
+# refused included) and Err(US_ERR_OUT_OF_MEMORY) for a refused vec, leaving *out unchanged.
+#must_use
+fn us_cycle_result_from_json_a(a, buf, n, out: *UsCycleResult): Result {
+    var v = _us_jr_parse(a, buf, n);
+    var form = _us_jr_form(v, 9);
+    if (form == 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_cycle_result_from_json")); }
+    var kind = _us_jr_unit_enum(_us_jr_at(v, form, 0, "kind"), &us_cycle_name, US_CYCLE_COUNT);
+    var sps = _us_jr_at(v, form, 1, "state_points");
+    var prs = _us_jr_at(v, form, 2, "processes");
+    if (kind < 0 || sps == 0 || prs == 0 || bayan_json_v_tag(sps) != JTAG_ARR || bayan_json_v_tag(prs) != JTAG_ARR) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_cycle_result_from_json"));
+    }
+    var nums[48];
+    var k = 0;
+    while (k < 6) {
+        if (_us_jr_f64(_us_jr_at(v, form, k + 3, _us_cr_field(k + 3)), &nums + (8 * k)) == 0) {
+            return Err(_us_fail(US_ERR_DESERIALIZE, "us_cycle_result_from_json"));
+        }
+        k = k + 1;
+    }
+    var states = vec_new_a(a);
+    var processes = vec_new_a(a);
+    if (states == 0 || processes == 0) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_cycle_result_from_json")); }
+    var w[40];
+    var ns = bayan_json_v_arr_len(sps);
+    var i = 0;
+    while (i < ns) {
+        if (_us_jr_state_point(bayan_json_v_arr_get(sps, i), &w) == 0) {
+            return Err(_us_fail(US_ERR_DESERIALIZE, "us_cycle_result_from_json"));
+        }
+        k = 0;
+        while (k < 5) {
+            if (vec_push_a(a, states, load64(&w + (8 * k))) < 0) {
+                return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_cycle_result_from_json"));
+            }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    var np = bayan_json_v_arr_len(prs);
+    i = 0;
+    while (i < np) {
+        var pk = _us_jr_unit_enum(bayan_json_v_arr_get(prs, i), &us_process_name, US_PROCESS_COUNT);
+        if (pk < 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_cycle_result_from_json")); }
+        if (vec_push_a(a, processes, pk) < 0) {
+            return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_cycle_result_from_json"));
+        }
+        i = i + 1;
+    }
+    out.kind = kind;
+    out.alloc = a;
+    out.states = states;
+    out.processes = processes;
+    var ob = out;
+    memcpy(ob + _US_CR_NUMS, &nums, 48);
+    return Ok(0);
+}
+
+# us_cycle_result_from_json_a on the global heap: for a one-off read (its tree and vecs stay allocated).
+#must_use
+fn us_cycle_result_from_json(buf, n, out: *UsCycleResult): Result {
+    return us_cycle_result_from_json_a(default_alloc(), buf, n, out);
+}

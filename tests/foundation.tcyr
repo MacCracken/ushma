@@ -98,14 +98,15 @@ fn test_rust_error_variants() {
     assert_streq(us_error_name(US_ERR_INVALID_TEMPERATURE), "InvalidTemperature", "the Debug name");
 }
 
-# The codes: Rust's 16 variants in order, then Deserialize; names and messages.
+# The codes: Rust's 16 variants in order, then Deserialize and OutOfMemory; names and messages.
 fn test_error_codes() {
     test_group("error codes");
     assert_eq(US_ERR_NONE, 0, "US_ERR_NONE is 0");
     assert_eq(US_ERR_INVALID_TEMPERATURE, 1, "InvalidTemperature is Rust's first variant");
     assert_eq(US_ERR_INVALID_CYCLE_PARAMETER, 16, "InvalidCycleParameter is Rust's sixteenth");
     assert_eq(US_ERR_DESERIALIZE, 17, "Deserialize is appended after them");
-    assert_eq(US_ERR_COUNT, 18, "18 codes");
+    assert_eq(US_ERR_OUT_OF_MEMORY, 18, "OutOfMemory after it");
+    assert_eq(US_ERR_COUNT, 19, "19 codes");
     assert_streq(us_error_name(US_ERR_INVALID_TEMPERATURE), "InvalidTemperature", "name of InvalidTemperature");
     assert_streq(us_error_name(US_ERR_SUPERHEAT_OUT_OF_RANGE), "SuperheatOutOfRange", "name of SuperheatOutOfRange");
     assert_streq(us_error_name(US_ERR_NONE), "None", "name of US_ERR_NONE");
