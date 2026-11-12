@@ -648,6 +648,10 @@ the gate is a warning-free `cyrius test`:
 
 ## 8. Upstream (file at M0, then as found)
 
+**Drafted 2026-11-11, not filed:** [`upstream/README.md`](upstream/README.md) has 12 new issues, each with a repro
+that exits 1 while the defect is present (all run and reproduced), 6 addenda to issues other ports filed, and a
+note for kimiya, all in the targets' own format. Writing into another repository is the maintainer's call.
+
 | To | Request | Evidence |
 |---|---|---|
 | ganita (cyrius stdlib) | correctly rounded exp, expm1, ln, log10, pow, atan2, tanh (and the rest kimiya has), so ports stop vendoring them | three private copies (impetus `crmath.cyr`, kimiya `mathx.cyr`, ushma `mathx.cyr`); step 8's MPFR measurements |
@@ -660,9 +664,12 @@ the gate is a warning-free `cyrius test`:
 | sandhi | `total_ms` doesn't bound a read that blocks before the first response byte (nor does `idle_ms`); only `read_ms` does | probe 7: a server silent for 3 s answers 200 under `total_ms` 1000 |
 | bayan | keep the sign of the integer `-0` (serde_json reads it as −0.0 into an f64; the tree has +0) | probe 11: 20 documents |
 | bayan | refuse a raw control character (U+0000–U+001F) inside a string, as RFC 8259 and serde_json do | probe 11: 10 documents parsed that serde_json refuses |
-| cyrius stdlib (dynlib) | `lib/dynlib.cyr:674` warns on every PE build that links sandhi (`syscall 5 … not routed on CYRIUS_TARGET_WIN=1`) | probe 10: every `[lib.ai]` consumer's PE build |
-| cyrius | `cyrius port` still clobbers project docs (existing issue) | add ushma as another reproduction if 6.7.18 still does it |
-| cyrius | the open `field-store-of-struct-call-copies-a-field-argument` miscompile | add ushma's grid shape as a reproduction if probe 12 hits it |
+| cyrius stdlib (fdlopen, dynlib) | six raw syscalls with no PE route (`fdlopen.cyr:472, 530, 626, 954`; `dynlib.cyr:674, 950`) warn on every PE build that links sandhi | probe 10: every `[lib.ai]` consumer's PE build keeps `dynlib.cyr:674` after DCE |
+| sakshi | a level-taking span entry (`sakshi_span_enter_at`): `sakshi_span_enter` / `_exit` never test the level | probe 8: 192 ns per filtered-out span into the ring buffer, 9.7 ns level-gated, around an 8.1 ns function |
+| cyrius | `mod NAME;` in an included file stays in force to the end of the unit, so it mangles the includer's `main` | probe 6 |
+| cyrius | `#derive(Serialize)`'s `T_to_json` faults on a 0 `Str`, which a document missing that field decodes to | probe 11 |
+| cyrius | `cyrius port` still clobbers project docs (existing issue) | it did at 6.7.18: items 1–4 and pravash's `Cargo.lock` point (addendum) |
+| cyrius | the open `field-store-of-struct-call-copies-a-field-argument` miscompile | nothing to add: probe 12 re-ran the issue's own repro (7 of 12 forms wrong), and ushma's grid code is written to the workaround |
 | cyrius | a duplicate non-private `fn` across bundles is a warning, and the last one wins | probe 6; ushma × kimiya (10 names), × prakash (`ai_*`) |
 | kimiya | ganita's LU reproduces Rust hisab 1.4.0's elimination bit for bit on row-scaled systems, refusals included, so its planned transcription (ADR 0003) may not be needed; `mat_gaussian_elim` refuses more | probe 9 |
 | kimiya | its `KM_GAS_CONSTANT` is 8.314462618, truncated at 1e-11 relative; ushma 1.4.0 uses the exact N_A·k_B = 8.31446261815324 | values crossing the ushma ↔ kimiya bridges disagree in the 10th digit |
@@ -682,7 +689,7 @@ the gate is a warning-free `cyrius test`:
 
 | Milestone | Status | Golden rows | Reference tests | Benches | Notes |
 |---|---|---|---|---|---|
-| M0 Prep & initialize | 🟡 part 1 done 2026-11-11 (steps 0–3: tag verified, Rust bench baseline, `cyrius port`, repairs, manifest, ADRs 0001–0005; gates green on ELF, `--bounds`, PE, aarch64) | 15,738 (constants 9, math 15,687, table presets 42) | — | Rust baseline: 63 | Parts 2a (math check, generator, validate.py), 2b (table data, probe_tables.py), 2c-1 (parity harness: 3,374 ok, 0 failed) 2c-2a (MPFR corrected oracle: 26 rows), 2c-2b (mathx vendored) and 2c-3 (CR tanh, cr_verify: every golden row gated, 15,712 ok + 26 accepted) done. Part 3a (probes 2, 3, 4, 5, 6, 8, 12) done; P6 settled as a written prefix. Part 3b (probes 1, 7, 9, 10, 11) done: Simpson class D, P4 moved to LU (class B), the ai client sets `read_ms`, both bundles link on three targets, P7 stands with the ADR 0005 amendment's decoder rules. Next: upstream drafts |
+| M0 Prep & initialize | 🟡 part 1 done 2026-11-11 (steps 0–3: tag verified, Rust bench baseline, `cyrius port`, repairs, manifest, ADRs 0001–0005; gates green on ELF, `--bounds`, PE, aarch64) | 15,738 (constants 9, math 15,687, table presets 42) | — | Rust baseline: 63 | Parts 2a (math check, generator, validate.py), 2b (table data, probe_tables.py), 2c-1 (parity harness: 3,374 ok, 0 failed) 2c-2a (MPFR corrected oracle: 26 rows), 2c-2b (mathx vendored) and 2c-3 (CR tanh, cr_verify: every golden row gated, 15,712 ok + 26 accepted) done. Part 3a (probes 2, 3, 4, 5, 6, 8, 12) done; P6 settled as a written prefix. Part 3b (probes 1, 7, 9, 10, 11) done: Simpson class D, P4 moved to LU (class B), the ai client sets `read_ms`, both bundles link on three targets, P7 stands with the ADR 0005 amendment's decoder rules. Upstream drafted (step 10, §8: 12 issues with verified repros, 6 addenda, a kimiya note; `upstream/README.md`), filing is the maintainer's. Next: M1 |
 | M1 Foundation, logging & transfer | ☐ | | | | |
 | M2 Equations of state & entropy | ☐ | | | | |
 | M3 Phase & steam | ☐ | | | | M3a/b/c |

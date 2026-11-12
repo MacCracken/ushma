@@ -1,0 +1,33 @@
+# bayan 1.11.1: a JSON string may hold a raw control byte (U+0000–U+001F unescaped) or bytes that are not UTF-8, and
+# every parser accepts the document; RFC 8259 §7 and §8.1 forbid both, and serde_json refuses both (ushma 2.0.0 port,
+# M0 probe 11: 10 documents each). After decoding, a raw 0x01 can't be told from the escape \u0001, so a caller
+# can't refuse it either. Exits 1 while either document parses.
+#
+#   cyrius build <this file> build/r && ./build/r
+
+# A one-member document {"s":"a?b"} with byte `c` in place of the ?.
+fn doc_with(c): i64 {
+    var p = alloc(16);
+    memcpy(p, "{\"s\":\"a?b\"}", 11);
+    store8(p + 7, c);
+    store8(p + 11, 0);
+    return p;
+}
+
+fn main(): i64 {
+    alloc_init();
+    var ctrl = bayan_json_v_parse_buf(doc_with(1), 11);
+    var bad = bayan_json_v_parse_buf(doc_with(255), 11);
+    var tab = bayan_json_v_parse_buf(doc_with(9), 11);
+    print("raw 0x01 in a string parses (1 = accepted): ", 44);
+    if (ctrl != 0) { println_int(1); } else { println_int(0); }
+    print("raw 0x09 (tab) in a string parses (1 = accepted): ", 50);
+    if (tab != 0) { println_int(1); } else { println_int(0); }
+    print("byte 0xFF in a string parses (1 = accepted): ", 45);
+    if (bad != 0) { println_int(1); } else { println_int(0); }
+    if (ctrl != 0 || bad != 0 || tab != 0) { return 1; }
+    return 0;
+}
+
+var r = main();
+sys_exit_group(r);

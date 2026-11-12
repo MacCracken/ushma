@@ -1,0 +1,43 @@
+# ganita 1.2.15: ganita_mat_lu_solve allocates its forward-substitution vector on every call (ushma 2.0.0 port, M0
+# probe 9). The factors, pivots, right-hand side and solution are allocated once; only lu_solve runs in the loop.
+# Exits 1 while the heap grows per call.
+#
+#   cyrius build <this file> build/r && ./build/r
+
+fn main(): i64 {
+    alloc_init();
+    var n = 40;
+    var m = ganita_mat_new(n, n);
+    var k = 0;
+    while (k < n) {
+        ganita_mat_set(m, k, k, 2.0);
+        if (k > 0) { ganita_mat_set(m, k, k - 1, -1.0); }
+        k = k + 1;
+    }
+    var lu = ganita_mat_new(n, n);
+    var piv = alloc(8 * n);
+    var b = alloc(8 * n);
+    var x = alloc(8 * n);
+    k = 0;
+    while (k < n) {
+        var one: f64 = 1.0;
+        store64(b + (8 * k), one);
+        k = k + 1;
+    }
+    if (ganita_mat_lu(m, lu, piv) == 0) { println("lu refused"); return 2; }
+    var before = alloc_used();
+    k = 0;
+    while (k < 1000) {
+        var st = ganita_mat_lu_solve(lu, piv, b, x);
+        if (st != 0) { println("lu_solve failed"); return 2; }
+        k = k + 1;
+    }
+    var per = (alloc_used() - before) / 1000;
+    print("heap bytes per ganita_mat_lu_solve at n = 40: ", 47);
+    println_int(per);
+    if (per > 0) { return 1; }
+    return 0;
+}
+
+var r = main();
+sys_exit_group(r);

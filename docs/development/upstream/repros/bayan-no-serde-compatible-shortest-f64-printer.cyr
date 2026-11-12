@@ -1,0 +1,46 @@
+# bayan 1.11.1: bayan_f64_to_json (Grisu2) is round-trip-safe but not always the shortest closest digits, and it
+# formats differently from serde_json 1.0.154 / Rust (ushma 2.0.0 port, M0 probe 11: it differs from serde_json's
+# text on 6,276 of 160,378 doubles, 1,402 of them with more digits than the shortest). Each row below is serde_json's
+# own text for the bits. Exits 1 while any row differs.
+#
+#   cyrius build <this file> build/r && ./build/r
+
+var _n = 0;
+var _bad = 0;
+
+# One row: the bits and serde_json's text.
+fn row(bits, want) {
+    var buf = alloc(64);
+    var n = bayan_f64_to_json(bits, buf);
+    _n = _n + 1;
+    if (n == strlen(want) && memeq(buf, want, n) == 1) { return 0; }
+    _bad = _bad + 1;
+    print("serde_json ", 11);
+    print(want, strlen(want));
+    print("   bayan ", 9);
+    print(buf, n);
+    println("");
+    return 0;
+}
+
+fn main(): i64 {
+    alloc_init();
+    # 2^-417: bayan's 17 digits are not the closest of the shortest ones (…355 is 1.698e-17 away relative, …354
+    # 1.687e-17).
+    row(0x25E0000000000000, "2.9545531576914354e-126");
+    # 2^-25: an exact tie between …312 and …313. serde_json (zmij) and Python break it to even, bayan up (as Rust's
+    # Display does).
+    row(0x3E60000000000000, "2.9802322387695312e-8");
+    # serde_json switches to an exponent below 1e-5 and from 1e16.
+    row(0x3EB0C6F7A0B5ED8D, "1e-6");
+    row(0x3EB92A737110E454, "1.5e-6");
+    row(0x4350000000000000, "1.8014398509481984e+16");
+    row(0x4440000000000000, "5.902958103587057e+20");
+    print("rows differing from serde_json: ", 32);
+    println_int(_bad);
+    if (_bad > 0) { return 1; }
+    return 0;
+}
+
+var r = main();
+sys_exit_group(r);

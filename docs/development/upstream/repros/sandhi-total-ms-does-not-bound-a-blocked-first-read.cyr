@@ -1,0 +1,51 @@
+# sandhi 1.13.7: `total_ms` doesn't bound a request whose server accepts and then sends nothing. The deadline is
+# checked only between recv calls (sandhi_conn_recv_all_deadline), and with `read_ms` unset no SO_RCVTIMEO is
+# armed, so the first recv blocks for as long as the server stays silent. `idle_ms` doesn't bound it either; only
+# `read_ms` does (ushma 2.0.0 port, M0 probe 7, the same on x86_64, PE and aarch64). Exits 1 while a 1000 ms
+# `total_ms` lets the request run past 1.5 s.
+#
+# A server that accepts, waits 3 s, then answers 200 (three connections):
+#   python3 - <<'PY' &
+#   import socket, time
+#   s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+#   s.bind(("127.0.0.1", 18732)); s.listen(4)
+#   for _ in range(3):
+#       c, _ = s.accept(); time.sleep(3)
+#       c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); c.close()
+#   PY
+#   cyrius build <this file> build/r && ./build/r
+
+# One GET with the given options: prints the elapsed ms, the status and sandhi's error kind; returns the elapsed ms.
+fn get(label, o): i64 {
+    var t0 = clock_now_ms();
+    var r = sandhi_http_get_opts("http://127.0.0.1:18732/", 0, o);
+    var ms = clock_now_ms() - t0;
+    print(label, strlen(label));
+    print(": ", 2);
+    fmt_int(ms);
+    print(" ms, status ", 12);
+    fmt_int(sandhi_http_status(r));
+    print(", err_kind ", 11);
+    println_int(sandhi_http_err_kind(r));
+    return ms;
+}
+
+fn main(): i64 {
+    alloc_init();
+    var o1 = sandhi_http_options_new();
+    sandhi_http_options_total_ms(o1, 1000);
+    var a = get("total_ms 1000", o1);
+    var o2 = sandhi_http_options_new();
+    sandhi_http_options_total_ms(o2, 1000);
+    sandhi_http_options_idle_ms(o2, 1000);
+    var b = get("total_ms + idle_ms 1000", o2);
+    var o3 = sandhi_http_options_new();
+    sandhi_http_options_total_ms(o3, 1000);
+    sandhi_http_options_read_ms(o3, 1000);
+    var c = get("total_ms + read_ms 1000", o3);
+    if (a > 1500 || b > 1500) { return 1; }
+    return 0;
+}
+
+var r = main();
+sys_exit_group(r);
