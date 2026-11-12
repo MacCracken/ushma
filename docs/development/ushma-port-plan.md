@@ -2,150 +2,189 @@
 
 > **Plan of record** for porting ushma to Cyrius. Rust **1.4.0** is the final Rust feature
 > release and the **reference implementation** (the oracle); the Cyrius port ships as **2.0.0**.
-> The method is tanmatra's ([its ADR 0006](../../../tanmatra/docs/adr/0006-cyrius-port-with-rust-oracle.md),
-> [its port plan](../../../tanmatra/docs/development/tanmatra-port-plan.md)), as adapted by
-> kimiya ([its port plan](../../../kimiya/docs/development/kimiya-port-plan.md)) and impetus
-> ([its port plan](../../../impetus/docs/development/impetus-port-plan.md)). Where this plan says
-> "as tanmatra", "as kimiya" or "as impetus", follow that document. §2 lists what is different
-> here and why.
+> **Everything ports**: every module, every feature, every test, the examples and the benchmarks.
+>
+> The parity method (frozen oracle, golden rows, classes A–D) is tanmatra's
+> ([its ADR 0006](../../../tanmatra/docs/adr/0006-cyrius-port-with-rust-oracle.md)), as kimiya
+> and impetus refined it. The **scope and the Rust → Cyrius mapping come from the Cyrius 6.7.18
+> language guide and stdlib** (§7), not from the sibling ports.
 >
 > ▶ **Start on Cyrius 6.7.18 with hisab 3.4.1**, after 1.4.0 is tagged (M0 step 0).
 >
-> 🟡 **Status:** planned 2026-11-11. The proposals in §0.2 are confirmed when ADRs 0001–0003 are
-> written (M0 step 2).
+> 🟡 **Status:** planned 2026-11-11, revised the same day (everything in scope; stdlib-first
+> mapping). The proposals in §0.2 are confirmed when ADRs 0001–0005 are written (M0 step 2).
 
 | Thing | Value | Source |
 |---|---|---|
-| Rust source (oracle) | ushma **1.4.0** at `9528e1f` (committed, **not yet tagged**): ≈5,100 code lines in `src/` (no tests, comments or blank lines), 155 public functions and methods, 18 files, 10 domain features plus `soorat-compat`, `ai`, `logging` | `Cargo.toml`, `VERSION`, `git tag` |
+| Rust source (oracle) | ushma **1.4.0** at `9528e1f` (committed, **not yet tagged**): ≈5,400 code lines in `src/` (no tests, comments or blank lines), 155 public functions and methods, 18 files; 10 domain features plus `soorat-compat`, `ai`, `logging` (`full` = all) | `Cargo.toml`, `VERSION`, `git tag` |
 | Rust health, 2026-11-11 on rustc 1.99.1 | ✅ 449 unit + 30 integration tests (no doc tests); `cargo fmt --check`, clippy `--all-features --all-targets -D warnings`, rustdoc `-D warnings`, `cargo audit` (224 crates, clean), `cargo deny` (advisories, bans, licenses, sources ok) | local run |
 | Correctness baseline | The 1.4.0 audit: IAPWS-IF97 steam tables, exact Region 4, real process paths in the diagrams, NaN/±∞ rejected by every guard, 80 regression tests with IF97, Incropera and NIST reference values | `CHANGELOG.md` 1.4.0 |
 | Cyrius toolchain | **6.7.18** (installed, latest) | `~/.cyrius/current` |
-| ganita | **1.2.15**, bundled in the 6.7.18 stdlib | `~/.cyrius/lib/ganita.cyr` |
-| hisab | **3.4.1**, Cyrius, tag `3.4.1`, bundle `dist/hisab.cyr` | `/home/macro/Repos/hisab` |
-| Oracle's math | Rust **std** → host **glibc 2.44**. Calls in the in-scope modules: `powf` (23), `ln` (22), `exp` (14), `atan` (7), `tanh` (2), `exp_m1` (2). Rust **hisab 1.4.0** (pinned in the lockfile): `calc::lerp` (3), `calc::integral_simpson` (1), `num::gaussian_elimination` (1) | `grep` of non-test `src/`, `Cargo.lock` |
+| Cyrius libraries the port uses | **math** (f64 ops, `F64_*`, `f64_lerp`/`_min`/`_max`/`_clamp`, the same-bits exp/ln/atan polyfills, `f64_parse`); **ganita 1.2.15** (`ganita_f64_pow`/`_tanh`/`_atan2`/`_cbrt`, `ganita_mat_gaussian_elim`, `ganita_mat_lu`/`_lu_solve`); **sakshi 2.5.10** + **log** (spans, levels, outputs); **sandhi 1.13.7** (HTTP/1.1 + HTTP/2 client, headers, TLS policy) with its companions tls, async, random, fdlopen, dynlib; **bayan 1.11.1** (JSON parse/build); **io** (`getenv`); result, tagged, boxed, vec, fnptr, alloc arenas, freelist, overflow | `~/.cyrius/lib`, `cyrius/docs/stdlib-modules.md`, `stdlib-reference.md` |
+| hisab | **3.4.1**, Cyrius, tag `3.4.1`, bundle `dist/hisab.cyr` (`calc_lerp`, `calc_integral_simpson`) | `/home/macro/Repos/hisab` |
+| Oracle's math | Rust **std** → host **glibc 2.44**: `powf` (29 calls), `ln` (23), `exp` (14), `atan` (11), `tanh` (2), `exp_m1` (2). Rust **hisab 1.4.0** (pinned in the lockfile): `calc::lerp` (3), `calc::integral_simpson` (1), `num::gaussian_elimination` (1) | `grep` of non-test `src/`, `Cargo.lock` |
+| Services `ai` talks to | **daimon 2.5.6** and **hoosh 2.12.3**, both Cyrius. daimon registers agents at `POST /v1/agents` and answers `{"id":N,…}` (§2.6) | `/home/macro/Repos/daimon/src/router.cyr`, `api_agent.cyr` |
 | Dependents | Local: **soorat 1.0.0** (Rust), optional feature `thermo` → `ushma = "1"` with `soorat-compat`. kiran, joshua, badal and dravya have no local repo. crates.io reverse dependencies are checked at M0 step 0. **No Cyrius consumer yet.** | `~/Repos/*/Cargo.toml`, `cyrius.cyml` |
 | Target | ushma **2.0.0**, Cyrius | this document |
 
 ## 0. Decisions
 
-### 0.1 Carried from the sibling ports
+### 0.1 Decided
 
-The maintainer settled these during the tanmatra, kimiya and impetus ports. They apply here
-unchanged.
+- **Everything ports** (maintainer, 2026-11-11). All 18 Rust files and every feature:
+  - the 10 domain modules;
+  - `bridge` and `integration/soorat`;
+  - `logging`, on `lib/log.cyr` and sakshi;
+  - `ai`, on sandhi;
+  - serde, as JSON codecs on bayan for all 28 types that derive it;
+  - all 449 unit and 30 integration tests, the 63 benchmarks and the 5 examples.
 
+  Nothing is dropped or deferred. If something has no Cyrius counterpart, the port shows the
+  evidence and asks. It never leaves the thing out.
 - **The oracle is frozen.** Rust 1.4.0 moves to `rust-old/` and is never edited. A generator
   crate in `scripts/oracle/` drives it by path. A wrong oracle value is fixed in Rust as 1.4.x
   and the corpus is regenerated.
 - **No Rust 2.0.** API shape changes land in the Cyrius API only, each accepted by an ADR row
   (§3.3). Rust stays on 1.x for soorat and any crates.io dependent.
-- **hisab-first** (impetus ADR 0007). The port calls hisab for everything hisab provides. Where
-  hisab or the stdlib falls short, the port files the gap upstream (§8) with the probe that
-  shows it. A stopgap is local and named as one.
-- **Accuracy over glibc parity** (kimiya ADRs 0005 and 0006, impetus ADR 0011). Every
-  transcendental primitive is correctly rounded and gives the same bits on every target.
+- **Stdlib- and hisab-first.** The port calls the Cyrius stdlib (math, ganita, sakshi, log,
+  sandhi, bayan, …) and hisab for everything they provide. Where they fall short, the port files
+  the gap upstream (§8) with the probe that shows it. A stopgap is local and named as one.
+- **Accuracy over glibc parity** (the maintainer's decision in kimiya, its ADRs 0005 and 0006).
+  Every transcendental primitive is correctly rounded and gives the same bits on every target.
   "Parity" means functional parity: the same results, `Err` codes, check order and branches.
   It does not mean copying glibc's last-ulp errors. The class-C reference is the *corrected
-  oracle*: Rust's operation sequence evaluated with correctly rounded primitives (§5).
-- **Performance is measured, not gated.** Every in-scope Rust benchmark gets a Cyrius twin, and
-  both columns go in `docs/benchmarks-rust-v-cyrius.md`. A slow row is a finding to file, not a
-  reason to change the port.
-- **New physics stays out.** The roadmap backlog (the 2D ghost-node walls, SOR, the Dittus–Boelter
-  cooling exponent, compressed liquid, the sloped melting curve, …) comes after 2.0, demand-gated.
+  oracle* (§5).
+- **Performance is measured, not gated.** Every Rust benchmark gets a Cyrius twin, and both
+  columns go in `docs/benchmarks-rust-v-cyrius.md`.
+- **New physics stays out.** The roadmap backlog comes after 2.0, demand-gated. It is new work,
+  not existing features.
 - **The maintainer does all git.** Each verified milestone part ends with a summary and a request
   to commit before the next part starts.
 
-### 0.2 Proposed for ushma (confirm in M0 step 2)
+### 0.2 Proposed (confirm in M0 step 2)
 
 | # | Proposal | Why | Alternative |
 |---|---|---|---|
-| P1 | **Scope.** Port the 10 domain modules plus `error` and `validate`. Defer `bridge` and `integration/soorat`. Drop `ai` and `logging`. | No Cyrius code calls the bridges. soorat, the only known dependent, is Rust and keeps using Rust 1.x. `ai` is a reqwest client that registers with daimon, not thermodynamics. `logging` wraps tracing-subscriber (§3.2). | Port `bridge` too: 16 thin functions with no dependencies, about one sub-milestone. |
-| P2 | **Range-edge sweep inside each milestone**, not a library-wide audit afterwards. Each milestone runs kimiya's overflow/exact-constant checks on its own functions before its gate. | kimiya ran its audit after M4 and had to reopen every module (batches B1–B12). Doing it per module costs the same work once. | kimiya's order: port first, audit later. |
-| P3 | **Correctly rounded primitives.** Vendor the subset of kimiya's `src/mathx.cyr` that ushma calls into `src/mathx.cyr` (`_us_cr_exp`, `_ln`, `_pow`, `_expm1`, and atan as atan2(x, 1)). Write a new correctly rounded `tanh`. File a request to host the shared set upstream. | ushma would be the **third** private copy, after impetus's `crmath.cyr` (1,994 lines) and kimiya's `mathx.cyr` (5,384 lines). CLAUDE.md's third-instance rule says extract it. Extracting it first would block ushma on kimiya's open audit batches B10 and B11, which still change `mathx.cyr`. | Extract to ganita or hisab first, then port. |
-| P4 | **Dense Gaussian elimination** (`ThermalNetwork::solve`): transcribe Rust hisab 1.4.0's `gaussian_elimination` into `src/numerics.cyr` as a private `_us_*` stopgap (class B), and file a hisab request. | hisab 3.4.1 has `num_tridiag_solve` but no dense direct solver. kimiya's M5 needs the same routine (its ADR 0003), so the request has two consumers. | Wait for hisab before M6. |
-| P5 | **One bundle.** `[lib]` holds every in-scope module, steam included. | Rust's 10 features are additive compile-time gates. Cyrius `[features]` only select optional dependencies, and profiles are for exclusive variants (impetus's 2D/3D). Rankine and refrigeration need steam anyway. | `[lib]` without steam plus a `[lib.steam]` profile (as tanmatra's optics). |
-| P6 | **Public names get a `us_` prefix** (`us_ideal_gas_pressure`), with `US_` constants and `US_ERR_*` codes. | Cyrius has one global namespace. A duplicate non-private `fn` is only a warning, and **the last definition wins**. 10 ushma functions already collide with kimiya's Cyrius bundle: `adiabatic_flame_temperature`, `equilibrium_constant`, `ideal_gas_pressure`, `ideal_gas_volume`, `is_spontaneous`, `peng_robinson_pressure`, `reaction_enthalpy`, `redlich_kwong_pressure`, `van_der_waals_pressure`, `vant_hoff_k`. kiran uses both crates in Rust. | Keep Rust's names (as kimiya and tanmatra) and rename only the 10. |
+| P2 | **Range-edge sweep inside each milestone**, not a library-wide audit afterwards. | kimiya ran its audit after M4 and had to reopen every module (batches B1–B12). | Port first, audit later. |
+| P3 | **Correctly rounded primitives** in `src/mathx.cyr` (`_us_cr_exp`, `_ln`, `_expm1`, `_pow`, atan as atan2(x, 1), and tanh), vendored from kimiya's `src/mathx.cyr`, plus an upstream request to host one shared set. | The stdlib's exp/ln/atan polyfills and ganita's pow/tanh are ≤1 ulp with the same bits everywhere, but they are **not correctly rounded**, and the accuracy policy (§0.1) requires correct rounding. The stdlib has no expm1. ushma would be the third private copy, after impetus `crmath.cyr` and kimiya `mathx.cyr`. | Use the stdlib polyfills and ganita, and accept ≤1 ulp under an ADR. |
+| P4 | **`ThermalNetwork::solve` on `ganita_mat_gaussian_elim`** (partial pivoting, in place on the augmented matrix). Keep 1.4.0's diagonal row scaling in front of it. | The stdlib already has the solver; nothing to transcribe. Rust hisab 1.4.0 stops on an absolute pivot `< ε`, while ganita uses a relative threshold over [A\|b] and refuses non-finite entries. Probe 9 measures the bits. ADR 0003 records the singularity divergence. | `ganita_mat_lu` + `ganita_mat_lu_solve`. |
+| P5 | **Two bundles, as prakash:** `[lib]` (every module except the HTTP client, logging included) and `[lib.ai]` (`[lib]` + `src/ai.cyr`). | sandhi pulls the whole TLS stack (tls, async, random, fdlopen, dynlib). A consumer that wants only the physics shouldn't link it, which is what Rust's `ai` feature did. The 10 domain features are additive, so they need no profiles. | A single bundle with ai included. |
+| P6 | **Public names live under `us`.** Functions become `us_ideal_gas_pressure`, `us_ai_register_agent`, …. Enum variants, constants and error codes get `US_` names (`US_PHASE_SOLID`, `US_ERR_INVALID_TEMPERATURE`). Probe 6 picks the mechanism: the language's own `mod us;` mangling (a consumer then writes `use us.ideal_gas_pressure;` and calls the bare name), or a written prefix. | Cyrius has **one global namespace**. A duplicate non-private `fn` is a warning, and **the last definition wins** (guide L5267–5279). A bare enum variant name also resolves to the last definition, retroactively (L391–396, L10297). Collisions already exist: 10 functions with kimiya's bundle (`ideal_gas_pressure`, `reaction_enthalpy`, `equilibrium_constant`, …), and prakash's `ai_*` client names. kiran uses both kimiya and ushma. `mod`/`use` (6.7.17, L625) is documented in one sentence and no library uses it yet, hence the probe. | Keep Rust's names and rename only the collisions. |
+| P7 | **JSON is byte-identical to serde_json**, with serde's field semantics. Readers work on `bayan_json_parse`'s tree, writers on `str_builder`. The f64 text comes from a shortest-digit printer (`src/fmtf.cyr`, vendored from impetus), which also prints `UshmaError`'s Display text the way Rust does. | `#derive(Serialize)` exists (guide L4548–4660, on bayan), but it isn't serde's semantics: a missing key leaves 0 instead of an error; u64, `Vec<Str>`, tuple and payload-enum fields are refused; its f64 text is bayan's printer, which round-trips but isn't always shortest and formats differently from serde_json. Its scanner also has three open issues (2026-11-07: reads past a NUL, memsets a refused allocation, hangs on a stray brace). impetus reached the same decision (its ADR 0010). | `#derive(Serialize)`, compared by parsed value only, with its decode differences accepted by ADR. |
+| P8 | **Fix the daimon registration in Rust 1.4.1 and in the port.** Rust posts to `/v1/agents/register` and reads `agent_id`. daimon serves `POST /v1/agents` and answers `{"id":N,…}`, so the Rust client has never registered. prakash found and fixed the same bug in its 2.5.1 (`prakash/src/ai.cyr`). | It's an oracle defect, so §0.1's rule fixes it in Rust 1.4.x first. soorat and crates.io users of the Rust client get a working client too. | Fix it in the Cyrius port only (ADR 0002 row). |
 
 ---
 
-## 1. Porting models and references
+## 1. References
 
-- **kimiya** (`/home/macro/Repos/kimiya`, in progress, M0–M4 done) is the **closest model**. Both
-  are pure-function science libraries of similar size (kimiya 1.2.0: 6,824 lines, 202 functions,
-  662 tests) with a glibc oracle. Copy and adapt:
-  - `scripts/oracle/`: the generator crate, `validate.py` (and `--sensitivity`), `mpfr_ref.py`,
-    `cr_verify.py`, `probe_tables.py` and `mathx_tables.py`;
-  - `tests/parity.tcyr`, `tests/parity_core.cyr` and `tests/ulp.cyr`, with the ADR-mapping table
-    and the "accepted under ADR 6" count;
-  - `src/mathx.cyr` (P3);
-  - ADR 0002's divergence format, one row per function family, with the maintainer's decisions
-    quoted verbatim;
-  - `handoff/gates/gates.sh`, the full three-target gate run. `handoff/` is untracked and will be
-    deleted, so copy it into `scripts/gates.sh` at M0;
-  - `handoff/HANDOFF.md`'s per-batch loop. An agent ports one or two families while independent
-    Python models built from `rust-old/src` are written. Then a probe compares the port with the
-    models bit for bit on all three targets, and every difference is investigated.
-- **impetus 2.0.0** (`/home/macro/Repos/impetus`, done 2026-11-10) is the model for:
-  - hisab-first (ADR 0007) and its gap list (plan §8);
-  - **single-step parity rows** for stateful objects (plan §2.1, §5): ushma's thermal grids and
-    network (§2.2);
-  - the M0 **probes** (plan §4 step 9, `scripts/probes/`): memory, struct values, per-test
-    module lists;
-  - private constants extracted from the Rust source with a completeness proof
-    (`scripts/oracle/src/t_private.rs`);
-  - `scripts/bench_record.py` and `scripts/doc_examples.py`.
-- **tanmatra 2.0.2** (`/home/macro/Repos/tanmatra`) is the original template. Use it for
-  `scripts/rust_test_ledger.py`, `scripts/surface_parity.py`, the port-parity rule for class-C
-  bounds, and the CLAUDE.md translation (its plan §2 step 2).
-- **hisab 3.4.1** (`/home/macro/Repos/hisab`) is the dependency. Read its `CLAUDE.md`,
-  `docs/guides/migration-3.4.md` (the Result convention) and the doc comment of every function
-  ushma calls (§7.2).
-- **Language and toolchain** (`/home/macro/Repos/cyrius`): `docs/guides/cyrius-guide.md`,
-  `docs/stdlib-reference.md`, `docs/development/ecosystem-migration.md` (6.7.x entries),
-  `cyrius help manifest`.
+- **The Cyrius language and stdlib** (`/home/macro/Repos/cyrius`), reviewed in full for this
+  plan on 2026-11-11:
+  - `docs/guides/cyrius-guide.md` (all 10,725 lines; its newest notes are for 6.7.17);
+  - `docs/stdlib-modules.md` and `docs/stdlib-reference.md`;
+  - `docs/development/ecosystem-migration.md` (6.6–6.7.18);
+  - `docs/ecosystem.md` (fold pins);
+  - `cyrius help` and `cyrius help manifest`.
+
+  §7 maps every Rust construct and dependency ushma uses onto them, with guide line numbers.
+- **sandhi 1.13.7** (`/home/macro/Repos/sandhi`): `README.md` (the client and its companion
+  modules; "use bayan, not json"), `docs/examples/`.
+- **sakshi 2.5.10** (`lib/sakshi.cyr`) and `lib/log.cyr`: spans (`sakshi_span_enter`/`_exit`),
+  levels, outputs, the `SAKSHI_LEVEL` compile-time ceiling.
+- **bayan 1.11.1** (`lib/bayan.cyr`): `bayan_json_parse`, `bayan_json_v_*`, `bayan_json_build`.
+- **hisab 3.4.1** (`/home/macro/Repos/hisab`): its `CLAUDE.md`, `docs/guides/migration-3.4.md`,
+  and the doc comments of `calc_lerp` and `calc_integral_simpson`.
+- **Process models** (method only, never scope):
+  - **kimiya**, in progress: the generator crate `scripts/oracle/` (`validate.py`, `mpfr_ref.py`,
+    `cr_verify.py`, `probe_tables.py`, `mathx_tables.py`), the parity harness
+    (`tests/parity.tcyr`, `parity_core.cyr`, `ulp.cyr`), `src/mathx.cyr`, ADR 0002's divergence
+    format, and `handoff/` (gates script and the per-batch verification loop);
+  - **impetus 2.0.0**: single-step parity rows, M0 probes (`scripts/probes/`), private-constant
+    extraction (`t_private.rs`), serde-compatible JSON (ADR 0010, `src/json.cyr`,
+    `src/fmtf.cyr`);
+  - **prakash 2.15.2**: the Cyrius AI client on sandhi (`src/ai.cyr`, `tests/ai.tcyr`,
+    `tests/ai_bundle.tcyr`), the `[lib.ai]` profile and the sakshi resolution note in
+    `cyrius.cyml`, and `src/serialize.cyr`;
+  - **tanmatra 2.0.2**: `scripts/rust_test_ledger.py`, `scripts/surface_parity.py`, the class-C
+    port-parity rule.
 
 ---
 
-## 2. What is different from the siblings
+## 2. What this port has to handle
 
-1. **The steam tables are private and the largest data in the crate.** `SATURATED_TABLE` has 42
-   rows × 9 fields; `SUPERHEATED_DATA` has 72 rows (9 pressure tiers × 8 temperatures); `R4_N`
-   holds the 10 IF97 Region 4 coefficients. Their API exposes interpolated values, not the rows.
-   They are extracted from `rust-old/src/steam.rs` with Rust's own `f64::from_str`, plus a proof
-   that every `const` in the module is emitted or excused (impetus's `t_private.rs`). The golden
-   rows that read them then prove them. They are never re-typed.
-2. **Stateful objects, but with public state.** `ThermalGrid1D`, `ThermalGrid2D` and
-   `ThermalNetwork` step or solve in place. Their fields are public, so the oracle can dump the
-   full state without impetus's hidden `oracle` feature (confirm at M0 step 0). They get impetus's
-   second parity layer: load the state, step once, compare the whole state. A 1-ulp difference
-   doesn't compound here the way a stacked pile does (diffusion damps it), but each step is still
-   compared, not a long trajectory.
-3. **ushma's own iterations.** These are ushma's loops, transcribed exactly, expected class B (D
-   only where an iteration count can legitimately differ):
-   - Rankine's and refrigeration's s(T, P) = s₁ inversions (bisection over the table);
-   - `superheated_by_entropy`'s piecewise-linear inversion;
-   - Gauss–Seidel steady state;
+1. **Private steam tables.** `SATURATED_TABLE` has 42 rows × 9 fields; `SUPERHEATED_DATA` has 72
+   rows (9 pressure tiers × 8 temperatures); `R4_N` holds the 10 IF97 Region 4 coefficients. The
+   API exposes interpolated values, not the rows. They are extracted from `rust-old/src/steam.rs`
+   with Rust's `f64::from_str`, plus a proof that every `const` in the module is emitted or
+   excused (impetus's `t_private.rs`). They are never re-typed.
+2. **Stateful objects with public state.** `ThermalGrid1D`, `ThermalGrid2D` and `ThermalNetwork`
+   step or solve in place. Their fields are public, so the oracle dumps the full state without a
+   hidden feature (confirm at M0 step 0). They get single-step parity rows: load the state, step
+   once, compare the whole state.
+3. **ushma's own iterations**, transcribed exactly and expected class B:
+   - Rankine's and refrigeration's s(T, P) = s₁ inversions;
+   - `superheated_by_entropy`;
+   - Gauss–Seidel;
    - adaptive sub-stepping;
-   - the adiabatic flame temperature.
-4. **Three Rust hisab 1.4.0 calls change library** (§7.2). `calc_lerp` keeps the fast form's
-   bits (class B). `calc_integral_simpson` changed its framing in 3.3.6, so probe it (class B or
-   D). `gaussian_elimination` has no hisab 3.4.1 counterpart (P4).
-5. **Results are wide structs and point lists.** Each cycle function returns a struct of state
-   points, heats and efficiencies; the diagrams return `Vec<DiagramPoint>`. The open
-   small-struct `Result` payload bug
+   - the flame temperature.
+4. **Wide results and point lists.** Each cycle function returns a struct of state points, heats
+   and efficiencies; the diagrams return `Vec<DiagramPoint>`. The open small-struct `Result`
+   payload issue
    (`cyrius/docs/development/issues/2026-11-08-small-struct-result-payload-read-as-address.md`)
-   means these go through out-pointers or handles. Probe 3 checks this at the 6.7.18 pin.
+   means these go through out-pointers or handles (probe 3).
+5. **All three optional stacks at once.** No sibling port has carried tracing spans, an HTTP
+   client and serde JSON together:
+   - **Logging:** `logging::init()` / `init_with_level()` become `us_log_init()` /
+     `us_log_init_with_level()` on `lib/log.cyr`, reading `USHMA_LOG` through `getenv`. All 28
+     `#[tracing::instrument]` spans are `level = "debug"`. They become `sakshi_span_enter`/`_exit`
+     with the same names, at DEBUG. Probe 8 measures the cost when spans are filtered out, against
+     functions that take 1–2 ns.
+   - **HTTP:** `DaimonClient::register_agent` becomes `us_ai_register_agent` on
+     `sandhi_http_post_opts`: a JSON body, a bearer header through `sandhi_headers_*`, a 30 s
+     timeout and the status check. `DaimonConfig`'s redacted `Debug` becomes a formatter that
+     prints `<redacted>`. Endpoint and key strings are refused when they hold control bytes (the
+     request-splitting guard prakash added).
+   - **JSON:** 28 types (§3.1), 30 serde round-trip test sites, documents byte-identical to
+     serde_json (P7).
+6. **An oracle defect in `ai`** (P8). The Rust client posts to the wrong path and reads a field
+   daimon never sends.
+7. **sakshi arrives twice.** hisab 3.4.1's `cyrius.cyml` declares `[deps.sakshi]` (tag 2.5.10),
+   although its bundle makes no `sakshi_` call. ushma needs sakshi as a stdlib leaf for
+   `lib/log.cyr` and sandhi. Whenever both are present, the resolver warns: "refusing to overwrite
+   stdlib leaf 'sakshi' … declare it in [deps] stdlib OR depend on the package, not both"
+   (`cbt/deps/stdlib.cyr:251–259`). The stdlib copy wins, and the two are byte-identical at 2.5.10,
+   so this is benign but can't be silenced from ushma. The fix is upstream: hisab drops
+   `[deps.sakshi]`, as patra did at 1.13.0 (§8). Probe 10 confirms it with a real resolve.
+8. **Open toolchain issues the port must work around** (`cyrius/docs/development/issues/`, open
+   at 6.7.18):
+
+   | Issue | Severity | Hits ushma | Workaround in the port |
+   |---|---|---|---|
+   | `field-store-of-struct-call-copies-a-field-argument` | 🔴 High, **silent wrong code** | `s.f = g(t.e)` stores `t.e`, not `g`'s result: the shape of stepping a grid in place | bind the call to a local, then store; a CLAUDE.md rule and a probe-12 case |
+   | `small-struct-result-payload-read-as-address` | 🟡 Medium | a struct ≤ 8 B in `Ok()` crashes when bound back | error/result records go through out-pointers (probe 3) |
+   | `no-scoped-allocator-for-alloc` | 🟡 High | hisab allocates from the global heap on every call and never frees; `alloc_reset` clobbers the caller | probe 2 measures heap growth per `debye_cv` (Simpson) and per steam lookup (`calc_lerp`); a hisab call that leaks stays off per-call paths, or the formula is evaluated locally with a stated reason |
+   | `arena-grow-keeps-a-chunk-per-larger-allocation` | 🔴 Medium | growable scratch arenas for the grids | size the arena's chunk ≥ the largest per-step need |
+   | `exp-polyfill-double-rounds-subnormal-results` | 🟡 Low | aarch64 `f64_exp`/`f64_exp2` misround (up to 39 ulp measured downstream); x87 misrounds about 5 % | the correctly rounded primitives (P3) |
+   | `derive-serialize-*` (three) | 🔴/🟡 | the derived JSON decoder | hand-written codecs on bayan's tree (P7) |
+   | `f64v-builtins-no-scalar-tail` | 🔴 High | any SIMD sweep over a grid row | no `f64v_*` without an explicit scalar tail |
+   | `an-attribute-before-a-var-attaches-to-the-next-fn` | 🟡 Medium | `#must_use`/`#inline` near the table globals | never put an attribute before a `var` or `const` (CLAUDE.md rule) |
+   | `manifest-build-profiles-and-target-unread`, `constant-if-arms-not-folded` | 🟡 Low | feature gating | `[lib.<profile>]` plus `#ifdef`, never `if (CONST)` |
+   | `cyrius-port-clobbers-project-docs-and-omits-bench` | 🟡 Medium | M0 | step 2 |
+
+   No open issue concerns sandhi's client or sakshi.
 
 ---
 
 ## 3. Scope
 
-### 3.1 In scope for 2.0.0
+### 3.1 Everything, by milestone
 
 | Milestone | Rust module | Code lines | Public fns | Unit tests | Cyrius module(s) |
 |---|---|---|---|---|---|
-| M0/M1 | *(correctly rounded primitives, P3)* | — | — | — | `src/mathx.cyr` (private `_us_cr_*`) |
-| M1 | `error.rs` | 37 | — | 18 | `src/error.cyr` |
+| M1 | *(correctly rounded primitives, P3)* | — | — | — | `src/mathx.cyr` (private `_us_cr_*`) |
+| M1 | *(JSON infrastructure, P7)* | — | — | — | `src/fmtf.cyr` (vendored), `src/json.cyr` (shared reader/writer helpers) |
+| M1 | `error.rs` | 37 | — | 18 | `src/error.cyr` (+ its JSON codec) |
 | M1 | `validate.rs` | 19 | (private) | 2 | `src/validate.cyr` |
+| M1 | `logging.rs` | 14 | 2 | 1 | `src/logging.cyr` (log + sakshi, `USHMA_LOG`) |
 | M1 | *(8 public constants in 4 modules)* | — | (consts) | — | `src/constants.cyr` (generated) |
 | M1 | `material.rs` | 106 | 2 | 8 | `src/material_data.cyr` (generated), `src/material.cyr` |
 | M1 | `transfer.rs` | 443 | 32 | 67 | `src/transfer.cyr` |
@@ -156,69 +195,83 @@ unchanged.
 | M4 | `cycle.rs` | 730 | 13 | 59 | `src/cycle.cyr` |
 | M5 | `chem.rs` | 203 | 7 | 23 | `src/chem_data.cyr` (generated), `src/chem.cyr` |
 | M5 | `stat.rs` | 214 | 14 | 33 | `src/stat.cyr` |
-| M6 | *(hisab gap, P4)* | — | — | — | `src/numerics.cyr` (private `_us_*`) |
-| M6 | `numerical.rs` | 599 | 13 | 27 | `src/numerical.cyr` |
+| M6 | `numerical.rs` | 599 | 13 | 27 | `src/numerical.cyr` (on ganita, P4) |
+| M7 | `bridge.rs` | 168 | 16 | 31 | `src/bridge.cyr` |
+| M7 | `integration/soorat.rs` | 215 | 5 (+6 types) | 13 | `src/soorat.cyr` |
+| M7 | `ai.rs` | 86 | 1 (+3 types) | 7 | `src/ai.cyr` (`[lib.ai]` only) |
 
-These counts were measured on 2026-11-11 against 1.4.0. In scope: 131 of the 155 public
-functions, 397 of the 449 unit tests, and all 30 integration tests (none touches a deferred
-module).
+**Totals:** 155 of 155 public functions, 449 of 449 unit tests, 30 of 30 integration tests, 63
+benchmarks and 5 examples (M8). `lib.rs` (29 lines of module wiring and re-exports) becomes the
+`[lib]` / `[lib.ai]` module lists.
 
-### 3.2 Deferred or dropped (P1)
+Each module's types get their serde-compatible JSON codecs in that module's milestone. The 28
+types are:
+- `UshmaError`;
+- `ThermalMaterial`;
+- `GasData`;
+- `Phase`, `SubstanceData`;
+- `SaturatedEntry`, `SuperheatedEntry`, `WetSteamProperties`;
+- `StatePoint`, `ProcessKind`, `CycleKind`, `CycleResult`, `DiagramPoint`, `RefrigerationResult`,
+  `CycleComparisonEntry`;
+- `Species`;
+- `BoundaryCondition`, `Side`, `ThermalGrid1D`, `ThermalGrid2D`, `ThermalNetwork`;
+- the 6 soorat types;
+- `DaimonConfig`, `HooshConfig`.
 
-| Rust surface | Size | Status | Unblocked when |
-|---|---|---|---|
-| `bridge.rs`: bijli, kimiya, dravya, badal, pravash, sharira conversions | 168 lines, 16 fns, 31 tests | **Deferred** | A Cyrius consumer calls one. kimiya 2.0 deferred its own ushma bridges until ushma ports, so the two sets should port together |
-| `integration/soorat.rs` (`soorat-compat`) | 213 lines, 5 fns, 13 tests | **Deferred** | soorat ports. Until then soorat's `thermo` feature uses Rust 1.x |
-| `ai.rs` (`ai`: daimon registration over reqwest) | 86 lines, 1 fn, 7 tests | **Dropped** | A consumer asks (Cyrius would need an HTTP client) |
-| `logging.rs` (`logging`: tracing-subscriber init) | 14 lines, 2 fns, 1 test | **Dropped** | — (the Cyrius analogue is sakshi) |
+### 3.2 Rust features → Cyrius
 
-`rust-old/` keeps every deferred function and its tests as the reference.
+| Rust feature | Cyrius |
+|---|---|
+| `transfer`, `state`, `entropy`, `phase`, `steam`, `cycle`, `numerical`, `chem`, `stat`, `material` | modules in `[lib]`, in dependency order (§4 step 3). They were additive compile-time gates. Cyrius `[features]` only select optional dependencies, so nothing needs a profile |
+| `soorat-compat` | `src/soorat.cyr` in `[lib]`; it has no extra dependencies |
+| `logging` | `src/logging.cyr` in `[lib]` (log + sakshi). Spans compile to nothing above the `SAKSHI_LEVEL` ceiling |
+| `ai` | `src/ai.cyr` in `[lib.ai]` (sandhi + its TLS companions + bayan), as prakash (P5) |
+| `full` | `[lib.ai]` |
 
 ### 3.3 API changes in the Cyrius version (accepted divergences, ADR 0002)
 
-These are the starting list. Rows found during the port are added there, one per function
-family, and anything that moves results noticeably goes to the maintainer first.
+This is the starting list. Rows found during the port are added there, one per function family,
+and anything that moves results noticeably goes to the maintainer first.
 
 | # | Rust 1.4.0 | Cyrius 2.0.0 | Golden comparison |
 |---|---|---|---|
-| 1 | `UshmaError` variants with `String` payloads (`DivisionByZero`, `InvalidParameter`, `SubstanceNotFound`) | `US_ERR_*` code enum (append-only) + numeric detail, as kimiya | the code is class A; message text is not compared |
-| 2 | `ThermalGrid2D` stores `Vec<Vec<f64>>`; Crank–Nicolson allocates per step (roadmap backlog: breaking in Rust) | flat row-major buffer + dims; caller-reusable scratch | the state dump is flattened the same way, class B |
-| 3 | `#[tracing::instrument]` on 28 functions | no spans (as tanmatra, kimiya and impetus) | n/a |
-| 4 | Lookups by `&str` name (`SubstanceNotFound`) | table index (−1 when absent) plus a name search | same index set, class A |
-| — | Exponents written as rounded decimals (`powf(1.0/3.0)`, `powf(1.0/6.0)`) and any similar exact-constant miss | fixed under the accuracy policy (§0.1, P2) as each module ports | mapped per row, as kimiya's ADR 0002 #12 |
+| 1 | `UshmaError` variants with `String` payloads (`DivisionByZero`, `InvalidParameter`, `SubstanceNotFound`) and f64 payloads | `US_ERR_*` code enum (append-only) carried in the value-form `Result`'s one payload word; the detail fields go in an error record (an out-pointer or a per-call error slot, as prakash's `err_out`). The JSON stays serde's shape, and `us_error_message` prints thiserror's Display text | code class A; JSON document class A; message text class A |
+| 2 | `ThermalGrid2D` stores `Vec<Vec<f64>>`; Crank–Nicolson allocates per step (roadmap backlog: breaking in Rust) | flat row-major buffer + dims; caller-reusable scratch; the JSON keeps Rust's nested-array shape | state dump flattened the same way, class B; JSON class A |
+| 3 | lookups by `&str` name | table index (−1 when absent) plus a name search | same index set, class A |
+| 4 | `register_agent` is `async` (tokio + reqwest) | synchronous `sandhi_http_post_opts` with the same 30 s timeout | request bytes (method, path after P8, headers, body) class A against the oracle's captured request |
+| 5 | `EnvFilter` directives in `USHMA_LOG` (`ushma=debug,…`) | the level names trace / debug / info / warn / error, and `ushma=<level>`; other directive syntax is refused with a warning | parsing rows class A; log line format is sakshi's, not compared |
+| 6 | the daimon path and response field (P8) | `POST /v1/agents`, `id` | fixed in Rust 1.4.1 first, so no divergence remains |
+| — | exponents written as rounded decimals (`powf(1.0/3.0)`, `powf(1.0/6.0)`) and similar exact-constant misses | fixed under the accuracy policy as each module ports (P2) | mapped per row, as kimiya's ADR 0002 #12 |
 
-### 3.4 Not carried over
+### 3.4 Not carried
 
-- **serde.** There are 28 `Serialize`/`Deserialize` derives, but only `soorat-compat` and `ai`
-  depend on them, and both are out (§3.2).
-- **Rust-only mechanics.** `#[inline]`, `#[cold]` error helpers, closures (→ function pointer +
-  context pointer, §7.3), `&'static` lifetimes, `Option<&'static T>`.
-- **The 5 Rust examples** (`basic_thermo`, `heat_engine`, `building_thermal`, `cooling_system`,
-  `phase_change`) stay in `rust-old/examples/`. Cyrius versions are an M7 nice-to-have for
-  `docs/examples/`.
+Only Rust mechanics that have no meaning in Cyrius: `#[inline]`, `#[cold]`, `&'static` lifetimes,
+and `Option<&'static T>`. Each one's effect is kept, as §7.3 shows. Nothing observable is dropped.
 
 ---
 
 ## 4. M0: prep, then initialize with `cyrius port`
 
 `cyrius port` moves the Rust project into `rust-old/` and writes the Cyrius skeleton, so don't
-hand-build the structure. The scaffold still overwrites project files on 6.7.18 (issue
+hand-build the structure. On 6.7.18 the scaffold still overwrites project files (issue
 `cyrius/docs/development/issues/2026-11-08-cyrius-port-clobbers-project-docs-and-omits-bench.md`,
-**open**), so steps 2–3 repair what it writes.
+**open**), so step 2 repairs what it writes.
 
 0. **Freeze a green oracle (Rust, before the move).** *Maintainer.*
-   - Tag `1.4.0` at `9528e1f`; the release workflow requires the tag to equal `VERSION`.
-     Publishing to crates.io is optional, but it makes 1.4.0 the version Rust dependents see.
-   - Re-run the P(-1) checks on the tagged commit. They are clean on rustc 1.99.1 (header
-     table). After this point nothing in `src/` changes.
+   - Fix P8 first, if confirmed. Post to `/v1/agents`, read `id`, and add a regression test
+     against a local stub. This is 1.4.1 (or fold it into 1.4.0 before tagging, if you prefer).
+   - Tag the release at its commit; the release workflow requires the tag to equal `VERSION`.
+     Publishing to crates.io is optional.
+   - Re-run the P(-1) checks on the tagged commit. They are clean on rustc 1.99.1 (header table).
+     After this point nothing in `src/` changes.
    - Run `./scripts/bench-history.sh` on the tag. The last row in `bench-history.csv` is from
-     `2f35058` (1.3.0), and `docs/benchmarks-rust-v-cyrius.md` needs a 1.4.0 Rust column.
+     `2f35058` (1.3.0).
    - Record glibc (**2.44** today); the oracle's transcendental bits depend on it.
-   - Check crates.io reverse dependencies (as kimiya did) and record them in the header table.
-     The CLAUDE.md consumer list (kiran, joshua) may be stale.
-   - Confirm that every state the generator needs is reachable through the public API (§2.2).
-     If something isn't, add it as **unreleased port tooling**, as impetus did: a hidden,
-     read-only `oracle` feature, `VERSION` stays 1.4.0, no tag.
+   - Check crates.io reverse dependencies and record them in the header table. The CLAUDE.md
+     consumer list (kiran, joshua) may be stale.
+   - Confirm that every state the generator needs is reachable through the public API (§2.2). If
+     something isn't, add a hidden read-only `oracle` feature as unreleased port tooling, as
+     impetus did.
 1. **Scaffold.**
    ```sh
    cd /home/macro/Repos/ushma
@@ -226,52 +279,69 @@ hand-build the structure. The scaffold still overwrites project files on 6.7.18 
    cyrius port .
    ```
    Expect these to move into `rust-old/`: `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`,
-   `src/`, `tests/`, `benches/`, `examples/`, `Makefile`, `codecov.yml`, `deny.toml` and `target/`
-   (`--dry-run` doesn't list them by name). Expect the scaffold to write `src/main.cyr`,
-   `cyrius.cyml`, `tests/ushma.{tcyr,bcyr,fcyr}`, `docs/{adr,architecture,guides,examples}/` and
-   `docs/development/state.md`.
+   `src/`, `tests/`, `benches/`, `examples/`, `Makefile`, `codecov.yml`, `deny.toml` and `target/`.
+   Expect the scaffold to write `src/main.cyr`, `cyrius.cyml`, `tests/ushma.{tcyr,bcyr,fcyr}`,
+   `docs/{adr,architecture,guides,examples}/` and `docs/development/state.md`.
    - **Track `rust-old/Cargo.lock`.** It's untracked today (the library-crate rule), but the
-     oracle has to rebuild against exactly hisab 1.4.0 and its other pins. kimiya committed its
-     lockfile.
+     oracle has to rebuild against exactly hisab 1.4.0, reqwest 0.13, serde_json 1.0.154 and the
+     rest of its pins.
 2. **Repair what the scaffold overwrites.** *(Claude; maintainer reviews.)*
    - **`CLAUDE.md`.** Merge `git show HEAD:CLAUDE.md` with the scaffold's Cyrius rules. Keep the
-     identity, process, task sizing and DO NOT list. Translate the principles as impetus did:
+     identity, process, task sizing and DO NOT list. Translate the principles to their Cyrius
+     mechanisms:
      - `#[non_exhaustive]` → append-only enum values;
      - `#[must_use]` → `#must_use` / `#pure`;
-     - no `unwrap`/`panic!` → no `+?`, `-?`, `*?`, `assert_fatal`, `result_unwrap` or `panic` in
-       `src/`;
-     - "Vec arena over HashMap" → sorted arrays and typed stride arenas, never `hashmap` (its
-       seed is random per process);
-     - "`write!` over `format!`" and "Cow over clone" → caller-provided buffers and borrowed
-       pointers;
-     - "tracing on all operations" → sakshi spans behind a level, added only when a consumer
-       asks;
-     - "Feature-gate optional deps" → `[features]` for optional dependencies only.
+     - no `unwrap`/`panic!` → no `+?`, `-?`, `*?`, `assert_fatal`, `result_unwrap`, `unwrap` or
+       `panic` in `src/`;
+     - "Vec arena over HashMap" → sorted arrays and typed stride arenas; never `hashmap` for
+       results (its seed is random per process);
+     - "`write!` over `format!`" and "Cow over clone" → `str_builder` into caller-provided buffers,
+       and borrowed pointers;
+     - "tracing on all operations" → a sakshi span on every operation Rust instruments, and
+       `log_*` events;
+     - "Feature-gate optional deps" → the `[lib.ai]` profile for the HTTP/TLS stack;
+     - new rules from the open issues (§2.8): bind a struct-returning call to a local before
+       storing it into a field; never put an attribute before a `var` or `const`; grids and other
+       stepped state are passed as `p: *T` and called with `&x`, because a by-value struct over
+       8 B is a copy (6.6.16).
 
      Replace "Do not commit `Cargo.lock`" with the lockfile rule for `rust-old/`. Refresh the
      consumer list from step 0.
-   - **Roadmap** restored from git, with a "2.0 — Cyrius port" section. **`state.md`** rewritten
-     for 1.4.0 → 2.0.0-dev.
-   - **Workflows.** Keep the scaffold's Cyrius CI and add `test --bounds`, `deps --locked` and
-     `audit`. Move the Rust workflows to `rust-old/.github/workflows/`. Append `/rust-old/target/`
-     and `/build/` to `.gitignore`. The scaffold says it appends `/rust-old/` but writes
-     `/rust-old/target/`; `rust-old/` must stay tracked.
+   - **Roadmap** restored from git, with its 2.0 section. **`state.md`** rewritten for 1.4.x →
+     2.0.0-dev.
+   - **Workflows.** Keep the scaffold's Cyrius CI and add `test --bounds`, `deps --locked`,
+     `audit` and a `[lib.ai]` profile job. Move the Rust workflows to
+     `rust-old/.github/workflows/`. Append `/rust-old/target/` and `/build/` to `.gitignore`.
+     `rust-old/` itself must stay tracked.
    - **Move Rust-only material** to `rust-old/`: `scripts/bench-history.sh`,
      `scripts/version-bump.sh`, `benchmarks.md`, `bench-history.csv`,
-     `docs/architecture/overview.md`. Restore `rust-old/README.md` (the crate's README, as kimiya)
-     and add `rust-old/LINES_OF_SOURCE.txt`.
-   - **ADRs.** ushma has none yet. Use the scaffold's four-digit form:
-     - `0001-cyrius-port-with-rust-oracle.md`: this approach, hisab-first, P1, P5, P6;
+     `docs/architecture/overview.md`. Restore `rust-old/README.md` and add
+     `rust-old/LINES_OF_SOURCE.txt`.
+   - **ADRs** (scaffold's four-digit form):
+     - `0001-cyrius-port-with-rust-oracle.md`: everything ports, stdlib- and hisab-first, P5, P6;
      - `0002-port-api-divergences.md`: §3.3;
-     - `0003-transcribe-dense-gaussian-elimination.md`: P4;
-     - `0004-correct-rounding-is-the-accuracy-target.md`: P2 and P3, adopting kimiya's ADR 0006
-       from the start rather than by amendment.
+     - `0003-ganita-gaussian-elimination.md`: P4 and the singularity-threshold divergence;
+     - `0004-correct-rounding-is-the-accuracy-target.md`: P2 and P3;
+     - `0005-serde-compatible-json.md`: P7.
    - Check that `cyrius.cyml` reads `version = "${file:VERSION}"`, not `0.1.0`, and that `bench`
      is in `[test] stdlib`. Document the scaffold's stub functions so `cyrius audit` passes.
-     `VERSION` stays 1.4.0 until M7.
-   - Copy kimiya's `handoff/gates/gates.sh` to `scripts/gates.sh` and point it at ushma.
-3. **`cyrius.cyml`.** Confirm the keys with `cyrius help manifest`. There is no `[lib]` until M1:
-   `modules = []` is invalid.
+     `VERSION` stays 1.4.x until M8.
+   - Copy kimiya's `handoff/gates/gates.sh` to `scripts/gates.sh`, adapted for ushma and both
+     profiles. `handoff/` is untracked there and will be deleted.
+3. **`cyrius.cyml`.** Confirm the keys with `cyrius help manifest`, and model it on prakash's
+   (`[lib]` + `[lib.ai]`, sandhi's companions, the sakshi note). The migration notes govern:
+   - The port template is shaped for a binary (`entry = "src/main.cyr"`, no `[lib]`), so add
+     `[lib]` yourself. There is no `[lib]` until M1: `modules = []` is invalid.
+   - sandhi, sakshi and bayan are **folds**: they go in `[deps] stdlib`, never `[deps.x]`. List
+     every leaf the code calls (6.6.18). A fold's own Requires block brings its leaves (EM899),
+     but sandhi's README asks consumers to list the companions, so list them.
+   - Only hisab is a `[deps.X]`, with an https URL; 6.7.18 refuses `git://`/`http://`.
+   - The manifest has no feature-gated dependencies, so the HTTP stack is always vendored. The
+     `[lib.ai]` profile decides what a consumer links. sandhi's TLS stack is refused on the cx
+     bytecode target, so `[lib.ai]` builds for ELF, PE and aarch64 only, the same set as the
+     gates.
+   - Use `[test]` (files, stdlib, timeout), `[deps.X] scope = "test"` where a dependency is
+     test-only, `[build] dce = true`, and `cyrius deps --locked` in CI.
    ```toml
    [package]
    name = "ushma"
@@ -282,7 +352,8 @@ hand-build the structure. The scaffold still overwrites project files on 6.7.18 
 
    [deps]
    stdlib = ["syscalls", "string", "alloc", "str", "fmt", "io", "vec", "math", "ganita",
-             "tagged", "result", "overflow", "fnptr"]   # sakshi arrives via hisab: don't list it
+             "tagged", "result", "boxed", "overflow", "fnptr", "log", "bayan",
+             "sandhi", "tls", "async", "random", "fdlopen", "dynlib"]   # sakshi: probe 10
 
    [deps.hisab]
    git = "https://github.com/MacCracken/hisab.git"
@@ -292,49 +363,57 @@ hand-build the structure. The scaffold still overwrites project files on 6.7.18 
    [test]
    stdlib = ["assert", "bench"]
 
-   [lib]   # from M1, in dependency order
+   [lib]      # from M1, in dependency order
    modules = ["src/error.cyr", "src/constants.cyr", "src/validate.cyr", "src/mathx.cyr", ...]
+
+   [lib.ai]   # [lib] + src/ai.cyr
+   modules = [...]
    ```
-   - `[lib]` order: error → constants → validate → mathx → material_data → material → transfer →
-     state_data → state → entropy → phase_data → phase → steam_data → steam → cycle → chem_data →
-     chem → stat → numerics → numerical.
+   - `[lib]` order: error → constants → validate → mathx → fmtf → json → logging → material_data →
+     material → transfer → state_data → state → entropy → phase_data → phase → steam_data → steam →
+     cycle → chem_data → chem → stat → numerical → bridge → soorat. `[lib.ai]` appends `ai`.
    - Module dependencies, from Rust's features: entropy and phase need state; steam needs phase;
      cycle needs state, entropy and steam; numerical needs transfer; chem needs state and
      entropy; stat needs state and transfer.
-   - hisab's leaves (`dist/hisab.deps`: math, alloc, vec, ganita, result, str, fmt) must be in
-     `[deps] stdlib`.
-4. **Toolchain and math check** (§7.1). Confirm a Cyrius counterpart for every Rust f64 method
-   ushma calls, and re-probe what impetus found on 6.7.18:
-   - `f64_min`/`f64_max` return the second operand when the first is NaN (Rust ignores a NaN
-     either way). The in-scope modules have 5 `max`, 5 `min` and 7 `clamp` calls, and 1.4.0's
-     "f64::max drops NaN" fix depends on these semantics.
-   - The stdlib has no public `is_nan`, `is_finite`, `copysign`, `EPSILON`, `INFINITY` or `NAN`
-     (18 `is_finite` and 3 `is_nan` calls), so they become local `_us_*` helpers.
-   - `powi` (5 calls) becomes repeated multiplication in Rust's order.
-5. **Golden-value generator** `scripts/oracle/`: copy kimiya's crate and adapt it.
-   - `ushma-oracle` depends on `rust-old/` by path, with the 10 domain features. Its
-     `Cargo.lock` is seeded from `rust-old/Cargo.lock`.
-   - Use TSV format 1 (`fn<TAB>class<TAB>inputs<TAB>outputs<TAB>note`, f64 values as bit
-     patterns), deterministic output, a `--check` mode and glibc in the header (`--check` refuses
-     another glibc).
+4. **Toolchain and math check** (§7.1). Confirm the stdlib counterpart of every Rust f64 method
+   ushma calls:
+   - **Rust NaN semantics.** `f64_min`/`f64_max`/`f64_clamp` (math.cyr) disagree with Rust when an
+     operand is NaN (Rust ignores a NaN operand). Probe the exact behaviour; ushma has 11 `max`,
+     6 `min` and 9 `clamp` calls. Write `_us_*` wrappers where it matters (1.4.0's
+     "`f64::max` drops NaN" fix depends on it).
+   - **`is_nan` / `is_finite`** (5 and 21 calls). math.cyr has no such fns and no
+     `INFINITY`/`NAN`/`EPSILON` constants among its `F64_*` set, so define local helpers (`x != x`,
+     `x - x == 0`) and constants.
+   - **`powi`** (7 calls) becomes repeated multiplication in Rust's order.
+5. **Golden-value generator** `scripts/oracle/` (copy kimiya's crate and adapt it):
+   - `ushma-oracle` depends on `rust-old/` by path with `features = ["full"]`. Its `Cargo.lock` is
+     seeded from `rust-old/Cargo.lock`.
+   - Use TSV format 1 (f64 as bit patterns), deterministic output, a `--check` mode and glibc in
+     the header.
    - Start with `constants` and the **math sweep**: every std method ushma calls, over special
-     values and ushma's ranges, including the actual `powf` exponents: the computed ones (γ − 1
-     and its expressions, a polytropic k, an interpolation fraction) and the literals 1.5, 2.5,
-     0.8, 0.4, 1.6, 4.2, 9/16, −8/27, 1/3 and 1/6.
+     values and ushma's ranges, including the actual `powf` exponents. Those are the computed ones
+     (γ − 1 and its expressions, a polytropic k, an interpolation fraction) and the literals 1.5,
+     2.5, 0.8, 0.4, 1.6, 4.2, 0.75, 0.425, 0.725, 9/16, −8/27, 1/3 and 1/6.
+   - **JSON rows:** for every value the corpus produces of a serde type, serde_json's document,
+     byte for byte (P7).
+   - **Request rows:** the generator runs a loopback listener that answers as daimon 2.5.6, and
+     records the exact request `register_agent` sends (method, path, headers that matter, body).
+     It also records the client's outcome for each scripted response: 201 with `id`, 401, 500, a
+     malformed body, a missing `id`.
+   - **Logging rows:** `USHMA_LOG` values → the resulting level.
 6. **Table and constant generator** (same crate). Tables come through the oracle's public API or,
    for private data, from the Rust literals with the completeness proof (§2.1):
    - `constants.cyr`: `GAS_CONSTANT`, `ATM`, `STANDARD_TEMP`, `STANDARD_T`, `STEFAN_BOLTZMANN`,
-     `BOLTZMANN_K`, `PLANCK`, `AVOGADRO` and `MAX_ADAPTIVE_SUBSTEPS`, plus the private ones
-     (`T_CRIT`, `P_CRIT`, `R4_T_MIN`, `QUALITY_ROUNDOFF`, …);
+     `BOLTZMANN_K`, `PLANCK`, `AVOGADRO`, `MAX_ADAPTIVE_SUBSTEPS`, the private ones (`T_CRIT`,
+     `P_CRIT`, `R4_T_MIN`, `QUALITY_ROUNDOFF`, …) and the bridge constants (`KLEIBER_W`, …);
    - `material_data.cyr`: 10 materials;
    - `state_data.cyr`: the gas critical data and acentric factors;
    - `phase_data.cyr`: 8 substances;
    - `chem_data.cyr`: 12 species;
    - `steam_data.cyr`: 42 saturated rows, 72 superheated rows, 9 tier pressures, `R4_N`.
 
-   Write baked typed column arrays with decimal literals in positional form (the lexer has no
-   exponent notation), and never a hex pattern in a `const`. `probe_tables.py` compiles every
-   cell and compares it bit for bit.
+   Write baked typed column arrays and decimal literals in positional form. `probe_tables.py`
+   compiles every cell and compares it bit for bit.
 7. **Parity harness.** Copy kimiya's `tests/parity.tcyr`, `tests/parity_core.cyr` and
    `tests/ulp.cyr`:
    - per-module dispatchers;
@@ -342,33 +421,66 @@ hand-build the structure. The scaffold still overwrites project files on 6.7.18 
    - exit code = the number of failing modules;
    - the ADR 0002 mapping table.
 
-   For M6, add impetus's **state loader** and **step comparator**.
-8. **Baseline measurements** → `docs/development/port-parity.md`. Run the math sweep through every
-   Cyrius counterpart on x86_64 ELF, x86_64 PE (wine, one process at a time) and aarch64 (qemu).
-   The corrected-oracle references come from `mpfr_ref.py`. Confirm the vendored `_us_cr_*`
-   primitives give identical bits on all three targets.
+   Add a JSON comparator (document bytes, and decode → values), impetus's state loader and step
+   comparator for M6, and a request comparator for M7.
+8. **Baseline measurements** → `docs/development/port-parity.md`. Run the math sweep on x86_64
+   ELF, x86_64 PE (wine, one process at a time) and aarch64 (qemu). Measure these against MPFR:
+   - the `_us_cr_*` primitives;
+   - the stdlib alternatives (`_f64_exp_polyfill`, `_f64_ln_polyfill`, `_f64_atan_polyfill`,
+     `ganita_f64_pow`, `ganita_f64_tanh`).
+
+   That records exactly what P3 buys over the stdlib.
 9. **Probes.** Each one is a small program with numbers, run before M1 writes code. They go in
    `scripts/probes/` and `port-parity.md`:
    1. **Callback into hisab.** `debye_cv`'s integrand passed to `calc_integral_simpson` as a
-      function pointer + context. Compare its bits against Rust hisab 1.4.0 at 200 steps over
-      Θ/T ∈ (0, 50]: equal means class B, different means class D (§7.2).
-   2. **Memory.** The stdlib `alloc` is a bump allocator with no free. Step a 1D grid 10⁵ times
-      (explicit, Crank–Nicolson, adaptive) and run `solve_steady_state` on a 2D grid. The heap
-      high-water mark must go flat after warm-up, which needs reusable scratch (§3.3 #2).
-   3. **Wide results.** Return a cycle result (state points, heats, efficiencies): out-pointer vs
-      handle vs `Result` payload, at the 6.7.18 pin (the open small-struct issue).
-   4. **Point lists.** `Vec<DiagramPoint>` as a vec of struct values vs parallel f64 vecs, timed
-      for `cycle_ts_diagram` at its point counts.
-   5. **Table lookup.** Steam saturated lookups by T and by P, and superheated by (T, P): binary
-      search over baked columns, compared with Rust's timings.
-   6. **Name collisions** (P6). Include kimiya's `dist/kimiya.cyr` beside a ushma stub and record
-      the `duplicate fn` warnings and which definition wins.
-10. **File upstream** (§8). Do this before M1, so the requests carry M0's numbers.
+      function pointer + context. Compare its bits against Rust hisab 1.4.0 at 200 steps: equal
+      means class B, different means class D.
+   2. **Memory.** The global allocator is a bump with no free. Arenas (`arena_new_growable`,
+      `arena_reset`) and `freelist` are the tools. Step a 1D grid 10⁵ times (explicit,
+      Crank–Nicolson, adaptive) and solve a 2D steady state. The heap high-water mark must go
+      flat after warm-up. Also measure the heap growth of one `calc_integral_simpson` call and
+      one `calc_lerp` call (the `no-scoped-allocator-for-alloc` issue). Every steam lookup and
+      every `debye_cv` makes them, so they have to be flat.
+   3. **Wide results.** Return a cycle result: out-pointer vs handle vs `Result` payload, at the
+      6.7.18 pin (the open small-struct issue).
+   4. **Point lists.** `Vec<DiagramPoint>` as a vec of struct pointers vs parallel f64 vecs, timed
+      at `cycle_ts_diagram`'s point counts.
+   5. **Table lookup.** Steam lookups by T, by P and by (T, P) over baked columns, against Rust's
+      timings.
+   6. **Names** (P6). Include `kimiya/dist/kimiya.cyr` and a prakash ai bundle beside a ushma stub,
+      and record the `duplicate fn` warnings and which definition wins. Then try `mod us;` in a
+      `[lib]` module:
+      - does it mangle fns only, or also globals, enums and structs?
+      - does `distlib` keep the mangling?
+      - does a consumer's `use us.f;` bind across a bundle include?
+      - does `cyrius doc` document the result?
 
-**Gate:** `cyrius build` and `cyrius bench` pass; `cyrius test` runs the harness (0 modules) with
-no warnings; `cyrius lint`, `fmt --check` and `audit` are clean. Committed: the generator,
-`tests/ulp.cyr`, `src/mathx.cyr` with its verification, ADRs 0001–0004, the probe results and
-the upstream issues.
+      If yes on all four, P6 uses `mod`. Otherwise, a written prefix.
+   7. **sandhi POST.** `sandhi_http_post_opts` with a bearer header and a JSON body to a loopback
+      stub. Check the request bytes against the oracle's captured request, the timeout and the
+      status handling. Build `[lib.ai]` for all three targets.
+   8. **Span cost.** `sakshi_span_enter`/`_exit` around `ideal_gas_volume` (1.6 ns in Rust) at a
+      level that filters it out, vs no span, vs a `SAKSHI_LEVEL` compile-time ceiling. This
+      decides whether spans are runtime-filtered or compiled out by default.
+   9. **Gaussian elimination.** `ganita_mat_gaussian_elim` vs Rust hisab 1.4.0 on ushma's network
+      matrices after 1.4.0's row scaling (bits and singularity decisions), and
+      `ganita_mat_lu`/`_lu_solve` as the alternative (P4).
+   10. **Manifest.** sakshi via hisab's `[deps.sakshi]` and via the stdlib leaf (log, sandhi):
+       `cyrius deps` warnings, byte-identity at the pin, and `distlib` for both profiles.
+   11. **JSON.** `bayan_json_parse` on serde_json's documents for all 28 types (malformed,
+       duplicate and unknown fields), and the vendored `fmtf.cyr` printer against serde_json's f64
+       text and Rust's Display. Also run `#derive(Serialize)` on two of the types, to record
+       exactly where its output and decoding differ from serde (P7's alternative).
+   12. **f64 hygiene and silent miscompiles.** Build a small module with every trap from §7.3 and
+       confirm that `cyrius test`/`lint` flag each one, so the warning-free gate catches them in
+       real code. Add the open `s.f = g(t.e)` miscompile (§2.8), which nothing flags: record it and
+       write the grid code to the workaround from the start.
+10. **File upstream** (§8) before M1, so the requests carry M0's numbers.
+
+**Gate:** `cyrius build` (both profiles) and `cyrius bench` pass; `cyrius test` runs the harness
+(0 modules) with no warnings; `cyrius lint`, `fmt --check` and `audit` are clean. Committed: the
+generator, `tests/ulp.cyr`, `src/mathx.cyr` with its verification, ADRs 0001–0005, the probe
+results and the upstream issues.
 
 ---
 
@@ -378,128 +490,151 @@ tanmatra's classes apply, with kimiya's ADR 0006 reading of class C:
 
 | Class | Tolerance | ushma examples |
 |---|---|---|
-| **A, exact** | bit-identical; equal integers and codes | constants, every table cell, materials/substances/gases/species, `phase_at` classifications, enum properties, `US_ERR_*` codes, `sublimes_at_atmospheric` |
-| **B, arithmetic** | ≤ 2 ulp, expected 0 | + − × ÷ √ only: Fourier, Newton cooling, resistances in series/parallel, Q = mcΔT, diffusivity, Biot, Stefan–Boltzmann (T⁴ by `powi`), ideal gas, Van der Waals, Kay's rule, Carnot, Helmholtz/Gibbs, Hess sums, IF97 Region 4 (algebraic + √), `calc_lerp` interpolation, explicit FD steps, Gauss–Seidel sweeps, transcribed elimination |
-| **C, transcendental** | **0 ulp against the corrected oracle** once a function uses the `_us_cr_*` primitives. Rows where glibc misrounds are counted "accepted under ADR 0004" | anything through exp/ln/pow/atan/tanh/expm1: LMTD, ε-NTU, fins, Nusselt correlations, view factors, adiabatic relations, isothermal work, entropy changes, Clausius–Clapeyron, vapor/sublimation curves, ln-P superheated interpolation, K and ln K, van 't Hoff, Boltzmann, partition functions, Maxwell–Boltzmann, Einstein |
-| **D, iterative** | relative ≤ 1e-12 | only where the iteration path can differ: the hisab 3.4.1 Simpson (if probe 1 says so), and any solver path an ADR names |
+| **A, exact** | bit-identical; equal integers, codes and bytes | constants, every table cell, `phase_at` classifications, enum properties, `US_ERR_*` codes, **JSON documents**, **request bytes**, `USHMA_LOG` parsing, `DaimonConfig`'s redacted text |
+| **B, arithmetic** | ≤ 2 ulp, expected 0 | + − × ÷ √ only: Fourier, Newton cooling, resistances, Q = mcΔT, diffusivity, Biot, Stefan–Boltzmann (T⁴ by `powi`), ideal gas, Van der Waals, Kay's rule, Carnot, Helmholtz/Gibbs, Hess sums, IF97 Region 4 (algebraic + √), lerp interpolation, explicit FD steps, Gauss–Seidel sweeps, elimination (if probe 9 matches) |
+| **C, transcendental** | **0 ulp against the corrected oracle** once a function uses the `_us_cr_*` primitives; rows where glibc misrounds are counted "accepted under ADR 0004" | LMTD, ε-NTU, fins, Nusselt correlations, view factors, adiabatic relations, isothermal work, entropy changes, Clausius–Clapeyron, vapor/sublimation curves, ln-P interpolation, K and ln K, van 't Hoff, Boltzmann, partition functions, Maxwell–Boltzmann, Einstein, the bridges' power laws |
+| **D, iterative** | relative ≤ 1e-12 | only where an iteration path can differ: the hisab 3.4.1 Simpson (if probe 1 says so), elimination (if probe 9 says so), and any solver path an ADR names |
 
-ushma specifics:
 - **Never widen a class to make a row pass.** A failure is one of three things:
   - a port defect;
-  - a Cyrius/hisab defect (file it upstream);
+  - a Cyrius stdlib or hisab defect (file it upstream);
   - a Rust oracle defect (fix it in 1.4.x and regenerate).
 
   The only exception is an ADR-accepted divergence, which the harness still reports by name.
-- **The reference-value tests travel with the code.** Parity proves "same as Rust"; the 1.4.0
-  regression tests prove "right". They cover:
-  - IAPWS-IF97 saturation to 1e-8;
-  - Incropera Table A.4 air;
-  - the Rankine 13.2 % case;
-  - the unit-square perpendicular view factor of 0.2000;
-  - diamond's Debye Cv at 3 K;
-  - propane's ln K ≈ 837.
+- **The reference-value tests travel with the code.** They cover IAPWS-IF97 saturation to 1e-8,
+  Incropera A.4 air, the Rankine 13.2 % case, the unit-square view factor of 0.2000, diamond's
+  Debye Cv at 3 K and propane's ln K ≈ 837.
 - **Test branch points on both sides.** Every switch gets golden rows just below and just above
   it:
   - steam tier boundaries and exact tier rows;
   - T_sat and the first tabulated row of each tier;
-  - the quality round-off clamp (1e-9);
-  - `phase_at`'s piecewise curve joins (triple, boiling and critical points) and the
-    sublimation branch;
+  - the quality clamp (1e-9);
+  - `phase_at`'s curve joins and the sublimation branch;
   - the view-factor asymptote at X, Y < 0.01;
-  - Debye's T³ switch at Θ/T > 50, and Θ/T > 709;
-  - the explicit stability limit Fo·(1 + Bi) = 0.5;
+  - Debye's switch at Θ/T > 50, and Θ/T > 709;
+  - Fo·(1 + Bi) = 0.5;
   - the adaptive sub-step cap;
-  - Pitzer's Z ≤ 0 error;
+  - Pitzer Z ≤ 0;
   - K leaving the f64 range;
-  - the refrigeration Carnot limits (T_L ≤ 0).
+  - the refrigeration Carnot limits;
+  - the bridges' fallbacks for NaN inputs;
+  - `muscle_work_to_heat` at η = 1.
 
 ---
 
 ## 6. Milestones
 
-Every milestone ends with the siblings' gates:
-- `cyrius build`;
-- `cyrius test` and `test --bounds` **with no warnings** (the f64 type diagnostics appear only
-  there);
+Every milestone ends with these gates:
+- `cyrius build` for both profiles;
+- `cyrius test` and `test --bounds` **with no warnings**;
 - the full corpus on ELF, PE and aarch64 via `scripts/gates.sh`;
-- `cyrius bench` recorded against the Rust numbers;
-- `vet`, `lint`, `fmt --check` and `audit` on the module's files;
+- `cyrius bench` against the Rust numbers;
+- `vet`, `lint`, `fmt --check`, `doc --check` and `audit`;
+- `coverage --exec` at ≥ 80 % (CLAUDE.md's target), with `coverage --min` gating CI;
+- `fuzz --poison --bounds` on every reader of untrusted input: the 28 JSON decoders,
+  `USHMA_LOG` parsing, and daimon response handling;
 - `distlib --all` and `distlib --check`;
 - `deps --locked`;
-- **surface parity**: every in-scope Rust `pub fn` has a Cyrius counterpart or a written reason;
-- the milestone's **range-edge sweep** (P2);
+- **surface parity**: every Rust `pub fn` has a Cyrius counterpart, and the port has no
+  exemptions;
+- the milestone's range-edge sweep (P2), its sakshi spans and its JSON codecs;
 - CHANGELOG and `state.md`.
 
 | Milestone | Modules | Key work | Golden grid (minimum) |
 |---|---|---|---|
-| **M1 Foundation & transfer** | error, constants, validate, mathx, material, transfer | `US_ERR_*` codes + detail; `finite_gt`/`finite_ge` with Rust's NaN rejection; vendored correctly rounded primitives + new `tanh`; 10-material table; 32 transfer functions: conduction/convection/radiation, resistance networks, fins (tanh), LMTD (equal-ΔT limit), ε-NTU (C_r = 1 branch), Re/Pr/Nu correlations (`powf`), Blasius, three view factors (atan, ln, the asymptote switch) | every material × field; each function over seeded physical grids plus NaN/±∞/0/negative edges; LMTD with ΔT₁ = ΔT₂ and 1 ulp apart; NTU 0…100 × C_r 0…1; view factors across the 0.01 switch and at the unit-square reciprocity case |
-| **M2 Equations of state & entropy** | state, entropy | Ideal gas, Van der Waals, Redlich–Kwong, Peng–Robinson pressures; virial; Pitzer–Abbott Z (Err at Z ≤ 0); Kay's rule; isothermal/isobaric/adiabatic work and temperature; ideal-gas, isothermal, heat-transfer and mixing entropy; Carnot efficiency and COP; Helmholtz/Gibbs; Clausius inequality | every gas × T × V_m grid incl. near-critical; Pitzer Tr × Pr incl. the Z ≤ 0 edge; mixtures with zero, NaN and negative fractions; Carnot at T_c ≥ T_h |
-| **M3 Phase & steam** | phase, steam | Substance table; `phase_at` with the piecewise ln P vs 1/T curves and sublimation; latent heats incl. the CO₂ sublimation case; Clausius–Clapeyron (overflow → Err). Steam: generated tables; exact IF97 Region 4 both ways; saturated by T and by P (P·v_g/T interpolation); quality from v/h/s with the round-off clamp; superheated ln-P tier interpolation with the saturated-vapor lower row; `superheated_by_entropy` | `phase_at` on a T × P grid per substance with rows on both sides of every join; every steam row through the lookups; Region 4 over 273.16…647.096 K and its inverse; between-row and between-tier interpolation; every tier through `superheated_by_entropy`; x = 1 + 2e-16 |
-| **M4 Cycles** | cycle | Otto, Diesel, Brayton, Rankine (superheated exhaust via the s-inversion), refrigeration (compressor exit via the s-inversion, negative net work), heat-pump COP, `compare_cycles` (Carnot COP for refrigeration), T-s and P-v diagrams along real process paths; results through out-pointers (probe 3) | r, γ, T grids for the gas cycles; Rankine/refrigeration over the table range incl. the 13.2 % case and COP ≤ Carnot; every cycle kind's diagram point lists; `processes` shorter than `state_points` |
-| **M5 Chemical & statistical** | chem, stat | 12-species table; Hess's law; reaction Gibbs; K and `ln_equilibrium_constant` (range-exit Err); van 't Hoff; flame temperature (ushma's loop). Boltzmann probability/ratio, S = k ln W, equipartition, three partition functions (vibrational via expm1), Maxwell–Boltzmann pdf and speeds, Einstein Cv, Debye Cv via hisab Simpson (function-pointer callback) with the T³ switch | every species × function; propane ln K ≈ 837; partitions at hν ≪ kT; Debye over Θ/T ∈ (0, 50] ∪ (50, 10⁴] incl. diamond at 3 K |
-| **M6 Numerical** | numerics, numerical | `ThermalGrid1D`: explicit (Fo·(1 + Bi) limit), Crank–Nicolson with caller-reusable scratch, adaptive sub-stepping, `max_stable_dt`. `ThermalGrid2D`: flat storage (§3.3 #2), Gauss–Seidel with convective BCs, convergence on non-finite fields. `ThermalNetwork`: connectivity check, row scaling, transcribed elimination (P4). Malformed public state → Err | single-step rows: every BC kind × explicit/CN/adaptive incl. Fo·(1 + Bi) exactly 0.5; 2D steady states with their iteration counts; network solves incl. a floating node and R ≈ 1e14; the 10⁵-step soak from probe 2 |
-| **M7 Release 2.0.0** | all | Rust-test ledger (tanmatra's script): each of the 397 + 30 tests ported, folded into golden rows, or marked n/a / deferred; full surface-parity diff; `docs/benchmarks-rust-v-cyrius.md` (63 criterion benchmarks); `cyrius distlib --all`; `cyrius audit`; migration guide (`docs/guides/migration-2.0.md`, covering §3.3 and P6's names); VERSION 2.0.0 | full corpus green on x86_64 ELF, x86_64 PE and aarch64 |
+| **M1 Foundation, logging & transfer** | error, constants, validate, mathx, fmtf, json, logging, material, transfer | `US_ERR_*` + detail and the error's JSON; `finite_gt`/`finite_ge`; correctly rounded primitives; the shortest-digit printer and JSON helpers; `us_log_init`/`_with_level` (`USHMA_LOG`); the span macro pattern every later module uses; 10-material table; 32 transfer functions (conduction, convection, radiation, resistance networks, fins, LMTD, ε-NTU, Re/Pr/Nu, Blasius, three view factors) | every material × field + JSON; each function over seeded physical grids plus NaN/±∞/0/negative edges; LMTD at ΔT₁ = ΔT₂ and 1 ulp apart; NTU 0…100 × C_r 0…1; view factors across the 0.01 switch; every `USHMA_LOG` form |
+| **M2 Equations of state & entropy** | state, entropy | Ideal gas, Van der Waals, Redlich–Kwong, Peng–Robinson; virial; Pitzer–Abbott Z; Kay's rule; work and adiabatic relations; entropy changes; Carnot; Helmholtz/Gibbs; Clausius inequality; `GasData` JSON | every gas × T × V_m incl. near-critical; Pitzer Tr × Pr incl. Z ≤ 0; mixtures with zero/NaN/negative fractions; Carnot at T_c ≥ T_h |
+| **M3 Phase & steam** (M3a phase, M3b tables + Region 4, M3c superheated) | phase, steam | substance table; `phase_at`'s piecewise curves and sublimation; latent heats (CO₂ sublimation); Clausius–Clapeyron; generated steam tables; exact IF97 Region 4 both ways; saturated by T/P; quality with the clamp; ln-P tier interpolation; `superheated_by_entropy`; JSON for `Phase`, `SubstanceData` and the three steam types | `phase_at` T × P per substance across every join; every steam row through the lookups; Region 4 over 273.16…647.096 K and back; between-row/-tier points; every tier through `superheated_by_entropy`; x = 1 + 2e-16 |
+| **M4 Cycles** (M4a gas, M4b steam, M4c diagrams + comparison) | cycle | Otto, Diesel, Brayton, Rankine (s-inversion), refrigeration (negative net work), heat-pump COP, `compare_cycles`, T-s/P-v diagrams; results through out-pointers (probe 3); JSON for the 7 cycle types | r, γ, T grids; Rankine/refrigeration over the table range incl. 13.2 % and COP ≤ Carnot; every diagram's point list; `processes` shorter than `state_points` |
+| **M5 Chemical & statistical** | chem, stat | species table and JSON; Hess; reaction Gibbs; K and `ln_equilibrium_constant`; van 't Hoff; flame temperature; Boltzmann; S = k ln W; equipartition; partition functions; Maxwell–Boltzmann; Einstein; Debye via hisab Simpson (function-pointer callback) | every species × function; propane ln K ≈ 837; partitions at hν ≪ kT; Debye over Θ/T ∈ (0, 50] ∪ (50, 10⁴] incl. diamond at 3 K |
+| **M6 Numerical** | numerical | `ThermalGrid1D` explicit / Crank–Nicolson (reusable scratch) / adaptive / `max_stable_dt`; `ThermalGrid2D` flat storage, Gauss–Seidel with convective BCs; `ThermalNetwork` connectivity, row scaling, ganita elimination (P4); malformed state → Err; JSON for the 5 types (nested 2D shape kept) | single-step rows for every BC kind × method incl. Fo·(1 + Bi) = 0.5; 2D steady states with iteration counts; networks incl. a floating node and R ≈ 1e14; the 10⁵-step soak (probe 2) |
+| **M7 Integrations** | bridge, soorat, ai | 16 bridge conversions (bijli, kimiya, dravya, badal, pravash, sharira) with their NaN fallbacks; the 6 soorat visualization types (heatmap, profile, cycle diagram, network graph, flux field) with JSON; the daimon/hoosh configs (JSON, redacted text), `us_ai_daimon_client_new`, `us_ai_register_agent` on sandhi, in `[lib.ai]` | every bridge over its documented ranges and NaN inputs; soorat from every M3–M6 grid/network/cycle golden state, incl. empty and all-NaN fields; ai against the oracle's captured requests and every scripted daimon response |
+| **M8 Release 2.0.0** | all | Rust-test ledger: every one of the 449 + 30 tests is ported or folded into golden rows, with no deferrals; full surface-parity diff (155/155); `docs/benchmarks-rust-v-cyrius.md` (63 benchmarks); **the 5 examples as Cyrius programs** in `docs/examples/` (`basic_thermo`, `heat_engine`, `building_thermal`, `cooling_system`, `phase_change`), built and run in CI; `cyrius distlib --all`; `cyrius audit`; `docs/guides/migration-2.0.md` (§3.3, P6's names, `[lib]` vs `[lib.ai]`); VERSION 2.0.0 | full corpus green on x86_64 ELF, x86_64 PE and aarch64, both profiles |
 
-Order: M1 → M2 → M3 → M4 → M5 → M6 → M7. M6 is last because it carries the hisab gap, the
-memory design and the stateful parity layer. M5 could move earlier if probe 1 is clean. Under the
-CLAUDE.md task-sizing rule, M3 (steam) and M4 (cycles) are large: split each into verified
-sub-parts (M3a phase, M3b steam tables and Region 4, M3c superheated; M4a gas cycles, M4b steam
-cycles, M4c diagrams).
+Order: M1 → … → M8. M6 is late because it carries the memory design and the stateful parity
+layer, and M7 because its modules sit on everything else. M3 and M4 are large: each splits into
+verified sub-parts, per CLAUDE.md task sizing.
 
 ---
 
-## 7. Rust → Cyrius mapping (ushma specifics)
+## 7. Rust → Cyrius mapping
 
 ### 7.1 Math functions
 
-Every std f64 method in the non-test code of the in-scope modules (§3.1), 1.4.0. The deferred
-`bridge` adds its own exponents (Kleiber's 0.75; DuBois's 0.425 and 0.725), which port with it.
+Every std f64 method in non-test `src/`, 1.4.0, whole crate:
 
-| Rust (calls) | Cyrius | Parity |
+| Rust (calls) | Stdlib counterpart (6.7.18) | Port uses | Parity |
+|---|---|---|---|
+| `sqrt` (23), `abs` (30), `ceil` (1) | builtins `f64_sqrt`, `f64_abs`, `f64_ceil` | the builtins | exact |
+| `exp` (14), `ln` (23) | builtins `f64_exp`/`f64_ln` (x87 on x86, polyfill on aarch64: bits differ by target, FAQ #9); `_f64_exp_polyfill`/`_f64_ln_polyfill` (≤1 ulp, same bits everywhere). The open `exp-polyfill-double-rounds-subnormal-results` issue: up to 39 ulp on aarch64 subnormal results, and x87 misrounds about 5 % | `_us_cr_exp`, `_us_cr_ln` (P3) | class C |
+| `exp_m1` (2) | **none** in math or ganita | `_us_cr_expm1` (P3) | class C |
+| `powf` (29) | `ganita_f64_pow` (note its `pow(−1, huge)` defect, tanmatra ADR 0007) | `_us_cr_pow`; exact-constant exponents reviewed (1/3 → `ganita_f64_cbrt`, correctly rounded; 1/6, 9/16, −8/27) | class C |
+| `atan` (11) | builtin `f64_atan`; `_f64_atan_polyfill` (≤1 ulp, same bits); `ganita_f64_atan2` | `_us_cr_atan2(x, 1.0)` (atan2 with x = 1 > 0 is atan exactly) | class C |
+| `tanh` (2) | `ganita_f64_tanh` | `ganita_f64_tanh` if step 8 shows it correctly rounded, else `_us_cr_tanh` | class C |
+| `powi` (7) | — | repeated multiplication in Rust's order | class B |
+| `max` (11), `min` (6), `clamp` (9) | `f64_max`, `f64_min`, `f64_clamp` (math.cyr) | wrappers with Rust's NaN semantics (step 4) | exact |
+| `is_finite` (21), `is_nan` (5) | none | `x - x == 0`, `x != x` helpers | exact |
+
+### 7.2 Libraries
+
+| Rust dependency (use) | Cyrius | Parity |
 |---|---|---|
-| `sqrt` (20), `abs` (24), `ceil` (1) | `f64_sqrt`, `f64_abs`, `f64_ceil` (builtins) | exact |
-| `exp` (14), `ln` (22), `exp_m1` (2) | `_us_cr_exp`, `_us_cr_ln`, `_us_cr_expm1` (P3) | class C, same bits on every target |
-| `powf` (23) | `_us_cr_pow`; exact-constant exponents reviewed under the accuracy policy (1/3 → a correctly rounded cbrt; 1/6, 9/16, −8/27) | class C |
-| `atan` (7) | `_us_cr_atan2(x, 1.0)` (atan2 with x = 1 > 0 is atan exactly) | class C |
-| `tanh` (2) | **new** `_us_cr_tanh` (fins) | class C |
-| `powi` (5) | repeated multiplication in Rust's order | class B |
-| `max` (5), `min` (5), `clamp` (7) | local helpers with Rust's NaN semantics (step 4) | exact |
-| `is_finite` (18), `is_nan` (3) | `x - x == 0`, `x != x` helpers | exact |
-
-### 7.2 hisab: what the oracle used vs what hisab 3.4.1 provides
-
-| Rust hisab 1.4.0 (used by) | hisab 3.4.1 Cyrius | Plan |
-|---|---|---|
-| `calc::lerp` (steam, 3 sites) | `calc_lerp`: same `a + (b − a)·t` fast form; a half-scale repair only where the fast form overflows | use hisab; class B |
-| `calc::integral_simpson` (stat `debye_cv`, n = 200) | `calc_integral_simpson(f, a, b, steps, out)`, function pointer + out-pointer; reframed in 3.3.6 for subnormal widths | use hisab; class B or D per probe 1 |
-| `num::gaussian_elimination` (`ThermalNetwork::solve`) | **none**: `num_tridiag_solve` and iterative solvers only | **gap** → transcribe into `numerics.cyr` (P4) and file it |
-| *(the roadmap's "bisection")* | `num_bisection` | not called in 1.4.0; ushma's s-inversions are its own loops (§2.3) |
+| hisab 1.4.0 `calc::lerp` (steam ×3) | hisab `calc_lerp` (same `a + (b − a)·t` fast form; stdlib `f64_lerp` rounds identically) | class B |
+| hisab 1.4.0 `calc::integral_simpson` (`debye_cv`, n = 200) | hisab `calc_integral_simpson(f, a, b, steps, out)` | class B or D (probe 1) |
+| hisab 1.4.0 `num::gaussian_elimination` (`ThermalNetwork::solve`) | ganita `ganita_mat_gaussian_elim(aug)`, or `ganita_mat_lu` + `ganita_mat_lu_solve` (P4) | class B or D (probe 9) |
+| serde + serde_json (28 types; `ai` bodies) | bayan (`bayan_json_parse`, `bayan_json_v_*`, `bayan_json_build`) + `str_builder` writers + vendored `fmtf.cyr` (P7) | class A |
+| thiserror (`UshmaError` Display) | `US_ERR_*` codes + `us_error_message`, with f64 values printed by `fmtf.cyr` under Rust's Display rules | class A (message bytes) |
+| tracing (`#[instrument]` ×28, all DEBUG) | sakshi `sakshi_span_enter(name, len)` / `sakshi_span_exit()` | span names and levels: reference tests |
+| tracing-subscriber (`EnvFilter`, `USHMA_LOG`) | `log_init(level)`, `log_set_level`, io `getenv("USHMA_LOG")` | class A on parsing (§3.3 #5) |
+| reqwest 0.13 (POST, JSON, bearer, 30 s, `error_for_status`) | sandhi `sandhi_http_post_opts(url, headers, body, len, opts)`, `sandhi_headers_new`/`_set`, `sandhi_http_options_*` (timeouts), `sandhi_http_status`/`_body`/`_err_kind` | request bytes class A |
+| tokio (async runtime for `register_agent`) | none needed: sandhi's call is synchronous. Cyrius async (`CYRIUS_ASYNC=1`) runs coroutines only on x86_64 Linux, macOS and Windows; aarch64 refuses them (guide L8529–8675), so an async client wouldn't cover every target | §3.3 #4 |
 
 ### 7.3 Types and idioms
 
 | Rust | Cyrius |
 |---|---|
-| `Result<T, UshmaError>` | value-form `Result` (stdlib `result`) + `US_ERR_*` code enum and numeric detail |
-| `ThermalMaterial`, `SubstanceData`, `GasData`, `Species` `pub const`s and `ALL_*` slices | baked column tables + index; named index constants for the presets |
-| `Phase`, `ProcessKind`, `CycleKind`, `Side` | append-only integer enums |
-| `BoundaryCondition` (with `Convective { h, t_inf }` data) | tag + payload fields (stdlib `tagged`) |
-| cycle result structs, `Vec<DiagramPoint>` | caller out-pointers / handles (probe 3); a vec or parallel f64 vecs (probe 4) |
-| `Vec<Vec<f64>>` 2D field | flat row-major buffer + `nx`, `ny` (§3.3 #2) |
-| local closures passed to hisab | function pointer + context pointer (stdlib `fnptr`) |
-| `usize` counts, `num_nodes − 1` | i64 with explicit checks; stdlib `overflow` operators where Rust used checked arithmetic |
-| `#[must_use]` / `#[non_exhaustive]` | `#must_use` / append-only enum values |
-| `#[tracing::instrument]` | none (§3.3 #3) |
+Each row cites the language guide (`cyrius/docs/guides/cyrius-guide.md`, "L") where it decides
+the mapping.
 
-The siblings have already probed these language traps on 6.7.18:
-- there are no exponent literals;
-- `(0 - x)` on an f64 is wrong;
-- a hex literal in a `const` is an integer;
-- `f64_round` ties to even;
-- `+?` aborts the process;
-- `cyrius test` must be warning-free;
-- the compiler refuses a source over 24 MB, includes counted (split large probes);
-- `cyrius audit` rejects comment lines over 120 characters;
-- `cyrius bench` stops any file after 300 s.
+| Rust | Cyrius |
+|---|---|
+| `Result<T, UshmaError>` + `?` | value-form `Result` (`Ok`/`Err` return a (tag, payload) register pair with zero allocation; bind both halves, `var t, v = f();`) + `?`, in fns declared `: Result` (L6995–7131, L7244–7294). The payload is one word, so it carries the code, and details go to an error record (§3.3 #1) |
+| structs of f64 fields | `struct S { cp: f64; … }`, with typed fields doing float arithmetic (L1676–1753). Every field must be initialized, and a struct literal is legal only as a declaration's initializer (L1514–1573) |
+| `pub const` struct instances (`WATER`, `GAS_NITROGEN`, …) and `ALL_*: &[&T]` slices | `const` holds only an integer, f64 or string (L7737–7772). An instance becomes a top-level `var` with constant fields, which is baked into the image (L8711–8761). Array initializers refuse struct elements (L429–432), so the tables are generated typed **column arrays** plus named index constants, and `ALL_*` is an index range |
+| `Phase`, `ProcessKind`, `CycleKind`, `Side` | integer enums with `US_`-prefixed variants (P6); variant names are global (L391–396); `match` with `_ =>` where Rust's `#[non_exhaustive]` mattered (L7451–7465) |
+| `BoundaryCondition` (`Convective { h, t_inf }`) | a struct with a kind tag and `h`, `t_inf` fields. A `: stack` enum carries one payload word, and a boxed payload enum allocates on every construction, never reclaimed (L7009–7051) |
+| cycle result structs | caller out-pointers (`p: *T`). A struct over 16 B returns through a hidden pointer, and a by-value struct returned through a fn pointer held in a variable faults (L1944–1966, L2270–2276). Probe 3 |
+| `Vec<f64>`, `Vec<DiagramPoint>` | `vec` handles (`vec_get` bound as `var x: f64 = …`, L128), a vec of struct pointers, or parallel f64 vecs (probe 4) |
+| `Vec<Vec<f64>>` 2D field | flat row-major `*f64` buffer + `nx`, `ny` (`a[i][j]` is refused, L324–536; §3.3 #2) |
+| the integrand closure passed to hisab | a top-level fn + context pointer. Closure parameters are untyped words that refuse `: f64` (rebind them), and a capturing closure heap-allocates its environment on every construction (L7574–7703) |
+| `String`, `&str`, `format!`, `write!` | `Str` handles and cstrings, `str_builder`, `fmt` (L3919–4079). There is no format and no public f64 text API, hence `fmtf.cyr` |
+| `Option<String>` (`api_key`) | a cstring or 0 |
+| custom redacting `Debug` | `us_ai_daimon_config_fmt` printing `<redacted>`. There is no Debug derive |
+| `Default` impls | `us_*_default()` constructors (`default` itself is a reserved word, L696–790) |
+| `impl` methods | `impl T { fn f(self, …) }` → `T_f`, or plain prefixed fns (L672–694) |
+| `usize` counts, checked arithmetic | i64 (there is no usize, L199–212), with explicit range checks. `+? -? *?` **exit the process with code 57** (L1074–1135), so they are banned in `src/` |
+| 7-parameter fns (`fin_rectangular_heat`) | fine: 7+ parameters go on the stack (5+ on Windows) (L547) |
+| `#[must_use]` / `#[non_exhaustive]` | `#must_use` (warns on a statement-level discard) and `#pure` (checked, L5422–5483) / append-only enum values |
+| `#[inline]` / `#[cold]` | `#inline` where a bench shows it helps; it is ignored on fns with defaults, defer or async (L887). There is no `#cold` |
+| doc comments, `missing_docs`, rustdoc `-D warnings` | `#` doc lines; `cyrius doc --check` fails an undocumented public fn (L6677–6682) |
+
+**Language traps.** The f64 ones are **warnings, not errors**, so the build succeeds. That's why
+the gate is a warning-free `cyrius test`:
+- **An operator is typed by its left operand.** `0 - x` and `2 * x` are integer operations on an
+  f64's bits; write `0.0 - x` or `x * 2.0` (L145–167).
+- **An integer constant stored in an f64 slot keeps its bits**, and that includes arguments:
+  `f(3)` passes a subnormal, so write `3.0` (L120–128).
+- **`==` and `<` on builtin results compare bit patterns.** Use `f64_lt`/`f64_eq`, or declare the
+  result `: f64` (L104–118). `if (x)` and `!x` test the raw bits (L7851).
+- **No exponent literals.** `1e-9` is written `0.000000001` (L53–60). A hex literal in a `const`
+  is an integer.
+- **`f64_round` ties to even.** Rust's `round` ties away from zero.
+- **Large local arrays.** A local array over about 120 KB silently gets static, shared storage
+  (L2797–2811).
+- **Limits:** at most 256 distinct includes (L5076); a 2 MiB string pool (L5811); a 24 MB
+  source, includes counted.
+- **Gate quirks (from the siblings):** `cyrius audit` rejects comment lines over 120 characters,
+  and `cyrius bench` stops any file after 300 s.
 
 ---
 
@@ -507,20 +642,22 @@ The siblings have already probed these language traps on 6.7.18:
 
 | To | Request | Evidence |
 |---|---|---|
-| ganita (cyrius stdlib) or hisab | Host the shared correctly rounded primitives (exp, expm1, exp10, ln, log10, pow, sin, cos, acos, atan2, tanh) so ports stop vendoring them | three private copies: impetus `crmath.cyr`, kimiya `mathx.cyr`, ushma `mathx.cyr` |
-| hisab | Dense direct solver (Gaussian elimination with partial pivoting, or LU) | ushma `ThermalNetwork::solve`; kimiya `simulate_stiff` (its ADR 0003) |
+| ganita (cyrius stdlib) | correctly rounded exp, expm1, ln, log10, pow, atan2, tanh (and the rest kimiya has), so ports stop vendoring them | three private copies (impetus `crmath.cyr`, kimiya `mathx.cyr`, ushma `mathx.cyr`); step 8's MPFR measurements |
+| ganita | an `expm1` (and `log1p`) at all | ushma `partition_vibrational`, `debye_cv`; kimiya's decay chains |
+| bayan | a serde_json-compatible shortest f64 printer | impetus ADR 0010 and ushma P7: two copies of `fmtf.cyr` |
+| cyrius stdlib (math) | `f64_is_nan`, `f64_is_finite`, `F64_INF`, `F64_NAN`, `F64_EPSILON`; Rust-semantics min/max | 26 ushma call sites; check impetus's filing first and add to it |
+| hisab | drop `[deps.sakshi]` from `cyrius.cyml`: the bundle makes no `sakshi_` call, and the package makes every consumer that uses log, sandhi or sakshi resolve with a warning | §2.7, probe 10; patra did the same at 1.13.0 |
 | cyrius | `cyrius port` still clobbers project docs (existing issue) | add ushma as another reproduction if 6.7.18 still does it |
-| cyrius | A duplicate non-private `fn` across bundles is a warning and the last one wins | probe 6; ushma × kimiya, 10 names |
-| cyrius stdlib | `is_nan`, `is_finite`, `copysign`, `EPSILON`, `INFINITY`, `NAN`; Rust-semantics `min`/`max` | check impetus's filing first and add to it rather than duplicate it |
-| kimiya | Its `KM_GAS_CONSTANT` is 8.314462618, truncated at 1e-11 relative; ushma 1.4.0 uses the exact N_A·k_B = 8.31446261815324 | for its bridge phase; values crossing the ushma ↔ kimiya bridges disagree in the 10th digit |
+| cyrius | the open `field-store-of-struct-call-copies-a-field-argument` miscompile | add ushma's grid shape as a reproduction if probe 12 hits it |
+| cyrius | a duplicate non-private `fn` across bundles is a warning, and the last one wins | probe 6; ushma × kimiya (10 names), × prakash (`ai_*`) |
+| kimiya | ganita already has `mat_gaussian_elim` and LU, so its planned transcription (ADR 0003) may not be needed | ganita reference, probe 9 |
+| kimiya | its `KM_GAS_CONSTANT` is 8.314462618, truncated at 1e-11 relative; ushma 1.4.0 uses the exact N_A·k_B = 8.31446261815324 | values crossing the ushma ↔ kimiya bridges disagree in the 10th digit |
 
 ---
 
 ## 9. After 2.0.0
 
-- Bridges (with kimiya's ushma bridges) once a Cyrius consumer exists; `soorat-compat` once soorat
-  ports.
-- Switch `mathx.cyr` and `numerics.cyr` to the upstream versions when §8 lands, then re-measure.
+- Switch `mathx.cyr` and `fmtf.cyr` to upstream versions when §8 lands, then re-measure.
 - The roadmap backlog, demand-gated.
 - Rust 1.4.x stays maintained for soorat and crates.io dependents: oracle fixes only.
 
@@ -530,11 +667,12 @@ The siblings have already probed these language traps on 6.7.18:
 
 | Milestone | Status | Golden rows | Reference tests | Benches | Notes |
 |---|---|---|---|---|---|
-| M0 Prep & initialize | ☐ planned 2026-11-11 | — | — | — | Blocked on step 0: tag 1.4.0. §0.2 to confirm |
-| M1 Foundation & transfer | ☐ | | | | |
+| M0 Prep & initialize | ☐ planned 2026-11-11 | — | — | — | Blocked on step 0: P8 decision + tag |
+| M1 Foundation, logging & transfer | ☐ | | | | |
 | M2 Equations of state & entropy | ☐ | | | | |
-| M3 Phase & steam | ☐ | | | | Large: M3a/b/c |
-| M4 Cycles | ☐ | | | | Large: M4a/b/c |
-| M5 Chemical & statistical | ☐ | | | | Probe 1 decides Simpson's class |
-| M6 Numerical | ☐ | | | | ADR 0003 (P4); probe 2 (memory) |
-| M7 Release 2.0.0 | ☐ | | | | |
+| M3 Phase & steam | ☐ | | | | M3a/b/c |
+| M4 Cycles | ☐ | | | | M4a/b/c |
+| M5 Chemical & statistical | ☐ | | | | probe 1 decides Simpson's class |
+| M6 Numerical | ☐ | | | | probe 2 (memory), probe 9 (elimination) |
+| M7 Integrations | ☐ | | | | `[lib.ai]`; probe 7 |
+| M8 Release 2.0.0 | ☐ | | | | 155/155 fns, 479/479 tests, 5 examples |

@@ -160,16 +160,18 @@ Ushma does NOT own:
 ## V2.0 — Cyrius port (planned)
 
 Rust 1.4.0 is the final Rust feature release and becomes the frozen parity oracle in `rust-old/`;
-the Cyrius port ships as 2.0.0. Plan of record: [ushma-port-plan.md](ushma-port-plan.md).
+the Cyrius port ships as 2.0.0 and carries **everything** — every module, feature, test,
+benchmark and example. Plan of record: [ushma-port-plan.md](ushma-port-plan.md).
 
-- [ ] M0 — tag 1.4.0, `cyrius port`, oracle generator, parity harness, probes, upstream filings
-- [ ] M1 — foundation & transfer
+- [ ] M0 — tag 1.4.x, `cyrius port`, oracle generator, parity harness, probes, upstream filings
+- [ ] M1 — foundation, logging (sakshi) & transfer
 - [ ] M2 — equations of state & entropy
 - [ ] M3 — phase & steam
 - [ ] M4 — cycles
 - [ ] M5 — chemical & statistical
 - [ ] M6 — numerical
-- [ ] M7 — release 2.0.0
+- [ ] M7 — integrations: bridges, soorat-compat, ai (sandhi)
+- [ ] M8 — release 2.0.0 (155/155 functions, 479/479 tests, 5 examples)
 
 ## Backlog (from the 1.4 audit, demand-gated)
 
