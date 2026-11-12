@@ -1,0 +1,146 @@
+# Benchmarks
+
+Three-point tracking: **baseline** (first run) / **previous** / **latest**
+
+| Point | Date | Commit |
+|-------|------|--------|
+| Baseline | 2026-03-25T01:33:49Z | `a9565aa` |
+| Previous | 2026-11-10T06:25:58Z | `2f35058` |
+| Latest | 2026-11-12T02:59:18Z | `2688099` |
+
+## transfer
+
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `conduction` | 3.04 ns | 13.03 ns | 13.08 ns |
+| `convection` | 1.32 ns | 1.23 ns | 1.24 ns |
+| `radiation` | 2.31 ns | 9.41 ns | 9.95 ns |
+| `resistance_series` | 2.67 ns | 2.19 ns | 2.19 ns |
+| `resistance_parallel` | 4.87 ns | 13.12 ns | 9.28 ns |
+| `heat_stored` | 1.11 ns | 983.30 ps | 986.90 ps |
+| `diffusivity` | 3.16 ns | 4.54 ns | 4.49 ns |
+| `biot_number` | 2.49 ns | 4.17 ns | 3.99 ns |
+| `lumped_capacitance` | 6.44 ns | 6.21 ns | 5.59 ns |
+| `reynolds` | — | 2.71 ns | 2.57 ns |
+| `nusselt_db` | — | 26.54 ns | 24.91 ns |
+| `fin_rect_heat` | — | 77.19 ns | 89.76 ns |
+| `lmtd_counter` | — | 14.93 ns | 16.64 ns |
+| `eff_counter` | — | 9.35 ns | 8.55 ns |
+| `view_factor_disks` | — | 8.39 ns | 8.19 ns |
+
+## state
+
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `ideal_gas_pressure` | 2.16 ns | 9.55 ns | 9.58 ns |
+| `ideal_gas_volume` | 3.55 ns | 3.98 ns | 3.74 ns |
+| `van_der_waals` | 6.76 ns | 13.31 ns | 12.54 ns |
+| `isothermal_work` | 9.74 ns | 9.93 ns | 9.42 ns |
+| `adiabatic_temperature` | 14.62 ns | 17.00 ns | 17.15 ns |
+| `compressibility_factor` | 3.08 ns | 4.44 ns | 4.46 ns |
+| `redlich_kwong` | — | 27.68 ns | 27.27 ns |
+| `peng_robinson` | — | 19.32 ns | 18.85 ns |
+
+## entropy
+
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `carnot_efficiency` | 2.75 ns | 9.01 ns | 8.69 ns |
+| `carnot_cop` | 2.26 ns | 3.62 ns | 3.30 ns |
+| `helmholtz` | 1.10 ns | 1.04 ns | 993.00 ps |
+| `gibbs` | 1.13 ns | 1.04 ns | 986.70 ps |
+| `mixing` | 18.73 ns | 27.21 ns | 25.41 ns |
+| `ideal_gas_ds` | 13.97 ns | 15.77 ns | 15.97 ns |
+
+## material
+
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `diffusivity` | 270.70 ps | 272.50 ps | 249.60 ps |
+| `volumetric_cp` | 274.20 ps | 278.90 ps | 249.50 ps |
+
+## phase
+
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `clausius_clapeyron_slope` | — | 3.67 ns | 3.27 ns |
+| `clausius_clapeyron_pressure` | — | 10.85 ns | 10.62 ns |
+| `phase_lookup` | — | 23.02 ns | 22.57 ns |
+| `heat_of_fusion` | — | 836.10 ps | 1.08 ns |
+| `heat_of_vaporization` | — | 818.50 ps | 992.00 ps |
+| `heat_for_phase_change` | — | 13.25 ns | 11.79 ns |
+
+## cycle
+
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `otto` | — | 70.98 ns | 64.26 ns |
+| `diesel` | — | 76.61 ns | 77.29 ns |
+| `brayton` | — | 62.30 ns | 60.20 ns |
+| `rankine` | — | 121.17 ns | 114.63 ns |
+| `refrigeration` | — | 773.74 ns | 890.21 ns |
+
+## steam
+
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `saturated_by_temp` | — | 18.04 ns | 18.19 ns |
+| `saturated_by_pressure` | — | 34.65 ns | 43.89 ns |
+| `quality_from_enthalpy` | — | 2.08 ns | 2.18 ns |
+| `wet_steam_properties` | — | 1.74 ns | 1.84 ns |
+| `superheated_lookup` | — | 29.16 ns | 31.43 ns |
+
+## stat
+
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `rms_speed` | — | 3.87 ns | 4.01 ns |
+| `einstein_cv` | — | 8.65 ns | 8.75 ns |
+| `debye_cv` | — | 2.05 µs | 2.06 µs |
+
+## chem
+
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `reaction_enthalpy` | — | 2.49 ns | 2.57 ns |
+| `equilibrium_constant` | — | 12.94 ns | 11.92 ns |
+| `adiabatic_flame` | — | 28.94 ns | 27.59 ns |
+
+## numerical
+
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `explicit_1d` | — | 48.20 ns | 45.67 ns |
+| `crank_nicolson_1d` | — | 921.23 ns | 888.85 ns |
+| `gauss_seidel_2d_20x20` | — | 1.34 ms | 1.41 ms |
+| `thermal_network_5` | — | 177.77 ns | 194.17 ns |
+
+## transfer
+
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `view_factor_perpendicular` | — | 50.00 ns | 54.41 ns |
+
+## steam
+
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `saturation_pressure` | — | 6.09 ns | 6.45 ns |
+| `superheated_between_tiers` | — | 64.57 ns | 63.64 ns |
+| `superheated_by_entropy` | — | 325.93 ns | 342.05 ns |
+
+## stat
+
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `debye_cv_low_t` | — | 8.92 ns | 9.36 ns |
+
+## numerical
+
+| Benchmark | Baseline | Previous | Latest |
+|-----------|----------|----------|--------|
+| `adaptive_1d_4substeps` | — | 108.94 ns | 114.92 ns |
+
+---
+
+Generated by `./scripts/bench-history.sh`. Full history in `bench-history.csv`.

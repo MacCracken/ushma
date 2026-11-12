@@ -2,120 +2,77 @@
 
 > **Ushma** (Sanskrit: ऊष्मा — heat, thermal energy) — Thermodynamics simulation for AGNOS
 
-Heat transfer, entropy, equations of state, phase transitions, thermodynamic cycles, numerical solvers, chemical and statistical thermodynamics.
+Heat transfer, entropy, equations of state, phase transitions, steam tables, thermodynamic
+cycles, numerical solvers, chemical and statistical thermodynamics, cross-crate bridges,
+visualization data for soorat, and a daimon/hoosh client.
 
-Built on [hisab](https://crates.io/crates/hisab) for math foundations.
+**Language:** [Cyrius](https://github.com/MacCracken/cyrius) (toolchain pinned in `cyrius.cyml`) · **License:** GPL-3.0-only
 
-**MSRV:** 1.99 · **Edition:** 2024 · **License:** GPL-3.0-only
+> 🚧 **Porting to Cyrius.** The Rust crate's final release, **1.4.0**, is frozen in
+> [`rust-old/`](rust-old/) as the parity oracle. The Cyrius library ships as **2.0.0**, with
+> every module, feature, test, benchmark and example ported. Plan of record:
+> [docs/development/ushma-port-plan.md](docs/development/ushma-port-plan.md). Live progress:
+> [docs/development/state.md](docs/development/state.md).
+>
+> Rust users: `ushma = "1"` on crates.io stays at 1.4.0. Its README is
+> [`rust-old/README.md`](rust-old/README.md).
 
-## Installation
+## Bundles
 
-```toml
-[dependencies]
-ushma = "1"
-```
+| Bundle | Contents |
+|--------|----------|
+| `dist/ushma.cyr` (`[lib]`) | every module: transfer, state, entropy, material, phase, steam, cycle, numerical, chem, stat, bridge, soorat data, logging (sakshi) |
+| `dist/ushma-ai.cyr` (`[lib.ai]`) | the same, plus the daimon/hoosh client on sandhi (pulls the TLS stack) |
 
-## Features
-
-| Feature | Default | Description |
-|---------|---------|-------------|
-| `transfer` | yes | Conduction, convection, radiation, fins, heat exchangers, view factors, dimensionless numbers |
-| `state` | yes | Ideal gas, van der Waals, Redlich-Kwong, Peng-Robinson, virial EOS, mixture rules |
-| `entropy` | yes | Entropy change, Carnot efficiency/COP, Helmholtz/Gibbs free energy, entropy of mixing |
-| `material` | yes | 10 built-in materials with thermal properties at ~300 K |
-| `phase` | yes | Phase transitions, Clausius-Clapeyron, 8 substances with critical/triple points |
-| `cycle` | yes | Otto, Diesel, Brayton, Rankine, refrigeration cycles, T-s/P-v diagrams |
-| `numerical` | yes | 1D/2D finite difference (explicit, Crank-Nicolson), thermal networks, adaptive stepping |
-| `chem` | yes | Hess's law, Gibbs energy of reaction, equilibrium constants, Van't Hoff, adiabatic flame temperature |
-| `stat` | yes | Boltzmann distribution, partition functions, Maxwell-Boltzmann speeds, Einstein/Debye solid Cv |
-| `steam` | no | Saturated + superheated steam tables (IAPWS-IF97), quality calculations |
-| `soorat-compat` | no | Visualization data structures for soorat (heatmaps, profiles, cycle diagrams, flux fields) |
-| `ai` | no | Daimon/hoosh agent integration (network dependencies) |
-| `logging` | no | Structured logging via `USHMA_LOG` env var |
-| `full` | — | Enables all features |
-
-## Architecture
-
-```
-ushma (this crate)
-  └── hisab (math: interpolation, root finding, integration, linear solvers)
-
-Consumers:
-  kiran       ──→ ushma (thermal simulation in game worlds)
-  joshua      ──→ ushma (heat engines, thermal experiments, climate models)
-```
-
-## Quick Start
-
-```rust
-use ushma::transfer;
-use ushma::state;
-use ushma::entropy;
-use ushma::material::COPPER;
-
-// Fourier's law: heat conduction through a copper wall
-let q = transfer::conduction(COPPER.conductivity, 0.01, 373.15, 293.15, 0.1).unwrap();
-
-// Ideal gas law at STP
-let v = state::ideal_gas_volume(1.0, state::STANDARD_TEMP, state::ATM).unwrap();
-
-// Carnot efficiency
-let eta = entropy::carnot_efficiency(500.0, 300.0).unwrap(); // 40%
-
-// Otto cycle
-use ushma::cycle;
-let otto = cycle::otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).unwrap();
-assert!(otto.efficiency > 0.5);
-
-// Peng-Robinson equation of state
-let p = state::peng_robinson_pressure(300.0, 0.02241, 304.13, 7_375_000.0, 0.224).unwrap();
-
-// Adiabatic flame temperature
-use ushma::chem;
-let t_flame = chem::adiabatic_flame_temperature(
-    &[(1.0, &chem::CH4), (2.0, &chem::O2), (7.52, &chem::N2)],
-    &[(1.0, &chem::CO2), (2.0, &chem::H2O_GAS), (7.52, &chem::N2)],
-    298.15,
-).unwrap();
-```
+A consumer includes exactly one bundle. Each Rust cargo feature maps onto one of them (port plan §3.2).
 
 ## Modules
 
-| Module | Key items | Description |
-|--------|-----------|-------------|
-| `transfer` | `conduction`, `convection`, `radiation`, `fin_*`, `lmtd_*`, `effectiveness_*`, `reynolds_number`, `nusselt_*`, `view_factor_*` | Heat transfer, fins, exchangers, dimensionless numbers |
-| `state` | `ideal_gas_*`, `van_der_waals_*`, `redlich_kwong_*`, `peng_robinson_*`, `virial_*`, `kays_rule_*`, `GasData` | Equations of state, real gas models, mixtures |
-| `entropy` | `carnot_efficiency`, `carnot_cop_*`, `helmholtz`, `gibbs`, `entropy_of_mixing` | Thermodynamic potentials, second law |
-| `material` | `ThermalMaterial`, `COPPER`...`DIAMOND`, `ALL_MATERIALS` | 10 reference materials at ~300 K |
-| `phase` | `SubstanceData`, `Phase`, `clausius_clapeyron_*`, `heat_of_*`, `phase_at` | Phase transitions, 8 substances |
-| `steam` | `saturated_by_*`, `superheated_lookup`, `quality_from_*`, `wet_steam_properties` | IAPWS-IF97 steam tables |
-| `cycle` | `otto_cycle`, `diesel_cycle`, `brayton_cycle`, `rankine_cycle`, `refrigeration_cycle`, `cycle_*_diagram` | Thermodynamic cycles, diagrams |
-| `numerical` | `ThermalGrid1D`, `ThermalGrid2D`, `ThermalNetwork`, `BoundaryCondition` | FDM solvers, thermal networks |
-| `chem` | `reaction_enthalpy`, `reaction_gibbs`, `equilibrium_constant`, `vant_hoff_k`, `adiabatic_flame_temperature` | Chemical thermodynamics |
-| `stat` | `boltzmann_*`, `partition_*`, `maxwell_boltzmann_*`, `einstein_cv`, `debye_cv`, `equipartition_*` | Statistical mechanics |
+| Module | Covers |
+|--------|--------|
+| transfer | conduction, convection, radiation, resistances, fins, LMTD and ε-NTU exchangers, Re/Pr/Nu correlations, boundary layers, view factors |
+| state | ideal gas, Van der Waals, Redlich–Kwong, Peng–Robinson, virial, Pitzer correlation, Kay's rule, gas data |
+| entropy | entropy changes, Carnot efficiency and COP, Helmholtz and Gibbs energies, Clausius inequality, mixing |
+| material | 10 reference materials at ~300 K |
+| phase | phase diagrams for 8 substances, vapor and sublimation curves, latent heats, Clausius–Clapeyron |
+| steam | IAPWS-IF97 saturated and superheated tables, exact Region 4 saturation line, quality, isentropic lookup |
+| cycle | Otto, Diesel, Brayton, Rankine, refrigeration, heat pump, cycle comparison, T-s and P-v diagrams |
+| numerical | 1D explicit / Crank–Nicolson / adaptive conduction, 2D Gauss–Seidel steady state, thermal networks |
+| chem | Hess's law, reaction Gibbs energy, equilibrium constants, van 't Hoff, adiabatic flame temperature |
+| stat | Boltzmann, partition functions, Maxwell–Boltzmann speeds, equipartition, Einstein and Debye heat capacities |
+| bridge | conversions for bijli, kimiya, dravya, badal, pravash and sharira |
+| soorat | heatmap, temperature-profile, cycle-diagram, network-graph and heat-flux data for soorat |
+| logging | sakshi spans and levels, `USHMA_LOG` |
+| ai | daimon agent registration and hoosh configuration (`[lib.ai]`) |
 
-## Examples
+## Dependency stack
 
-```sh
-cargo run --example basic_thermo --features transfer,state,material
-cargo run --example heat_engine --features cycle,state,entropy
-cargo run --example building_thermal --features transfer,material,numerical
-cargo run --example cooling_system --features transfer,material
-cargo run --example phase_change --features phase,transfer
+```
+ushma
+  ├── Cyrius stdlib: math, ganita (pow, tanh, cbrt, Gaussian elimination), sakshi + log,
+  │                  bayan (JSON), sandhi (HTTP client, [lib.ai] only), io, result, vec, alloc
+  └── hisab 3.4.1 (interpolation, Simpson integration)
+
+Consumers:
+  kiran   ──→ ushma (thermal simulation in game worlds)
+  joshua  ──→ ushma (heat engines, thermal experiments, climate models)
+  soorat  ──→ ushma (thermal visualization)
 ```
 
 ## Building
 
 ```sh
-cargo build --all-features
-cargo test --all-features
-cargo bench --all-features
+cyrius deps                              # vendor the stdlib leaves and hisab into lib/
+cyrius build src/main.cyr build/ushma    # compile
+cyrius test                              # parity + reference tests
+cyrius bench                             # benchmarks
 ```
 
 ## Documentation
 
-- [Architecture overview](docs/architecture/overview.md)
+- [Port plan](docs/development/ushma-port-plan.md) and [state](docs/development/state.md)
 - [Roadmap](docs/development/roadmap.md)
+- [Architecture decisions](docs/adr/)
 - [Contributing](CONTRIBUTING.md)
 - [Security Policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)

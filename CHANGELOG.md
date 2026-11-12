@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+The Rust → Cyrius port has begun; it ships as **2.0.0** with every module, feature, test,
+benchmark and example ported. Plan of record: `docs/development/ushma-port-plan.md`, with
+ADRs 0001–0005.
+
+### Changed
+- **project** — the Rust 1.4.0 crate (tag `1.4.0`) is frozen in `rust-old/` as the parity
+  oracle. It is never edited and never re-released, and every fix lands in the Cyrius port
+  (ADR 0001). Moved there with it: `Cargo.toml`, `Cargo.lock` (now tracked, so the oracle
+  rebuilds against its exact pins), `src/`, `tests/`, `benches/`, `examples/`, `Makefile`,
+  `deny.toml`, `codecov.yml`, `rust-toolchain.toml`, the Rust CI workflows,
+  `scripts/bench-history.sh`, `scripts/version-bump.sh`, `bench-history.csv`, `benchmarks.md`,
+  `docs/architecture/overview.md` and the 1.4.0 README
+- **project** — scaffolded with `cyrius port` on Cyrius 6.7.18: `cyrius.cyml` (stdlib leaves
+  incl. ganita, sakshi, log, bayan and sandhi; hisab 3.4.1), Cyrius CI and release workflows,
+  `src/main.cyr` smoke entry, test/bench/fuzz stubs
+- **docs** — CLAUDE.md merged for Cyrius (Rust principles translated, new rules for the
+  toolchain's open issues); README, CONTRIBUTING, getting-started guide and `state.md`
+  rewritten for the port; ADRs 0001–0005 (port with a frozen oracle, API divergences, ganita
+  Gaussian elimination, correct rounding, serde-compatible JSON)
+
+### Performance
+- Rust 1.4.0 baseline: 63 benchmarks on the tag (`rust-old/bench-history.csv`, commit
+  `2688099`), the Rust column for `docs/benchmarks-rust-v-cyrius.md`
+
 ## [1.4.0]
 
 Toolchain/dependency update and a full correctness audit. Several fixes change

@@ -1,0 +1,67 @@
+[package]
+name = "ushma"
+version = "${file:VERSION}"
+description = "ushma — thermodynamics simulation (heat transfer, entropy, equations of state, phase change, steam, cycles, numerical conduction, chemical and statistical thermodynamics)"
+license = "GPL-3.0-only"
+repository = "https://github.com/MacCracken/ushma"
+language = "cyrius"
+cyrius = "6.7.18"
+
+[build]
+entry = "src/main.cyr"
+output = "build/ushma"
+dce = true
+
+# Bundles (port plan §3.2, ADR 0001 P5). Added at M1 — `[lib] modules = []` is invalid.
+#   [lib]     every module except the HTTP client (dist/ushma.cyr)
+#   [lib.ai]  [lib] + src/ai.cyr, the daimon/hoosh client on sandhi (dist/ushma-ai.cyr)
+# Order = dependency order (port plan §4 step 3): error → constants → validate → mathx →
+# fmtf → json → logging → material_data → material → transfer → state_data → state →
+# entropy → phase_data → phase → steam_data → steam → cycle → chem_data → chem → stat →
+# numerical → bridge → soorat (→ ai in [lib.ai]).
+
+[deps]
+# Every leaf the library calls (6.6.18 rule). sandhi, sakshi and bayan are folds, so they are
+# stdlib leaves, never [deps.x]. sandhi's companions (tls, async, random, fdlopen, dynlib) are
+# listed as sandhi's README asks; only [lib.ai]'s src/ai.cyr reaches them.
+stdlib = [
+    "syscalls",
+    "string",
+    "alloc",
+    "str",
+    "fmt",
+    "io",
+    "vec",
+    "slice",
+    "math",
+    "ganita",
+    "tagged",
+    "result",
+    "boxed",
+    "overflow",
+    "fnptr",
+    "freelist",
+    "sakshi",
+    "log",
+    "bayan",
+    "sandhi",
+    "tls",
+    "async",
+    "random",
+    "fdlopen",
+    "dynlib",
+]
+
+# hisab — calc_lerp (steam) and calc_integral_simpson (stat). A production dependency because
+# bundled modules call it (ADR 0001, Consequences).
+# ⚠ hisab 3.4.1 also declares a [deps.sakshi] package that its bundle never calls. With sakshi
+# a stdlib leaf here, `cyrius deps` warns "refusing to overwrite stdlib leaf 'sakshi'". The
+# stdlib copy wins and the two are byte-identical at sakshi 2.5.10. Only hisab can retire the
+# warning (port plan §2.7, §8).
+[deps.hisab]
+git = "https://github.com/MacCracken/hisab.git"
+tag = "3.4.1"
+modules = ["dist/hisab.cyr"]
+
+[test]
+stdlib = ["assert", "bench"]

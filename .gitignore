@@ -1,8 +1,14 @@
-# Build artifacts
-/target/
+# Build output
+/build/
 
-# Library crate lock file
-Cargo.lock
+# Frozen Rust oracle (rust-old/): keep its sources AND its Cargo.lock (the oracle must rebuild
+# against its exact pins); ignore only what cargo builds inside it.
+/rust-old/target/
+/rust-old/**/__pycache__/
+
+# Golden-value generator (scripts/oracle/, a cargo crate): its Cargo.lock is committed too
+/scripts/oracle/target/
+/scripts/**/__pycache__/
 
 # Editor / IDE
 *.swp
@@ -20,14 +26,12 @@ Thumbs.db
 *.pdb
 core
 core.*
+*.core
 
 # Coverage
-lcov.info
-tarpaulin-report.html
-coverage/
-
-# Benchmark output (criterion generates large HTML reports)
-criterion/
+/coverage/
+*.profraw
+*.profdata
 
 # Claude Code
 .claude/
@@ -35,9 +39,5 @@ criterion/
 # Environment / secrets
 .env
 .env.*
-
-# Property testing regressions
-proptest-regressions/
-
-# Supply chain cache
-supply-chain/.cache/
+*.pem
+*.key
