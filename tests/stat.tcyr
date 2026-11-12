@@ -1,0 +1,328 @@
+# stat tests (M5b): the Boltzmann factor and ratio, S = k ln W, equipartition, the partition functions, the
+# Maxwell–Boltzmann speeds, and the Einstein and Debye heat capacities.
+#
+# Rust 1.4.0's stat.rs tests, all 33, one for one, each also checking the refusal's code. Then reference tests of the
+# switches either side (Einstein's x = 500, Debye's 0.01 and 50), a negative symmetry number, and the vibrational
+# denominator's underflow.
+
+include "src/constants.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+include "src/stat.cyr"
+
+# |a − b| as an f64.
+fn absdiff(a: f64, b: f64): f64 {
+    var d: f64 = a - b;
+    if (d < 0.0) { d = 0.0 - d; }
+    return d;
+}
+
+# Asserts a Result is Err(code).
+fn errc(t, v, code, name) {
+    assert_eq(is_err_result(t), 1, name);
+    if (is_err_result(t) == 1) { assert_streq(us_error_name(v), us_error_name(code), name); }
+    return 0;
+}
+
+# The value of an Ok Result as an f64 (asserting it is Ok).
+fn okv(t, v, name): f64 {
+    assert_eq(is_ok(t), 1, name);
+    var x: f64 = v;
+    return x;
+}
+
+# The mass of an N₂ molecule (kg), as the Rust tests compute it.
+fn n2_mass(): f64 {
+    var m: f64 = 0.028014 / US_AVOGADRO;
+    return m;
+}
+
+# The constants, the Boltzmann factor and ratio, S = k ln W.
+# rust src/stat.rs: test_constants, test_boltzmann_ground_state, test_boltzmann_ratio_equal_energies
+# rust src/stat.rs: test_boltzmann_ratio_higher_energy_less_populated, test_boltzmann_high_temp_equal
+# rust src/stat.rs: test_boltzmann_invalid, test_entropy_from_microstates, test_entropy_microstates_invalid
+fn test_boltzmann() {
+    test_group("Boltzmann");
+    var h: f64 = US_PLANCK;
+    var na: f64 = US_AVOGADRO;
+    assert(h > 0.00000000000000000000000000000000066 && h < 0.00000000000000000000000000000000067, "h");
+    assert(na > 602000000000000000000000.0 && na < 603000000000000000000000.0, "N_A");
+    var kn: f64 = US_BOLTZMANN_K * na;
+    var dk: f64 = absdiff(kn, US_GAS_CONSTANT);
+    assert(dk / US_GAS_CONSTANT < 0.000001, "k_B N_A = R");
+    var t1, v1 = us_boltzmann_probability(0.0, 300.0);
+    var p: f64 = okv(t1, v1, "E = 0");
+    var dp: f64 = absdiff(p, 1.0);
+    assert(dp < 0.0000000001, "the ground state: P = 1");
+    var t2, v2 = us_boltzmann_ratio(1.0, 1.0, 300.0);
+    var r: f64 = okv(t2, v2, "equal energies");
+    var dr: f64 = absdiff(r, 1.0);
+    assert(dr < 0.0000000001, "equal energies: ratio 1");
+    var t3, v3 = us_boltzmann_ratio(0.0, 0.00000000000000000001, 300.0);
+    var r2: f64 = okv(t3, v3, "a higher level");
+    assert(r2 < 1.0, "a higher level is less populated");
+    var t4, v4 = us_boltzmann_ratio(0.0, 0.00000000000000000001, 10000000000.0);
+    var r3: f64 = okv(t4, v4, "a very high T");
+    var d3: f64 = absdiff(r3, 1.0);
+    assert(d3 < 0.01, "a very high T: ratio near 1");
+    var e1, f1 = us_boltzmann_probability(0.0, 0.0);
+    errc(e1, f1, US_ERR_INVALID_TEMPERATURE, "probability at T = 0");
+    var e2, f2 = us_boltzmann_ratio(0.0, 1.0, 0.0);
+    errc(e2, f2, US_ERR_INVALID_TEMPERATURE, "ratio at T = 0");
+    var t5, v5 = us_entropy_from_microstates(1.0);
+    var s1: f64 = okv(t5, v5, "W = 1");
+    var as1: f64 = f64_abs(s1);
+    assert(as1 < 0.000000000000000000000000000001, "S(1) = 0");
+    var t6, v6 = us_entropy_from_microstates(100.0);
+    var s2: f64 = okv(t6, v6, "W = 100");
+    assert(s2 > 0.0, "S grows with W");
+    var e3, f3 = us_entropy_from_microstates(0.0);
+    errc(e3, f3, US_ERR_INVALID_PARAMETER, "W = 0");
+    var e4, f4 = us_entropy_from_microstates(0.0 - 1.0);
+    errc(e4, f4, US_ERR_INVALID_PARAMETER, "W = -1");
+}
+
+# Equipartition: monatomic and diatomic C_v, the energy linear in T.
+# rust src/stat.rs: test_equipartition_monatomic, test_equipartition_diatomic, test_equipartition_energy_scales
+fn test_equipartition() {
+    test_group("equipartition");
+    var c3: f64 = us_equipartition_cv(3.0);
+    var d3: f64 = absdiff(c3, 1.5 * US_GAS_CONSTANT);
+    assert(d3 < 0.0000000001, "f = 3: 3R/2");
+    var c5: f64 = us_equipartition_cv(5.0);
+    var d5: f64 = absdiff(c5, 2.5 * US_GAS_CONSTANT);
+    assert(d5 < 0.0000000001, "f = 5: 5R/2");
+    var e1: f64 = us_equipartition_energy(3.0, 300.0);
+    var e2: f64 = us_equipartition_energy(3.0, 600.0);
+    var de: f64 = absdiff(e2, 2.0 * e1);
+    assert(de < 0.000000000000000000000000000001, "E(2T) = 2 E(T)");
+}
+
+# The partition functions: translational huge, rotational of N₂, vibrational at low and high T, the refusals, and the
+# small-x regime where 1 − e^(−x) used to lose its precision.
+# rust src/stat.rs: test_partition_translational_positive, test_partition_rotational
+# rust src/stat.rs: test_partition_vibrational_low_t, test_partition_vibrational_high_t, test_partition_invalid
+# rust src/stat.rs: test_partition_vibrational_small_x
+fn test_partitions() {
+    test_group("partition functions");
+    var m: f64 = n2_mass();
+    var t1, v1 = us_partition_translational(m, 0.02241, 300.0);
+    var qt: f64 = okv(t1, v1, "translational, N2");
+    assert(qt > 10000000000000000000000000.0, "translational: above 1e25");
+    var t2, v2 = us_partition_rotational(0.00000000000000000000000000000000000000000000014, 300.0, 2);
+    var qr: f64 = okv(t2, v2, "rotational, N2");
+    assert(qr > 10.0 && qr < 200.0, "rotational: 10-200");
+    var t3, v3 = us_partition_vibrational(10000000000000.0, 10.0);
+    var q1: f64 = okv(t3, v3, "vibrational at 10 K");
+    var d1: f64 = absdiff(q1, 1.0);
+    assert(d1 < 0.01, "low T: q -> 1");
+    var t4, v4 = us_partition_vibrational(1000000000000.0, 3000.0);
+    var q2: f64 = okv(t4, v4, "vibrational at 3000 K");
+    assert(q2 > 10.0, "high T: q >> 1");
+    var e1, f1 = us_partition_translational(0.0, 1.0, 300.0);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "mass 0");
+    var e2, f2 = us_partition_translational(0.00000000000000000000000001, 0.0, 300.0);
+    errc(e2, f2, US_ERR_INVALID_VOLUME, "volume 0");
+    var e3, f3 = us_partition_rotational(0.0000000000000000000000000000000000000000000001, 300.0, 0);
+    errc(e3, f3, US_ERR_INVALID_PARAMETER, "sigma 0");
+    var e4, f4 = us_partition_vibrational(0.0, 300.0);
+    errc(e4, f4, US_ERR_INVALID_PARAMETER, "frequency 0");
+    var t5, v5 = us_partition_vibrational(1.0, 1000000.0);
+    var qs: f64 = okv(t5, v5, "h nu << k T");
+    var x: f64 = US_PLANCK * 1.0 / (US_BOLTZMANN_K * 1000000.0);
+    var ds: f64 = absdiff(qs * x, 1.0);
+    assert(ds < 0.000000001, "small x: q = kT/(h nu) within 1e-9");
+}
+
+# Maxwell–Boltzmann: v_p < v̄ < v_rms, N₂'s v_rms ≈ 517 m/s, the density 0 at v = 0 and positive at v_p, the refusals.
+# rust src/stat.rs: test_mb_speed_ordering, test_n2_rms_speed, test_mb_pdf_zero_at_zero, test_mb_pdf_positive_at_peak
+# rust src/stat.rs: test_mb_speed_invalid
+fn test_speeds() {
+    test_group("Maxwell-Boltzmann");
+    var m: f64 = n2_mass();
+    var t1, v1 = us_most_probable_speed(m, 300.0);
+    var vp: f64 = okv(t1, v1, "v_p");
+    var t2, v2 = us_mean_speed(m, 300.0);
+    var va: f64 = okv(t2, v2, "v_mean");
+    var t3, v3 = us_rms_speed(m, 300.0);
+    var vr: f64 = okv(t3, v3, "v_rms");
+    assert(vp < va && va < vr, "v_p < v_mean < v_rms");
+    var dr: f64 = absdiff(vr, 517.0);
+    assert(dr < 5.0, "N2 at 300 K: v_rms = 517 m/s within 5");
+    var t4, v4 = us_maxwell_boltzmann_speed_pdf(0.0, m, 300.0);
+    var f0: f64 = okv(t4, v4, "f(0)");
+    var af: f64 = f64_abs(f0);
+    assert(af < 0.000000000000000000000000000001, "f(0) = 0");
+    var t5, v5 = us_maxwell_boltzmann_speed_pdf(vp, m, 300.0);
+    var fp: f64 = okv(t5, v5, "f(v_p)");
+    assert(fp > 0.0, "f(v_p) > 0");
+    var e1, f1 = us_most_probable_speed(0.0, 300.0);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "mass 0");
+    var e2, f2 = us_most_probable_speed(0.00000000000000000000000001, 0.0);
+    errc(e2, f2, US_ERR_INVALID_TEMPERATURE, "T 0");
+    var e3, f3 = us_maxwell_boltzmann_speed_pdf(0.0 - 1.0, 0.00000000000000000000000001, 300.0);
+    errc(e3, f3, US_ERR_INVALID_PARAMETER, "a negative speed");
+}
+
+# Einstein and Debye: both reach Dulong–Petit at high T and 0 at low T, Debye above Einstein at low T, the refusals.
+# rust src/stat.rs: test_einstein_high_t_dulong_petit, test_einstein_low_t_approaches_zero
+# rust src/stat.rs: test_debye_high_t_dulong_petit, test_debye_low_t_approaches_zero, test_debye_vs_einstein_low_t
+# rust src/stat.rs: test_einstein_invalid, test_debye_invalid
+fn test_solids() {
+    test_group("Einstein and Debye");
+    var r3: f64 = 3.0 * US_GAS_CONSTANT;
+    var t1, v1 = us_einstein_cv(200.0, 5000.0);
+    var e1: f64 = okv(t1, v1, "Einstein at 5000 K");
+    var d1: f64 = absdiff(e1, r3);
+    assert(d1 < 0.1, "Einstein at high T: 3R");
+    var t2, v2 = us_einstein_cv(1000.0, 10.0);
+    var e2: f64 = okv(t2, v2, "Einstein at 10 K");
+    assert(e2 < 0.1, "Einstein at low T: near 0");
+    var t3, v3 = us_debye_cv(300.0, 3000.0);
+    var c3: f64 = okv(t3, v3, "Debye at 3000 K");
+    var d3: f64 = absdiff(c3, r3);
+    assert(d3 < 0.5, "Debye at high T: 3R");
+    var t4, v4 = us_debye_cv(300.0, 5.0);
+    var c4: f64 = okv(t4, v4, "Debye at 5 K");
+    assert(c4 < 1.0, "Debye at low T: near 0");
+    var t5, v5 = us_einstein_cv(300.0, 50.0);
+    var e5: f64 = okv(t5, v5, "Einstein at 50 K");
+    var t6, v6 = us_debye_cv(300.0, 50.0);
+    var c6: f64 = okv(t6, v6, "Debye at 50 K");
+    assert(c6 > e5, "at low T Debye's T^3 lies above Einstein's exponential");
+    var f1, g1 = us_einstein_cv(0.0, 300.0);
+    errc(f1, g1, US_ERR_INVALID_PARAMETER, "Einstein, theta 0");
+    var f2, g2 = us_einstein_cv(200.0, 0.0);
+    errc(f2, g2, US_ERR_INVALID_TEMPERATURE, "Einstein, T 0");
+    var f3, g3 = us_debye_cv(0.0, 300.0);
+    errc(f3, g3, US_ERR_INVALID_PARAMETER, "Debye, theta 0");
+    var f4, g4 = us_debye_cv(300.0, 0.0);
+    errc(f4, g4, US_ERR_INVALID_TEMPERATURE, "Debye, T 0");
+}
+
+# The 1.4.0 audit's regressions: Debye's T³ law where exp(Θ/T) once overflowed, its scipy reference values, continuity
+# at the x = 50 cutoff, and NaN refused everywhere.
+# rust src/stat.rs: test_debye_cv_low_temperature_t3_law, test_debye_cv_reference_values
+# rust src/stat.rs: test_debye_cv_continuous_at_cutoff, test_stat_rejects_nan
+fn test_regressions() {
+    test_group("1.4.0's regressions");
+    var pi: f64 = F64_PI;
+    var pi2: f64 = pi * pi;
+    var th: f64[3];
+    var ts: f64[3];
+    th[0] = 2230.0;
+    ts[0] = 3.0;
+    th[1] = 300.0;
+    ts[1] = 0.42;
+    th[2] = 428.0;
+    ts[2] = 1.0;
+    var ok = 1;
+    var k = 0;
+    while (k < 3) {
+        var a: f64 = th[k];
+        var b: f64 = ts[k];
+        var t, v = us_debye_cv(a, b);
+        var cv: f64 = v;
+        var r: f64 = b / a;
+        var law: f64 = 12.0 * pi2 * pi2 / 5.0 * US_GAS_CONSTANT * (r * r * r);
+        var dl: f64 = absdiff(cv / law, 1.0);
+        if ((is_ok(t) == 1 && _us_is_finite(cv) == 1 && dl < 0.000000000001) == 0) { ok = 0; }
+        k = k + 1;
+    }
+    assert_eq(ok, 1, "the T^3 law where exp(theta/T) overflowed, within 1e-12");
+    var xd: f64[4];
+    var ref: f64[4];
+    xd[0] = 1.0;
+    ref[0] = 23.73942379440019;
+    xd[1] = 5.0;
+    ref[1] = 9.19500138184416;
+    xd[2] = 10.0;
+    ref[2] = 1.891232686118677;
+    xd[3] = 30.0;
+    ref[3] = 0.071991488298527;
+    ok = 1;
+    k = 0;
+    while (k < 4) {
+        var x: f64 = xd[k];
+        var want: f64 = ref[k];
+        var t2, v2 = us_debye_cv(x * 100.0, 100.0);
+        var got: f64 = v2;
+        var dr: f64 = absdiff(got / want, 1.0);
+        if (dr >= 0.000000001) { ok = 0; }
+        k = k + 1;
+    }
+    assert_eq(ok, 1, "scipy's reference values within 1e-9");
+    var t3, v3 = us_debye_cv(49.999999, 1.0);
+    var below: f64 = okv(t3, v3, "below the cutoff");
+    var t4, v4 = us_debye_cv(50.000001, 1.0);
+    var above: f64 = okv(t4, v4, "above it");
+    var dc: f64 = absdiff(below / above, 1.0);
+    assert(dc < 0.000001, "continuous at theta/T = 50 within 1e-6");
+    var nan: f64 = 0.0 / 0.0;
+    var e1, f1 = us_boltzmann_probability(0.000000000000000000001, nan);
+    errc(e1, f1, US_ERR_INVALID_TEMPERATURE, "Boltzmann, T NaN");
+    var e2, f2 = us_debye_cv(nan, 300.0);
+    errc(e2, f2, US_ERR_INVALID_PARAMETER, "Debye, theta NaN");
+    var e3, f3 = us_einstein_cv(300.0, nan);
+    errc(e3, f3, US_ERR_INVALID_TEMPERATURE, "Einstein, T NaN");
+    var e4, f4 = us_partition_vibrational(nan, 300.0);
+    errc(e4, f4, US_ERR_INVALID_PARAMETER, "vibrational, frequency NaN");
+    var e5, f5 = us_maxwell_boltzmann_speed_pdf(nan, 0.0000000000000000000000000465, 300.0);
+    errc(e5, f5, US_ERR_INVALID_PARAMETER, "Maxwell-Boltzmann, speed NaN");
+}
+
+# Reference: the switches either side (Einstein's denominator overflows past x ≈ 354.9, before the x > 500 cutoff, as in
+# 1.4.0), a negative symmetry number, the vibrational denominator's underflow, the Boltzmann factor at E = −0, and
+# the Debye integral's heap (none).
+fn test_reference() {
+    test_group("reference");
+    var t0, v0 = us_einstein_cv(300.0, 1.0);
+    var low: f64 = okv(t0, v0, "Einstein at x = 300");
+    var t1, v1 = us_einstein_cv(500.0, 1.0);
+    var at: f64 = okv(t1, v1, "Einstein at x = 500");
+    var t2, v2 = us_einstein_cv(500.00000000000006, 1.0);
+    var past: f64 = okv(t2, v2, "just past it");
+    assert(low > 0.0, "x = 300: a tiny positive C_v");
+    assert(at == 0.0 && past == 0.0, "x = 500: (e^x - 1)^2 is already infinite, so 0; past it the cutoff's 0");
+    var t3, v3 = us_debye_cv(0.009999999999999998, 1.0);
+    var hi: f64 = okv(t3, v3, "Debye just below 0.01");
+    var d3: f64 = absdiff(hi, 3.0 * US_GAS_CONSTANT);
+    assert(d3 == 0.0, "below theta/T = 0.01: exactly 3R");
+    var e1, f1 = us_partition_rotational(0.00000000000000000000000000000000000000000000014, 300.0, 0 - 1);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "a negative symmetry number is refused as 0 is");
+    var big: f64 = 1000000000000000000000000000000.0;
+    var t300: f64 = big * big * big * big * big * big * big * big * big * big;
+    var e2, f2 = us_partition_vibrational(_US_TINY, t300);
+    errc(e2, f2, US_ERR_DIVISION_BY_ZERO, "h nu / (k T) underflows to 0 (nu 1e-30, T 1e300): no denominator");
+    var t4, v4 = us_boltzmann_probability(_US_NEG_ZERO, 300.0);
+    var p: f64 = okv(t4, v4, "E = -0");
+    assert(p == 1.0, "E = -0: factor 1");
+    var before = alloc_used();
+    var k = 0;
+    while (k < 1000) {
+        var tk, vk = us_debye_cv(300.0, 200.0);
+        k = k + 1;
+    }
+    assert_eq(alloc_used() - before, 0, "1,000 Debye integrals: 0 heap bytes (probe 2)");
+}
+
+# Runs every group and returns the failure count.
+fn main() {
+    alloc_init();
+    test_boltzmann();
+    test_equipartition();
+    test_partitions();
+    test_speeds();
+    test_solids();
+    test_regressions();
+    test_reference();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

@@ -38,6 +38,7 @@ include "src/steam_data.cyr"
 include "src/steam.cyr"
 include "src/cycle.cyr"
 include "src/chem.cyr"
+include "src/stat.cyr"
 
 alloc_init();
 
@@ -463,6 +464,86 @@ fn _par_material(fp, fl): i64 {
         store64(_par_mat_sb + 8, 0);
         us_material_to_json(_par_mat_sb, &m);
         _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    return 0;
+}
+
+# ── stat ────────────────────────────────────────────────────────────────────────────
+
+# One stat row: 1 when handled, 0 for a function with no counterpart yet.
+fn _par_stat(fp, fl): i64 {
+    var a: f64 = _par_in(0);
+    var b: f64 = _par_in(1);
+    var c: f64 = _par_in(2);
+    if (_par_eq(fp, fl, "stat::boltzmann_probability") == 1) {
+        var t, v = us_boltzmann_probability(a, b);
+        _par_got_res(t, v);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "stat::boltzmann_ratio") == 1) {
+        var t1, v1 = us_boltzmann_ratio(a, b, c);
+        _par_got_res(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "stat::entropy_from_microstates") == 1) {
+        var t2, v2 = us_entropy_from_microstates(a);
+        _par_got_res(t2, v2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "stat::equipartition_energy") == 1) {
+        var e: f64 = us_equipartition_energy(a, b);
+        _par_got_f(e);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "stat::equipartition_cv") == 1) {
+        var cv: f64 = us_equipartition_cv(a);
+        _par_got_f(cv);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "stat::partition_translational") == 1) {
+        var t3, v3 = us_partition_translational(a, b, c);
+        _par_got_res(t3, v3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "stat::partition_rotational") == 1) {
+        var t4, v4 = us_partition_rotational(a, b, _par_in(2));
+        _par_got_res(t4, v4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "stat::partition_vibrational") == 1) {
+        var t5, v5 = us_partition_vibrational(a, b);
+        _par_got_res(t5, v5);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "stat::maxwell_boltzmann_speed_pdf") == 1) {
+        var t6, v6 = us_maxwell_boltzmann_speed_pdf(a, b, c);
+        _par_got_res(t6, v6);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "stat::most_probable_speed") == 1) {
+        var t7, v7 = us_most_probable_speed(a, b);
+        _par_got_res(t7, v7);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "stat::mean_speed") == 1) {
+        var t8, v8 = us_mean_speed(a, b);
+        _par_got_res(t8, v8);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "stat::rms_speed") == 1) {
+        var t9, v9 = us_rms_speed(a, b);
+        _par_got_res(t9, v9);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "stat::einstein_cv") == 1) {
+        var ta, va = us_einstein_cv(a, b);
+        _par_got_res(ta, va);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "stat::debye_cv") == 1) {
+        var tb, vb = us_debye_cv(a, b);
+        _par_got_res(tb, vb);
         return 1;
     }
     return 0;
@@ -1843,6 +1924,7 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "entropy") == 1) { return _par_entropy(fp, fl); }
     if (_par_eq(mp, ml, "steam") == 1) { return _par_steam(fp, fl); }
     if (_par_eq(mp, ml, "cycle") == 1) { return _par_cycle(fp, fl); }
+    if (_par_eq(mp, ml, "stat") == 1) { return _par_stat(fp, fl); }
     if (_par_eq(mp, ml, "material") == 1 && _par_in_n != 0) { return _par_material(fp, fl); }
     if (_par_eq(mp, ml, "state") == 1 && _par_in_n != 0) { return _par_state(fp, fl); }
     if (_par_eq(mp, ml, "phase") == 1 && _par_in_n != 0) { return _par_phase(fp, fl); }
@@ -1962,6 +2044,7 @@ fn _par_c_bound(fp, fl): i64 {
     if (fl > 7 && _par_eq(fp, 7, "steam::") == 1) { return 0; }
     if (fl > 7 && _par_eq(fp, 7, "cycle::") == 1) { return 0; }
     if (fl > 6 && _par_eq(fp, 6, "chem::") == 1) { return 0; }
+    if (fl > 6 && _par_eq(fp, 6, "stat::") == 1) { return 0; }
     return 0 - 1;
 }
 

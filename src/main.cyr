@@ -24,6 +24,7 @@ include "src/steam_data.cyr"
 include "src/steam.cyr"
 include "src/cycle.cyr"
 include "src/chem.cyr"
+include "src/stat.cyr"
 
 # Smoke entry point: initializes the allocator and prints a ready line. The library itself
 # ships as the [lib] / [lib.ai] bundles (cyrius distlib); this binary only proves the build links.

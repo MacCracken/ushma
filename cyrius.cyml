@@ -88,6 +88,7 @@ modules = [
     "src/steam.cyr",
     "src/cycle.cyr",
     "src/chem.cyr",
+    "src/stat.cyr",
 ]
 
 # The physics bundle plus the daimon client (src/ai.cyr from M7, on sandhi): dist/ushma-ai.cyr. Until M7 it holds
@@ -116,6 +117,7 @@ modules = [
     "src/steam.cyr",
     "src/cycle.cyr",
     "src/chem.cyr",
+    "src/stat.cyr",
 ]
 
 [test]

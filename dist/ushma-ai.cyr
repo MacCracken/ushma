@@ -10234,3 +10234,283 @@ fn us_species_from_json_a(a, buf, n, out: *UsSpecies): Result {
 fn us_species_from_json(buf, n, out: *UsSpecies): Result {
     return us_species_from_json_a(default_alloc(), buf, n, out);
 }
+
+# --- stat.cyr ---
+
+# stat.cyr — statistical thermodynamics (Rust 1.4.0 `stat`): the Boltzmann factor and population ratio, S = k·ln W,
+# equipartition, the translational, rotational and vibrational partition functions, the Maxwell–Boltzmann speeds, and
+# the Einstein and Debye heat capacities of a solid. SI: joules, kelvins, kilograms, metres, seconds.
+#
+# Each function computes in the order Rust 1.4.0 writes, its unary minus a sign flip (_us_neg), its exp, expm1, ln and
+# pow correctly rounded (ADR 0004): class B or C. `debye_cv` integrates on hisab's Simpson rule
+# (`calc_integral_simpson`, 200 intervals), which sums in another order than Rust hisab 1.4.0's, so it is class D
+# (relative ≤ 1e-12; probe 1, port plan §5). A refusal returns Err(US_ERR_*) and reports its value at DEBUG
+# (src/validate.cyr). Rust instruments none of them.
+
+# --- Boltzmann ---
+
+# The Boltzmann factor, exp(−E/(k·T)): proportional to the probability of a state of energy E at T. Ok(the factor), or
+# Err(US_ERR_INVALID_TEMPERATURE) unless T > 0.
+#must_use
+fn us_boltzmann_probability(energy: f64, temperature: f64): Result {
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_boltzmann_probability", "temperature", temperature));
+    }
+    var ne: f64 = _us_neg(energy);
+    var x: f64 = ne / (US_BOLTZMANN_K * temperature);
+    var p: f64 = _us_cr_exp(x);
+    return Ok(p);
+}
+
+# The population ratio of two levels, N₂/N₁ = exp(−(E₂ − E₁)/(k·T)). Ok(the ratio), or Err(US_ERR_INVALID_TEMPERATURE)
+# unless T > 0.
+#must_use
+fn us_boltzmann_ratio(e1: f64, e2: f64, temperature: f64): Result {
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_boltzmann_ratio", "temperature", temperature));
+    }
+    var nd: f64 = _us_neg(e2 - e1);
+    var x: f64 = nd / (US_BOLTZMANN_K * temperature);
+    var r: f64 = _us_cr_exp(x);
+    return Ok(r);
+}
+
+# The entropy of W microstates, S = k·ln W (J/K). Ok(S), or Err(US_ERR_INVALID_PARAMETER) unless W > 0.
+#must_use
+fn us_entropy_from_microstates(num_microstates: f64): Result {
+    if (_us_finite_gt(num_microstates, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_entropy_from_microstates", "num_microstates",
+            num_microstates));
+    }
+    var l: f64 = _us_cr_ln(num_microstates);
+    var s: f64 = US_BOLTZMANN_K * l;
+    return Ok(s);
+}
+
+# --- Equipartition ---
+
+# The equipartition energy per molecule of `f` degrees of freedom, E = (f/2)·k·T (J).
+#must_use
+#pure
+fn us_equipartition_energy(degrees_of_freedom: f64, temperature: f64): f64 {
+    var e: f64 = 0.5 * degrees_of_freedom * US_BOLTZMANN_K * temperature;
+    return e;
+}
+
+# The equipartition molar heat capacity, C_v = (f/2)·R (J/(mol·K)).
+#must_use
+#pure
+fn us_equipartition_cv(degrees_of_freedom: f64): f64 {
+    var c: f64 = 0.5 * degrees_of_freedom * US_GAS_CONSTANT;
+    return c;
+}
+
+# --- Partition functions ---
+
+# The translational partition function, q = V·(2π·m·k·T/h²)^(3/2), as V/λ² ^ 1.5 with λ² = h²/(2π·m·k·T). Ok(q), or
+# Err(US_ERR_INVALID_PARAMETER) unless m > 0, Err(US_ERR_INVALID_VOLUME) unless V > 0, Err(US_ERR_INVALID_TEMPERATURE)
+# unless T > 0.
+#must_use
+fn us_partition_translational(mass: f64, volume: f64, temperature: f64): Result {
+    if (_us_finite_gt(mass, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_partition_translational", "mass", mass));
+    }
+    if (_us_finite_gt(volume, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_VOLUME, "us_partition_translational", "volume", volume));
+    }
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_partition_translational", "temperature", temperature));
+    }
+    var pi: f64 = F64_PI;
+    var lsq: f64 = US_PLANCK * US_PLANCK / (2.0 * pi * mass * US_BOLTZMANN_K * temperature);
+    var pw: f64 = _us_cr_pow(lsq, 1.5);
+    var q: f64 = volume / pw;
+    return Ok(q);
+}
+
+# The rotational partition function of a linear molecule in the high-T limit, q = T/(σ·Θ_rot) with
+# Θ_rot = h²/(8π²·I·k); σ is the symmetry number (1 heteronuclear, 2 homonuclear). Ok(q), or
+# Err(US_ERR_INVALID_PARAMETER) unless I > 0, Err(US_ERR_INVALID_TEMPERATURE) unless T > 0,
+# Err(US_ERR_INVALID_PARAMETER) unless σ ≥ 1 (Rust's u32 holds no negative σ; the port refuses one with 0).
+#must_use
+fn us_partition_rotational(moment_of_inertia: f64, temperature: f64, symmetry_number): Result {
+    if (_us_finite_gt(moment_of_inertia, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_partition_rotational", "moment_of_inertia",
+            moment_of_inertia));
+    }
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_partition_rotational", "temperature", temperature));
+    }
+    if (symmetry_number < 1) {
+        return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_partition_rotational", "symmetry_number",
+            symmetry_number));
+    }
+    var pi: f64 = F64_PI;
+    var th: f64 = US_PLANCK * US_PLANCK / (8.0 * pi * pi * moment_of_inertia * US_BOLTZMANN_K);
+    var sg: f64 = f64_from(symmetry_number);
+    var q: f64 = temperature / (sg * th);
+    return Ok(q);
+}
+
+# The vibrational partition function from the ground state, q = 1/(1 − e^(−hν/(kT))), its denominator −expm1(−x) so
+# it keeps its precision where hν ≪ kT (q → kT/(hν)). Ok(q), or Err(US_ERR_INVALID_PARAMETER) unless ν > 0,
+# Err(US_ERR_INVALID_TEMPERATURE) unless T > 0, Err(US_ERR_DIVISION_BY_ZERO) when the denominator is not positive.
+#must_use
+fn us_partition_vibrational(frequency: f64, temperature: f64): Result {
+    if (_us_finite_gt(frequency, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_partition_vibrational", "frequency", frequency));
+    }
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_partition_vibrational", "temperature", temperature));
+    }
+    var x: f64 = US_PLANCK * frequency / (US_BOLTZMANN_K * temperature);
+    var nx: f64 = _us_neg(x);
+    var em: f64 = _us_cr_expm1(nx);
+    var den: f64 = _us_neg(em);
+    if (_us_finite_gt(den, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_partition_vibrational", "denominator", den));
+    }
+    var q: f64 = 1.0 / den;
+    return Ok(q);
+}
+
+# --- Maxwell–Boltzmann ---
+
+# The Maxwell–Boltzmann speed density, f(v) = 4π·(m/(2πkT))^(3/2)·v²·exp(−m·v²/(2kT)) (s/m). Ok(f), or
+# Err(US_ERR_INVALID_PARAMETER) unless v ≥ 0 and m > 0, Err(US_ERR_INVALID_TEMPERATURE) unless T > 0.
+#must_use
+fn us_maxwell_boltzmann_speed_pdf(speed: f64, mass: f64, temperature: f64): Result {
+    if (_us_finite_ge(speed, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_maxwell_boltzmann_speed_pdf", "speed", speed));
+    }
+    if (_us_finite_gt(mass, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_maxwell_boltzmann_speed_pdf", "mass", mass));
+    }
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_maxwell_boltzmann_speed_pdf", "temperature",
+            temperature));
+    }
+    var pi: f64 = F64_PI;
+    var a: f64 = mass / (2.0 * pi * US_BOLTZMANN_K * temperature);
+    var pa: f64 = _us_cr_pow(a, 1.5);
+    var coeff: f64 = 4.0 * pi * pa;
+    var nm: f64 = _us_neg(mass);
+    var ex: f64 = nm * speed * speed / (2.0 * US_BOLTZMANN_K * temperature);
+    var e: f64 = _us_cr_exp(ex);
+    var f: f64 = coeff * speed * speed * e;
+    return Ok(f);
+}
+
+# The shared refusals of the three speeds: m > 0 (US_ERR_INVALID_PARAMETER), then T > 0
+# (US_ERR_INVALID_TEMPERATURE), reported by `fname`; or 0.
+fn _us_mass_temp(mass: f64, temperature: f64, fname): i64 {
+    if (_us_finite_gt(mass, 0.0) == 0) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, "mass", mass); }
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        return _us_fail_f(US_ERR_INVALID_TEMPERATURE, fname, "temperature", temperature);
+    }
+    return 0;
+}
+
+# The most probable speed, v_p = √(2kT/m) (m/s). Ok(v_p), or Err(US_ERR_INVALID_PARAMETER) unless m > 0,
+# Err(US_ERR_INVALID_TEMPERATURE) unless T > 0.
+#must_use
+fn us_most_probable_speed(mass: f64, temperature: f64): Result {
+    var code = _us_mass_temp(mass, temperature, "us_most_probable_speed");
+    if (code != 0) { return Err(code); }
+    var v: f64 = f64_sqrt(2.0 * US_BOLTZMANN_K * temperature / mass);
+    return Ok(v);
+}
+
+# The mean speed, v̄ = √(8kT/(πm)) (m/s). Ok(v̄), or us_most_probable_speed's refusals.
+#must_use
+fn us_mean_speed(mass: f64, temperature: f64): Result {
+    var code = _us_mass_temp(mass, temperature, "us_mean_speed");
+    if (code != 0) { return Err(code); }
+    var pi: f64 = F64_PI;
+    var v: f64 = f64_sqrt(8.0 * US_BOLTZMANN_K * temperature / (pi * mass));
+    return Ok(v);
+}
+
+# The root-mean-square speed, v_rms = √(3kT/m) (m/s). Ok(v_rms), or us_most_probable_speed's refusals.
+#must_use
+fn us_rms_speed(mass: f64, temperature: f64): Result {
+    var code = _us_mass_temp(mass, temperature, "us_rms_speed");
+    if (code != 0) { return Err(code); }
+    var v: f64 = f64_sqrt(3.0 * US_BOLTZMANN_K * temperature / mass);
+    return Ok(v);
+}
+
+# --- Solid heat capacity ---
+
+# The Einstein heat capacity of a solid, C_v = 3R·x²·eˣ/(eˣ − 1)² with x = Θ_E/T (J/(mol·K)): 0 for x > 500, where eˣ
+# would overflow, and 3R where (eˣ − 1)² is below 1e-30. Ok(C_v), or Err(US_ERR_INVALID_PARAMETER) unless Θ_E > 0,
+# Err(US_ERR_INVALID_TEMPERATURE) unless T > 0.
+#must_use
+fn us_einstein_cv(einstein_temp: f64, temperature: f64): Result {
+    if (_us_finite_gt(einstein_temp, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_einstein_cv", "einstein_temp", einstein_temp));
+    }
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_einstein_cv", "temperature", temperature));
+    }
+    var x: f64 = einstein_temp / temperature;
+    if (x > 500.0) { return Ok(0.0); }
+    var ex: f64 = _us_cr_exp(x);
+    var den: f64 = (ex - 1.0) * (ex - 1.0);
+    var ad: f64 = f64_abs(den);
+    if (ad < 0.000000000000000000000000000001) {
+        var hi: f64 = 3.0 * US_GAS_CONSTANT;
+        return Ok(hi);
+    }
+    var c: f64 = 3.0 * US_GAS_CONSTANT * x * x * ex / den;
+    return Ok(c);
+}
+
+# The Debye integrand x⁴eˣ/(eˣ − 1)², evaluated as x⁴·e⁻ˣ/expm1(−x)² (e⁻ˣ = 1 + expm1(−x)), which cannot
+# overflow; x² for x < 1e-8.
+fn _us_debye_integrand(x: f64): f64 {
+    if (x < 0.00000001) {
+        var s: f64 = x * x;
+        return s;
+    }
+    var nx: f64 = _us_neg(x);
+    var em: f64 = _us_cr_expm1(nx);
+    var r: f64 = x * x * x * x * (1.0 + em) / (em * em);
+    return r;
+}
+
+# The Debye heat capacity of a solid, C_v = 9R·(T/Θ_D)³·∫₀^(Θ_D/T) x⁴eˣ/(eˣ − 1)² dx (J/(mol·K)), the
+# integral on hisab's Simpson rule over 200 intervals: 3R for Θ_D/T < 0.01, and the exact T³ law
+# (12π⁴/5)·R·(T/Θ_D)³ for Θ_D/T > 50 (the tail past x = 50 is below 1e-15 of the whole). Ok(C_v), or
+# Err(US_ERR_INVALID_PARAMETER) unless Θ_D > 0, Err(US_ERR_INVALID_TEMPERATURE) unless T > 0,
+# Err(US_ERR_INVALID_PARAMETER) should the integral fail.
+#must_use
+fn us_debye_cv(debye_temp: f64, temperature: f64): Result {
+    if (_us_finite_gt(debye_temp, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_debye_cv", "debye_temp", debye_temp));
+    }
+    if (_us_finite_gt(temperature, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_debye_cv", "temperature", temperature));
+    }
+    var td: f64 = debye_temp / temperature;
+    if (td < 0.01) {
+        var hi: f64 = 3.0 * US_GAS_CONSTANT;
+        return Ok(hi);
+    }
+    var r: f64 = temperature / debye_temp;
+    var r3: f64 = r * r * r;
+    if (td > 50.0) {
+        var pi: f64 = F64_PI;
+        var pi2: f64 = pi * pi;
+        var lo: f64 = 9.0 * US_GAS_CONSTANT * r3 * 4.0 * pi2 * pi2 / 15.0;
+        return Ok(lo);
+    }
+    var out: f64[1];
+    var t, v = calc_integral_simpson(&_us_debye_integrand, 0.0, td, 200, &out);
+    if (is_err_result(t) == 1) {
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_debye_cv", "debye_temp", debye_temp));
+    }
+    var integral: f64 = out[0];
+    var c: f64 = 9.0 * US_GAS_CONSTANT * r3 * integral;
+    return Ok(c);
+}

@@ -537,14 +537,14 @@ def check_module_corrections(root, mod, rows, want, rep, write):
 import ctypes as _ct
 
 _LIBM = _ct.CDLL("libm.so.6")
-for _n in ("exp", "pow", "log", "tanh", "atan"):
+for _n in ("exp", "expm1", "pow", "log", "tanh", "atan"):
     getattr(_LIBM, _n).restype = _ct.c_double
     getattr(_LIBM, _n).argtypes = [_ct.c_double, _ct.c_double] if _n == "pow" else [_ct.c_double]
 
 
 class Prim:
-    """exp, pow, ln, tanh and atan from glibc (cr=False) or MPFR (cr=True); with cr=True, records each call glibc
-    misrounds."""
+    """exp, expm1, pow, ln, tanh and atan from glibc (cr=False) or MPFR (cr=True); with cr=True, records each call
+    glibc misrounds."""
 
     def __init__(self, cr):
         self.cr = cr
@@ -559,6 +559,9 @@ class Prim:
 
     def exp(self, x):
         return self._one("exp", [x], _LIBM.exp(x), MPFR.exp(x))
+
+    def expm1(self, x):
+        return self._one("expm1", [x], _LIBM.expm1(x), MPFR.expm1(x))
 
     def pow(self, x, y):
         return self._one("pow", [x, y], _LIBM.pow(x, y), MPFR.pow(x, y))
@@ -1735,6 +1738,140 @@ def m_flame(ins, p):
     return F(tf) if fgt(tf, 0.0) else E("InvalidParameter")
 
 
+K_B = 1.380649e-23  # transfer::BOLTZMANN_K
+PLANCK = 6.62607015e-34  # stat::PLANCK
+
+
+def m_boltz_p(a, p):
+    e, t = a
+    return F(p.exp(fdiv(-e, K_B * t))) if fgt(t, 0.0) else E("InvalidTemperature")
+
+
+def m_boltz_r(a, p):
+    e1, e2, t = a
+    return F(p.exp(fdiv(-(e2 - e1), K_B * t))) if fgt(t, 0.0) else E("InvalidTemperature")
+
+
+def m_s_w(a, p):
+    return F(K_B * p.log(a[0])) if fgt(a[0], 0.0) else E("InvalidParameter")
+
+
+def m_q_trans(a, p):
+    m, v, t = a
+    if not fgt(m, 0.0):
+        return E("InvalidParameter")
+    if not fgt(v, 0.0):
+        return E("InvalidVolume")
+    if not fgt(t, 0.0):
+        return E("InvalidTemperature")
+    return F(fdiv(v, p.pow(fdiv(PLANCK * PLANCK, 2.0 * math.pi * m * K_B * t), 1.5)))
+
+
+def m_q_rot(a, p):
+    inertia, t, sigma = a
+    if not fgt(inertia, 0.0):
+        return E("InvalidParameter")
+    if not fgt(t, 0.0):
+        return E("InvalidTemperature")
+    if sigma == 0:
+        return E("InvalidParameter")
+    th = fdiv(PLANCK * PLANCK, 8.0 * math.pi * math.pi * inertia * K_B)
+    return F(fdiv(t, float(sigma) * th))
+
+
+def m_q_vib(a, p):
+    nu, t = a
+    if not fgt(nu, 0.0):
+        return E("InvalidParameter")
+    if not fgt(t, 0.0):
+        return E("InvalidTemperature")
+    den = -p.expm1(-fdiv(PLANCK * nu, K_B * t))
+    return F(fdiv(1.0, den)) if fgt(den, 0.0) else E("DivisionByZero")
+
+
+def m_mb_pdf(a, p):
+    v, m, t = a
+    if not fge(v, 0.0) or not fgt(m, 0.0):
+        return E("InvalidParameter")
+    if not fgt(t, 0.0):
+        return E("InvalidTemperature")
+    coeff = 4.0 * math.pi * p.pow(fdiv(m, 2.0 * math.pi * K_B * t), 1.5)
+    return F(coeff * v * v * p.exp(fdiv(-m * v * v, 2.0 * K_B * t)))
+
+
+def m_speed(k, divide_pi):
+    def model(a, p):
+        m, t = a
+        if not fgt(m, 0.0):
+            return E("InvalidParameter")
+        if not fgt(t, 0.0):
+            return E("InvalidTemperature")
+        return F(fsqrt(fdiv(k * K_B * t, math.pi * m if divide_pi else m)))
+
+    return model
+
+
+def m_einstein(a, p):
+    th, t = a
+    if not fgt(th, 0.0):
+        return E("InvalidParameter")
+    if not fgt(t, 0.0):
+        return E("InvalidTemperature")
+    x = fdiv(th, t)
+    if x > 500.0:
+        return F(0.0)
+    ex = p.exp(x)
+    den = (ex - 1.0) * (ex - 1.0)
+    if abs(den) < 1e-30:
+        return F(3.0 * GAS_R)
+    return F(fdiv(3.0 * GAS_R * x * x * ex, den))
+
+
+def _simpson(f, a, b, n):
+    """Rust hisab 1.4.0's calc::integral_simpson: Neumaier-compensated, odd samples ×4 then even ×2 in pairs."""
+    n = n + 1 if n % 2 == 1 else n
+    h = fdiv(b - a, float(n))
+    acc = [f(a) + f(b), 0.0]
+
+    def add(v):
+        s = acc[0]
+        t = s + v
+        acc[1] += (s - t) + v if abs(s) >= abs(v) else (v - t) + s
+        acc[0] = t
+
+    i = 1
+    while i < n:
+        add(4.0 * f(a + float(i) * h))
+        add(2.0 * f(a + float(i + 1) * h))
+        i += 2
+    add(-2.0 * f(b))
+    return fdiv((acc[0] + acc[1]) * h, 3.0)
+
+
+def m_debye(a, p):
+    th, t = a
+    if not fgt(th, 0.0):
+        return E("InvalidParameter")
+    if not fgt(t, 0.0):
+        return E("InvalidTemperature")
+    td = fdiv(th, t)
+    if td < 0.01:
+        return F(3.0 * GAS_R)
+    r = fdiv(t, th)
+    r3 = r * r * r
+    if td > 50.0:
+        pi2 = math.pi * math.pi
+        return F(fdiv(9.0 * GAS_R * r3 * 4.0 * pi2 * pi2, 15.0))
+
+    def integrand(x):
+        if x < 1e-8:
+            return x * x
+        em1 = p.expm1(-x)
+        return fdiv(x * x * x * x * (1.0 + em1), em1 * em1)
+
+    return F(9.0 * GAS_R * r3 * _simpson(integrand, 0.0, td, 200))
+
+
 # Functions whose rows hold whole cycle results or term lists: their models read the raw tokens.
 RAW_ARGS = {
     "cycle::compare_cycles",
@@ -1870,6 +2007,22 @@ def unmodelled(fn, ins):
 
 
 MODELS = {
+    "stat": {
+        "stat::boltzmann_probability": m_boltz_p,
+        "stat::boltzmann_ratio": m_boltz_r,
+        "stat::entropy_from_microstates": m_s_w,
+        "stat::equipartition_energy": lambda a, p: F(0.5 * a[0] * K_B * a[1]),
+        "stat::equipartition_cv": lambda a, p: F(0.5 * a[0] * GAS_R),
+        "stat::partition_translational": m_q_trans,
+        "stat::partition_rotational": m_q_rot,
+        "stat::partition_vibrational": m_q_vib,
+        "stat::maxwell_boltzmann_speed_pdf": m_mb_pdf,
+        "stat::most_probable_speed": m_speed(2.0, False),
+        "stat::mean_speed": m_speed(8.0, True),
+        "stat::rms_speed": m_speed(3.0, False),
+        "stat::einstein_cv": m_einstein,
+        "stat::debye_cv": m_debye,
+    },
     "chem": {
         "chem::reaction_enthalpy": m_hess(1),
         "chem::reaction_gibbs": m_hess(2),
@@ -1998,6 +2151,9 @@ def model_args(ins):
             n = int(ins[i][2:])
             out.append([tok_f(t) for t in ins[i + 1 : i + 1 + n]])
             i += 1 + n
+        elif ins[i].startswith("i:"):
+            out.append(int(ins[i][2:]))  # an integer (partition_rotational's symmetry number)
+            i += 1
         elif ins[i] == "n:":
             out.append(None)  # Option::None (rankine_cycle's superheat)
             i += 1
@@ -2021,7 +2177,7 @@ def check_models(tables, rep, exact):
             if model is None:
                 rep.fail(f"{mod}.tsv:{n}", f"{fn} has no model")
                 continue
-            if cls == "C" and not exact:
+            if cls in ("C", "D") and not exact:
                 continue
             got = model(ins if fn in RAW_ARGS else model_args(ins), Prim(False))
             if len(got) == len(outs) and all(

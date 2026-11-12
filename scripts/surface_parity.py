@@ -28,10 +28,9 @@ from pathlib import Path
 root = Path(sys.argv[1]).resolve()
 
 # The modules whose milestone has come.
-PORTED = ["error", "validate", "logging", "material", "transfer", "state", "entropy", "phase", "steam", "cycle", "chem"]
+PORTED = ["error", "validate", "logging", "material", "transfer", "state", "entropy", "phase", "steam", "cycle", "chem", "stat"]
 # The rest, with their milestone (port plan §3.1).
 SCHEDULED = {
-    "stat": "M5",
     "numerical": "M6", "bridge": "M7", "integration/soorat": "M7", "ai": "M7",
 }
 WIRING = {

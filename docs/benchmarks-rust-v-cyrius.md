@@ -157,7 +157,15 @@ caller buffer; the rest is the pows. The buffer is the caller's, so a diagram al
 | chem/reaction_enthalpy | 2.57 | 31 | methane's combustion: two two-term sums from −0.0 through the term lists (Rust's are inlined into the loop) |
 | chem/equilibrium_constant | 11.92 | 89 | two checks, ln K, a correctly rounded exp (ADR 0004), the finite check, the span |
 | chem/adiabatic_flame | 27.59 | 125 | methane in air: the coefficient checks over six terms, three sums, the span |
+| stat/rms_speed | 4.01 | 24 | two checks, √(3kT/m) |
+| stat/einstein_cv | 8.75 | 75 | two checks, a correctly rounded exp (ADR 0004) |
+| stat/debye_cv | 2,057.8 | 20,782 | 201 samples on hisab's Simpson: 87 ns per sample in the integrand (61 of it the correctly rounded expm1), 16 in the integrator |
+| stat/debye_cv_low_t | 9.36 | 33 | the T³ law past Θ/T = 50: no integral |
 
 **M5a.** Each function does a few loads and adds per term, plus the harness floor (4 ns) and two calls through the
 term list. Nothing measured worth changing.
+
+**M5b.** `debye_cv` is its 201 samples. Each costs a correctly rounded expm1 (61 ns, against glibc's few), the
+integrand's arithmetic and call, and hisab's compensated step. That is ADR 0004's price, paid 201 times: the bits are
+the target, so the integrand keeps it. The run was on a loaded machine.
 

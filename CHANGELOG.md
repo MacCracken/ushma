@@ -42,6 +42,18 @@ ADRs 0001–0005.
 - **scripts/oracle** — serde_json is built with `float_roundtrip`: its default float parse reads 35,970 of 160,320 of its own shortest texts back 1–2 ulp off (probe 11). Writing is unchanged, and the golden corpus is unaffected
 
 ### Added
+- **M5b, stat and the M5 gates** (port plan §6): `src/stat.cyr`, all 14 functions, so M5 is complete. They are the Boltzmann factor and population ratio, S = k·ln W, both equipartition forms, the three partition functions, the Maxwell–Boltzmann density and three speeds, and the Einstein and Debye heat capacities.
+  - **Behaviour:** Rust's operation order, with unary minus as `_us_neg`. exp, expm1, ln and pow are correctly rounded: the vibrational partition function's −expm1(−x) keeps its precision where hν ≪ kT, as 1.4.0's does. `debye_cv` integrates on hisab's `calc_integral_simpson` (200 intervals, a plain integrand function; Rust's closure captures nothing) and allocates nothing (1,000 integrals, 0 heap bytes). Rust's `u32` symmetry number is an integer whose negatives are refused (ADR 0002 row 14).
+  - **Golden rows:** `tests/golden/stat.tsv` (new, 4,170 rows: B 1,350, C 2,468, D 352; 219 refusals). Every function is seeded and run at the edges. Every switch runs either side:
+    - Einstein's x = 500 ± 1 ulp, and where (eˣ − 1)² drops below 1e-30 (bisected) ± 2 ulps;
+    - Debye's Θ/T at 0.01 and 50 ± 1 ulp, a sweep across the integrated range, and 1.4.0's reference cases;
+    - the vibrational denominator where hν ≪ kT, and where it underflows to 0 (`DivisionByZero`);
+    - σ at 0, 1, 2, 3, 12 and u32::MAX.
+  - **Parity:** every row passes. `debye_cv` is class D (relative ≤ 1e-12, probe 1). Its 352 rows are 0–2 ulp from 1.4.0 (280 bit-identical), since hisab 3.4.1's Simpson sums in another order and its expm1 is correctly rounded. glibc misrounds an expm1 inside 10 vibrational rows and an exp inside 1 Boltzmann row (`tests/golden/stat.cr.tsv`, new).
+  - **`validate.py`** models all 14, with Rust hisab 1.4.0's Neumaier-compensated Simpson transcribed for `debye_cv`, and reproduces all 4,170 rows bit for bit. `Prim` gains expm1, and `model_args` reads `i:` tokens.
+  - **Tests:** `tests/stat.tcyr` (107 assertions) ports all 33 of Rust's stat tests. Reference tests cover the switches, a negative σ, the denominator's underflow and the Debye heap. The 3 stat integration tests are ported, so all 30 of Rust's integration tests are (100 assertions); the ledger has 401 of 479.
+  - **Benches:** Rust's four stat benchmarks, recorded against Rust's.
+  - **The M5 gates:** stat is PORTED in both parity scripts (16 of 16). Coverage is 192 of 192
 - **M5a, chem** (port plan §6): `src/chem.cyr`, all 7 functions. `UsSpecies` holds a `Species`, with `us_species_preset` / `us_species_name` over the generated table and its JSON. The functions are `us_reaction_enthalpy`, `us_reaction_gibbs`, `us_gibbs_from_enthalpy_entropy`, `us_ln_equilibrium_constant`, `us_equilibrium_constant`, `us_vant_hoff_k` and `us_adiabatic_flame_temperature`.
   - **Shapes** (ADR 0002 row 13): a reaction side is a term list, n word pairs of (coefficient, `*UsSpecies`) with its length beside it, the flat form of Rust's `&[(f64, &Species)]`.
   - **Behaviour:** Rust's operation order. Every sum starts at −0.0, and Rust's unary minus (`-ΔG°`, `-(ΔH°/R)`, `-ΔH°rxn`) is `_us_neg`, so ln K at ΔG° = +0 is −0.0 as in 1.4.0. exp is correctly rounded. `equilibrium_constant` and `adiabatic_flame_temperature` open spans under Rust's names. The flame temperature checks the reactants' coefficients before the products', as Rust's chained iterator does.

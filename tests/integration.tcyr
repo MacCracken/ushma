@@ -1,6 +1,6 @@
 # Rust 1.4.0's integration tests (rust-old/tests/integration.rs), cross-module, each ported at the milestone of the
 # last module it calls: M1's six on transfer and material, M2's eight on state and entropy, M3's on phase and steam,
-# M4's on the cycles, then M5's on chem and stat.
+# M4's on the cycles, then M5's on chem and stat: all 30.
 
 include "src/constants.cyr"
 include "src/error.cyr"
@@ -23,6 +23,7 @@ include "src/entropy.cyr"
 include "src/cycle.cyr"
 include "src/chem_data.cyr"
 include "src/chem.cyr"
+include "src/stat.cyr"
 
 # |a − b| as an f64.
 fn absdiff(a: f64, b: f64): f64 {
@@ -608,6 +609,39 @@ fn excess_air_lowers_flame_temperature() {
     assert(te < ts, "excess air burns cooler");
 }
 
+# O₂ at 500 K: v_p < v̄ < v_rms.
+# rust tests/integration.rs: mb_speed_ordering_any_gas
+fn mb_speed_ordering_any_gas() {
+    test_group("speed ordering, O2");
+    var m: f64 = 0.032 / US_AVOGADRO;
+    var t1, v1 = us_most_probable_speed(m, 500.0);
+    var vp: f64 = okv(t1, v1, "v_p");
+    var t2, v2 = us_mean_speed(m, 500.0);
+    var va: f64 = okv(t2, v2, "v_mean");
+    var t3, v3 = us_rms_speed(m, 500.0);
+    var vr: f64 = okv(t3, v3, "v_rms");
+    assert(vp < va && va < vr, "v_p < v_mean < v_rms");
+}
+
+# Copper (Θ_D ≈ 343 K) at 2000 K: Debye's C_v within 1 J/(mol·K) of Dulong–Petit's 3R.
+# rust tests/integration.rs: debye_high_t_matches_dulong_petit
+fn debye_high_t_matches_dulong_petit() {
+    test_group("Debye at high T");
+    var t, v = us_debye_cv(343.0, 2000.0);
+    var cv: f64 = okv(t, v, "Debye, copper at 2000 K");
+    var d: f64 = absdiff(cv, 3.0 * US_GAS_CONSTANT);
+    assert(d < 1.0, "C_v = 3R within 1");
+}
+
+# A monatomic ideal gas (f = 3): equipartition's C_v = 3R/2.
+# rust tests/integration.rs: equipartition_cv_monatomic_matches_kinetic_theory
+fn equipartition_cv_monatomic_matches_kinetic_theory() {
+    test_group("equipartition, monatomic");
+    var cv: f64 = us_equipartition_cv(3.0);
+    var d: f64 = absdiff(cv, 1.5 * US_GAS_CONSTANT);
+    assert(d < 0.0000000001, "3R/2");
+}
+
 # Runs every test and returns the failure count.
 fn main() {
     alloc_init();
@@ -638,6 +672,9 @@ fn main() {
     hess_law_indirect_path();
     equilibrium_k_consistent_with_vant_hoff();
     excess_air_lowers_flame_temperature();
+    mb_speed_ordering_any_gas();
+    debye_high_t_matches_dulong_petit();
+    equipartition_cv_monatomic_matches_kinetic_theory();
     return assert_summary();
 }
 

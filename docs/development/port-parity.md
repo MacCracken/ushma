@@ -634,8 +634,9 @@ after M4b: 137,941 and 92).
 
 ## 8. M5 (2026-11-12)
 
-After M5a the harness's summary is `11 modules, 0 failing | rows: 140682 ok, 0 failed, 0 measured, 0 pending, 112
-accepted (ADR 4: 52)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
+At the end of M5 the harness's summary is `12 modules, 0 failing | rows: 144841 ok, 0 failed, 0 measured, 0 pending,
+123 accepted (ADR 4: 63)`, identical on x86_64 ELF, `--bounds`, PE and aarch64 (after M5a: 11 modules, 140,682 ok,
+112 accepted).
 
 - **chem** (M5a): 2,327 rows after the 13 preset rows, 2,340 in all (class A 113, B 1,563, C 664; 380 refusals).
   - **Hess's law and the Gibbs sum** (290 rows each, bit-identical): eleven named reactions and their reverses
@@ -654,3 +655,20 @@ accepted (ADR 4: 52)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
   - **JSON:** `Species`, 21 `to_json` and 79 `from_json` rows, 5 accepted under ADR 5's mapped divergences.
   - **Surface parity:** chem 24 of 24. **Tests:** all 23 of chem's and its 3 integration tests (ledger: 365 of 479,
     every one due).
+- **stat** (M5b): 4,170 rows (class B 1,350, C 2,468, D 352; 219 refusals).
+  - **The scalar functions:** each seeded over its physical range and each argument of its base cases at the edges.
+    The Boltzmann factor runs at E = ±0, S = k ln W at W = 1 ± 2 ulps, and the symmetry number at 0, 1, 2, 3, 12 and
+    u32::MAX. Every class-B row is bit-identical, and every class-C row is 0 ulp against MPFR. glibc misrounds an
+    expm1 inside 10 `partition_vibrational` rows and an exp inside 1 `boltzmann_probability` row (`stat.cr.tsv`).
+  - **The vibrational partition function** where hν ≪ kT (ν = 1 Hz at 10⁶ K, the 1.4.0 regression) and where hν/(kT)
+    underflows to 0, so −expm1(−0) = +0 is no denominator: `DivisionByZero`, as 1.4.0 refuses it.
+  - **Einstein:** x at 500 ± 1 ulp, and where (eˣ − 1)² falls below 1e-30 (bisected) ± 2 ulps. Past x ≈ 354.9 the
+    squared denominator is already ∞, so the formula gives 0 before the x > 500 cutoff does, in 1.4.0 and in the port.
+  - **Debye** (class D, 352 rows): Θ/T at 0.01 and 50 ± 1 ulp, a sweep across the integrated range (0.005 … 1000),
+    1.4.0's reference cases, 300 seeded points and the edges. The port's integral is hisab 3.4.1's
+    `calc_integral_simpson` with a correctly rounded expm1 per sample. Against 1.4.0, 280 rows are bit-identical, 51
+    are 1 ulp off and 7 are 2 ulp off, against the class's bound of 1e-12 relative (about 4,500 ulp). `validate.py`
+    reproduces 1.4.0's own bits with its Neumaier Simpson transcribed and glibc's expm1.
+  - **Surface parity:** stat 16 of 16. **Tests:** all 33 of stat's, and the last 3 integration tests (all 30 are
+    ported; the ledger has 401 of 479, every one due).
+

@@ -5,7 +5,7 @@
 > (`# rust <file>: <test>`), at its module's milestone. Nothing is deferred: a test not ported yet is one whose
 > milestone hasn't come. The golden corpus (`tests/golden/`) checks every ported function on its grid besides.
 
-**479 Rust tests:** 365 ported; 36 at M5, 27 at M6, 51 at M7.
+**479 Rust tests:** 401 ported; 27 at M6, 51 at M7.
 
 | Rust file | Tests | Ported | Due, unported | Later (milestone) |
 |---|---:|---:|---:|---|
@@ -20,13 +20,13 @@
 | `src/material.rs` | 8 | 8 | 0 | — |
 | `src/numerical.rs` | 27 | 0 | 0 | 27 (M6) |
 | `src/phase.rs` | 44 | 44 | 0 | — |
-| `src/stat.rs` | 33 | 0 | 0 | 33 (M5) |
+| `src/stat.rs` | 33 | 33 | 0 | — |
 | `src/state.rs` | 47 | 47 | 0 | — |
 | `src/steam.rs` | 46 | 46 | 0 | — |
 | `src/transfer.rs` | 67 | 67 | 0 | — |
 | `src/validate.rs` | 2 | 2 | 0 | — |
-| `tests/integration.rs` | 30 | 27 | 0 | 3 (M5) |
-| **Total** | **479** | **365** | **0** | |
+| `tests/integration.rs` | 30 | 30 | 0 | — |
+| **Total** | **479** | **401** | **0** | |
 
 ## Where each is ported
 
@@ -208,6 +208,39 @@
 | `src/phase.rs` `test_water_supercritical` | `tests/phase.tcyr` `test_phase_at` |
 | `src/phase.rs` `test_water_triple_point` | `tests/phase.tcyr` `test_table` |
 | `src/phase.rs` `test_water_vapor_pressure_never_exceeds_critical` | `tests/phase.tcyr` `test_curves` |
+| `src/stat.rs` `test_boltzmann_ground_state` | `tests/stat.tcyr` `test_boltzmann` |
+| `src/stat.rs` `test_boltzmann_high_temp_equal` | `tests/stat.tcyr` `test_boltzmann` |
+| `src/stat.rs` `test_boltzmann_invalid` | `tests/stat.tcyr` `test_boltzmann` |
+| `src/stat.rs` `test_boltzmann_ratio_equal_energies` | `tests/stat.tcyr` `test_boltzmann` |
+| `src/stat.rs` `test_boltzmann_ratio_higher_energy_less_populated` | `tests/stat.tcyr` `test_boltzmann` |
+| `src/stat.rs` `test_constants` | `tests/stat.tcyr` `test_boltzmann` |
+| `src/stat.rs` `test_debye_cv_continuous_at_cutoff` | `tests/stat.tcyr` `test_regressions` |
+| `src/stat.rs` `test_debye_cv_low_temperature_t3_law` | `tests/stat.tcyr` `test_regressions` |
+| `src/stat.rs` `test_debye_cv_reference_values` | `tests/stat.tcyr` `test_regressions` |
+| `src/stat.rs` `test_debye_high_t_dulong_petit` | `tests/stat.tcyr` `test_solids` |
+| `src/stat.rs` `test_debye_invalid` | `tests/stat.tcyr` `test_solids` |
+| `src/stat.rs` `test_debye_low_t_approaches_zero` | `tests/stat.tcyr` `test_solids` |
+| `src/stat.rs` `test_debye_vs_einstein_low_t` | `tests/stat.tcyr` `test_solids` |
+| `src/stat.rs` `test_einstein_high_t_dulong_petit` | `tests/stat.tcyr` `test_solids` |
+| `src/stat.rs` `test_einstein_invalid` | `tests/stat.tcyr` `test_solids` |
+| `src/stat.rs` `test_einstein_low_t_approaches_zero` | `tests/stat.tcyr` `test_solids` |
+| `src/stat.rs` `test_entropy_from_microstates` | `tests/stat.tcyr` `test_boltzmann` |
+| `src/stat.rs` `test_entropy_microstates_invalid` | `tests/stat.tcyr` `test_boltzmann` |
+| `src/stat.rs` `test_equipartition_diatomic` | `tests/stat.tcyr` `test_equipartition` |
+| `src/stat.rs` `test_equipartition_energy_scales` | `tests/stat.tcyr` `test_equipartition` |
+| `src/stat.rs` `test_equipartition_monatomic` | `tests/stat.tcyr` `test_equipartition` |
+| `src/stat.rs` `test_mb_pdf_positive_at_peak` | `tests/stat.tcyr` `test_speeds` |
+| `src/stat.rs` `test_mb_pdf_zero_at_zero` | `tests/stat.tcyr` `test_speeds` |
+| `src/stat.rs` `test_mb_speed_invalid` | `tests/stat.tcyr` `test_speeds` |
+| `src/stat.rs` `test_mb_speed_ordering` | `tests/stat.tcyr` `test_speeds` |
+| `src/stat.rs` `test_n2_rms_speed` | `tests/stat.tcyr` `test_speeds` |
+| `src/stat.rs` `test_partition_invalid` | `tests/stat.tcyr` `test_partitions` |
+| `src/stat.rs` `test_partition_rotational` | `tests/stat.tcyr` `test_partitions` |
+| `src/stat.rs` `test_partition_translational_positive` | `tests/stat.tcyr` `test_partitions` |
+| `src/stat.rs` `test_partition_vibrational_high_t` | `tests/stat.tcyr` `test_partitions` |
+| `src/stat.rs` `test_partition_vibrational_low_t` | `tests/stat.tcyr` `test_partitions` |
+| `src/stat.rs` `test_partition_vibrational_small_x` | `tests/stat.tcyr` `test_partitions` |
+| `src/stat.rs` `test_stat_rejects_nan` | `tests/stat.tcyr` `test_regressions` |
 | `src/state.rs` `test_adiabatic_invalid_gamma` | `tests/state.tcyr` `test_adiabatic` |
 | `src/state.rs` `test_adiabatic_roundtrip` | `tests/state.tcyr` `test_adiabatic` |
 | `src/state.rs` `test_adiabatic_temperature` | `tests/state.tcyr` `test_adiabatic` |
@@ -374,10 +407,12 @@
 | `tests/integration.rs` `clausius_clapeyron_vs_steam_table` | `tests/integration.tcyr` `clausius_clapeyron_vs_steam_table` |
 | `tests/integration.rs` `cycle_comparison_all_below_carnot` | `tests/integration.tcyr` `cycle_comparison_all_below_carnot` |
 | `tests/integration.rs` `cycle_pv_diagram_closed_loop_all_types` | `tests/integration.tcyr` `cycle_pv_diagram_closed_loop_all_types` |
+| `tests/integration.rs` `debye_high_t_matches_dulong_petit` | `tests/integration.tcyr` `debye_high_t_matches_dulong_petit` |
 | `tests/integration.rs` `energy_conservation_adiabatic_process` | `tests/integration.tcyr` `energy_conservation_adiabatic_process` |
 | `tests/integration.rs` `entropy_increase_irreversible_heat_transfer` | `tests/integration.tcyr` `entropy_increase_irreversible_heat_transfer` |
 | `tests/integration.rs` `eos_comparison_co2_stp` | `tests/integration.tcyr` `eos_comparison_co2_stp` |
 | `tests/integration.rs` `equilibrium_k_consistent_with_vant_hoff` | `tests/integration.tcyr` `equilibrium_k_consistent_with_vant_hoff` |
+| `tests/integration.rs` `equipartition_cv_monatomic_matches_kinetic_theory` | `tests/integration.tcyr` `equipartition_cv_monatomic_matches_kinetic_theory` |
 | `tests/integration.rs` `excess_air_lowers_flame_temperature` | `tests/integration.tcyr` `excess_air_lowers_flame_temperature` |
 | `tests/integration.rs` `heat_conduction_through_copper_wall` | `tests/integration.tcyr` `heat_conduction_through_copper_wall` |
 | `tests/integration.rs` `hess_law_indirect_path` | `tests/integration.tcyr` `hess_law_indirect_path` |
@@ -385,6 +420,7 @@
 | `tests/integration.rs` `ideal_gas_law_roundtrip` | `tests/integration.tcyr` `ideal_gas_law_roundtrip` |
 | `tests/integration.rs` `lmtd_vs_ntu_same_heat_exchanger` | `tests/integration.tcyr` `lmtd_vs_ntu_same_heat_exchanger` |
 | `tests/integration.rs` `material_thermal_diffusivity_matches_manual` | `tests/integration.tcyr` `material_thermal_diffusivity_matches_manual` |
+| `tests/integration.rs` `mb_speed_ordering_any_gas` | `tests/integration.tcyr` `mb_speed_ordering_any_gas` |
 | `tests/integration.rs` `mixture_z_factor_kays_rule` | `tests/integration.tcyr` `mixture_z_factor_kays_rule` |
 | `tests/integration.rs` `nusselt_to_h_to_convection_chain` | `tests/integration.tcyr` `nusselt_to_h_to_convection_chain` |
 | `tests/integration.rs` `phase_lookup_agrees_with_steam_table` | `tests/integration.tcyr` `phase_lookup_agrees_with_steam_table` |

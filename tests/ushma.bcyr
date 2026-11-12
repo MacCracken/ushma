@@ -25,6 +25,7 @@ include "src/steam.cyr"
 include "src/cycle.cyr"
 include "src/chem_data.cyr"
 include "src/chem.cyr"
+include "src/stat.cyr"
 
 # Keeps results observable, so no call can be dropped.
 var _bn_sink = 0;
@@ -472,6 +473,31 @@ fn b_flame(x): i64 {
     return v;
 }
 
+# rms_speed of N₂ at 300 K.
+fn b_rms_speed(x): i64 {
+    var m: f64 = 0.028014 / US_AVOGADRO;
+    var t, v = us_rms_speed(m, 300.0);
+    return v;
+}
+
+# einstein_cv(300 K, 200 K).
+fn b_einstein(x): i64 {
+    var t, v = us_einstein_cv(300.0, 200.0);
+    return v;
+}
+
+# debye_cv(300 K, 200 K): the 200-interval Simpson integral.
+fn b_debye(x): i64 {
+    var t, v = us_debye_cv(300.0, 200.0);
+    return v;
+}
+
+# debye_cv(2230 K, 3 K): the T³ law past Θ/T = 50.
+fn b_debye_low(x): i64 {
+    var t, v = us_debye_cv(2230.0, 3.0);
+    return v;
+}
+
 # Fills the two resistance lists the benchmarks use.
 fn bn_lists() {
     _bn_series = alloc(40);
@@ -596,6 +622,10 @@ fn main(): i64 {
     bn_run("chem/reaction_enthalpy", &b_reaction_enthalpy, 0, 1000000);
     bn_run("chem/equilibrium_constant", &b_equilibrium_constant, 0, 1000000);
     bn_run("chem/adiabatic_flame", &b_flame, 0, 1000000);
+    bn_run("stat/rms_speed", &b_rms_speed, 0, 1000000);
+    bn_run("stat/einstein_cv", &b_einstein, 0, 1000000);
+    bn_run("stat/debye_cv", &b_debye, 0, 100000);
+    bn_run("stat/debye_cv_low_t", &b_debye_low, 0, 1000000);
     return 0;
 }
 
