@@ -437,6 +437,83 @@ fn refrigeration_vs_carnot_cop() {
     assert(cop < carnot, "COP below Carnot's");
 }
 
+# Otto, Brayton and Diesel at comparable conditions: each efficiency in (0, 1), each first law within 1e-6 J.
+# rust tests/integration.rs: ideal_gas_cycle_efficiency_ordering
+fn ideal_gas_cycle_efficiency_ordering() {
+    test_group("ideal-gas cycles' efficiencies");
+    var r: UsCycleResult;
+    var ti, vi = us_cycle_result_init(&r);
+    var ok = 1;
+    var k = 0;
+    while (k < 3) {
+        if (k == 0) { var t0, v0 = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, &r); }
+        if (k == 1) { var t1, v1 = us_brayton_cycle(300.0, 101325.0, 10.0, 1400.0, 1.4, 1.0, &r); }
+        if (k == 2) { var t2, v2 = us_diesel_cycle(300.0, 101325.0, 20.0, 2.0, 1.4, 1.0, &r); }
+        var eta: f64 = r.efficiency;
+        var qi: f64 = r.heat_in;
+        var w: f64 = r.net_work;
+        var qo: f64 = r.heat_out;
+        var bal: f64 = absdiff(qi - w, qo);
+        if ((eta > 0.0 && eta < 1.0 && bal < 0.000001) == 0) { ok = 0; }
+        k = k + 1;
+    }
+    assert_eq(ok, 1, "Otto, Brayton, Diesel: 0 < eta < 1 and the first law");
+}
+
+# The P-v loop of Otto, Diesel and Brayton closes: its last point is its first, within 1e-6 relative.
+# rust tests/integration.rs: cycle_pv_diagram_closed_loop_all_types
+fn cycle_pv_diagram_closed_loop_all_types() {
+    test_group("P-v loops close");
+    var r: UsCycleResult;
+    var ti, vi = us_cycle_result_init(&r);
+    var buf = alloc(16 * 40);
+    var ok = 1;
+    var k = 0;
+    while (k < 3) {
+        if (k == 0) { var t0, v0 = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, &r); }
+        if (k == 1) { var t1, v1 = us_diesel_cycle(300.0, 101325.0, 20.0, 2.0, 1.4, 1.0, &r); }
+        if (k == 2) { var t2, v2 = us_brayton_cycle(300.0, 101325.0, 10.0, 1400.0, 1.4, 1.0, &r); }
+        var td, n = us_cycle_pv_diagram(&r, 10, buf, 40);
+        var fx: f64 = load64(buf);
+        var fy: f64 = load64(buf + 8);
+        var lx: f64 = load64(buf + 16 * (n - 1));
+        var ly: f64 = load64(buf + 16 * (n - 1) + 8);
+        var dx: f64 = absdiff(fx, lx);
+        var dy: f64 = absdiff(fy, ly);
+        if ((dx / fx < 0.000001 && dy / fy < 0.000001) == 0) { ok = 0; }
+        k = k + 1;
+    }
+    assert_eq(ok, 1, "each loop closes");
+}
+
+# Otto and Brayton compared with their Carnot limits: each second-law efficiency at most 1.
+# rust tests/integration.rs: cycle_comparison_all_below_carnot
+fn cycle_comparison_all_below_carnot() {
+    test_group("comparison below Carnot");
+    var otto: UsCycleResult;
+    var ti, vi = us_cycle_result_init(&otto);
+    var t0, v0 = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, &otto);
+    var bray: UsCycleResult;
+    var tj, vj = us_cycle_result_init(&bray);
+    var t1, v1 = us_brayton_cycle(300.0, 101325.0, 10.0, 1400.0, 1.4, 1.0, &bray);
+    var sp: UsStatePoint;
+    var c0: UsCycleComparison;
+    var c1: UsCycleComparison;
+    us_cycle_state(&otto, 2, &sp);
+    var h0: f64 = sp.temperature;
+    us_cycle_state(&otto, 0, &sp);
+    var l0: f64 = sp.temperature;
+    us_compare_cycle(US_CYCLE_OTTO, &otto, h0, l0, &c0);
+    us_cycle_state(&bray, 2, &sp);
+    var h1: f64 = sp.temperature;
+    us_cycle_state(&bray, 0, &sp);
+    var l1: f64 = sp.temperature;
+    us_compare_cycle(US_CYCLE_BRAYTON, &bray, h1, l1, &c1);
+    var s0: f64 = c0.second_law_efficiency;
+    var s1: f64 = c1.second_law_efficiency;
+    assert(s0 <= 1.0 && s1 <= 1.0, "eta_II <= 1 for both");
+}
+
 # Runs every test and returns the failure count.
 fn main() {
     alloc_init();
@@ -461,6 +538,9 @@ fn main() {
     simple_rankine_cycle_energy_balance();
     rankine_with_steam_tables_end_to_end();
     refrigeration_vs_carnot_cop();
+    ideal_gas_cycle_efficiency_ordering();
+    cycle_pv_diagram_closed_loop_all_types();
+    cycle_comparison_all_below_carnot();
     return assert_summary();
 }
 

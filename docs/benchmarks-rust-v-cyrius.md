@@ -119,6 +119,9 @@ generated table, so it is left as measured. `superheated_by_entropy` is about se
 | cycle/brayton | 60.20 | 516 | seven checks (T₃ > T₂ among them), then as Otto |
 | cycle/rankine | 114.63 | 497 | the condenser's saturated state, the boiler exit on the 2 MPa tier, the wet exhaust's quality and properties (M4b; minimum of three runs) |
 | cycle/refrigeration | 890.21 | 2,698 | two saturated states, the compressor exit by entropy between the 10 and 50 kPa tiers (about 2.2 µs of it), the throttle's quality (M4b; 5,085 before its review, in the probe's run) |
+| cycle/ts_diagram, 200 points (Cyrius only) | — | 16,494 | the Otto result at 50 points a process: 100 correctly rounded pows on the two exponential paths (about 146 ns each), into the caller's buffer, no heap (M4c) |
+| cycle/pv_diagram, 200 points (Cyrius only) | — | 17,625 | the same, its 100 isentrope points each a correctly rounded pow, and two ln per process (M4c) |
+| cycle/compare, one entry (Cyrius only) | — | 20 | the limits' checks, a division or two (M4c) |
 
 Each analysis fills one result, reused across the batch, as a caller reusing it would. Rust builds and drops two
 `Vec`s per call. In the gates' run the three measured 490–501 ns.
@@ -141,3 +144,8 @@ went from 1,498 ns (M3's record) to 1,005. All 6,037 inversion rows, and every s
 
 The machine was not quiet for M4b's runs: another session's processes were busy. Each Cyrius number here is the
 minimum of three runs.
+
+**M4c.** Rust benches neither diagram nor the comparison, so these are Cyrius-only rows. A diagram's cost is its
+correctly rounded pows. Each point of T_a·(T_b/T_a)^f or P_a·(V_a/V)^k is the correctly rounded pow (ADR 0004), and a
+cheaper exp(f·ln r) would not give those bits. Probe 4 measured 2.0 µs for writing 200 plain points into a
+caller buffer; the rest is the pows. The buffer is the caller's, so a diagram allocates nothing.

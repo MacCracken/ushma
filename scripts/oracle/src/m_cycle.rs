@@ -17,14 +17,24 @@
 //! evaporator × condenser pressures, with the condenser at the evaporator ± 1 ulp and the evaporator where the
 //! compressor exit enters the superheated table (bisected) ± 2 ulps. `heat_pump_cop` seeded and at the edges.
 //! `RefrigerationResult`'s JSON. The steam cycles are class C (the superheated lookups' ln and exp between tiers).
+//!
+//! M4c: `compare_cycles` (its entries as `v:m`, then each entry's label, result and limits), each limit at the edges and
+//! T_H at T_L ± 1 ulp, on every cycle's result and on results relabelled; the T-s and P-v diagrams (a result and
+//! `i:points_per_process` in, `v:count` and each point's x, y out) on every cycle's results and on results edited to
+//! reach each path's guard: short and empty process lists, an empty and a one-point cycle, isothermal and isenthalpic
+//! processes, γ 0 and NaN, zero, negative and non-finite temperatures, volumes and pressures, equal volumes and volumes
+//! 1 ulp apart (the isentrope's |ln(V_a/V_b)| > 1e-12 guard). `DiagramPoint`'s and `CycleComparisonEntry`'s JSON.
+//! Classes: B for the comparison, C for the diagrams (pow and ln).
 
-use ushma::cycle::{self as cy, CycleKind, CycleResult, ProcessKind, RefrigerationResult, StatePoint};
+use ushma::cycle::{
+    self as cy, CycleComparisonEntry, CycleKind, CycleResult, DiagramPoint, ProcessKind, RefrigerationResult, StatePoint,
+};
 use ushma::steam;
 
 use crate::grids::Rng;
 use crate::json_cases::variants;
 use crate::sweep::{around, edges, res, row, tuples};
-use crate::tsv::{Class, Module, Tok, e, err, f, s};
+use crate::tsv::{Class, Module, Tok, e, err, f, i, s};
 
 fn sp_toks(p: &StatePoint) -> Vec<Tok> {
     vec![
@@ -666,6 +676,220 @@ fn json_rows(m: &mut Module) {
             &decode::<RefrigerationResult>(doc, refr_toks),
         );
     }
+    // DiagramPoint
+    let pts = [
+        DiagramPoint { x: 6_000.5, y: 101_325.0 },
+        DiagramPoint { x: f64::NAN, y: f64::INFINITY },
+        DiagramPoint { x: -0.0, y: f64::from_bits(1) },
+        DiagramPoint { x: 1e300, y: -1e-300 },
+    ];
+    let mut pdocs = Vec::new();
+    for p in &pts {
+        let doc = serde_json::to_string(p).expect("serialize");
+        m.row("cycle::DiagramPoint::to_json", Class::A, &dp_toks(p), &[s(doc.clone())]);
+        pdocs.push(doc);
+    }
+    let base = pdocs[0].clone();
+    for (_kind, bytes) in variants(&base) {
+        if let Ok(text) = String::from_utf8(bytes)
+            && !text.contains('\0')
+        {
+            pdocs.push(text);
+        }
+    }
+    pdocs.extend(
+        ["[1,2]", "[1]", "[1,2,3]", r#"{"x":1}"#, r#"{"y":2,"x":1}"#, r#"{"x":"1","y":2}"#, "{}", "null"].map(String::from),
+    );
+    for doc in &pdocs {
+        m.row(
+            "cycle::DiagramPoint::from_json",
+            Class::A,
+            &[s(doc.clone())],
+            &decode::<DiagramPoint>(doc, dp_toks),
+        );
+    }
+    // CycleComparisonEntry
+    let mut cmp = cy::compare_cycles(&[
+        (CycleKind::Otto, &otto, 1_800.0, 300.0),
+        (CycleKind::Refrigeration, &r1.cycle, 353.0, 313.0),
+        (CycleKind::Brayton, &bray, 250.0, 300.0),
+    ]);
+    let mut odd = cmp[0].clone();
+    odd.efficiency = f64::NAN;
+    odd.second_law_efficiency = f64::NEG_INFINITY;
+    odd.net_work = -0.0;
+    cmp.push(odd);
+    let mut cdocs = Vec::new();
+    for c in &cmp {
+        let doc = serde_json::to_string(c).expect("serialize");
+        m.row("cycle::CycleComparisonEntry::to_json", Class::A, &cc_toks(c), &[s(doc.clone())]);
+        cdocs.push(doc);
+    }
+    let base = cdocs[0].clone();
+    for (_kind, bytes) in variants(&base) {
+        if let Ok(text) = String::from_utf8(bytes)
+            && !text.contains('\0')
+        {
+            cdocs.push(text);
+        }
+    }
+    cdocs.extend(
+        [
+            r#"["Otto",1,2,3,4,5]"#,
+            r#"["Otto",1,2,3,4]"#,
+            r#"{"kind":"Jet","efficiency":1,"net_work":2,"back_work_ratio":3,"carnot_efficiency":4,"second_law_efficiency":5}"#,
+            r#"{"second_law_efficiency":5,"carnot_efficiency":4,"back_work_ratio":3,"net_work":2,"efficiency":1,"kind":"Diesel"}"#,
+            r#"{"kind":"Otto","efficiency":1,"net_work":2,"back_work_ratio":3,"carnot_efficiency":4}"#,
+            "[]",
+            "null",
+        ]
+        .map(String::from),
+    );
+    for doc in &cdocs {
+        m.row(
+            "cycle::CycleComparisonEntry::from_json",
+            Class::A,
+            &[s(doc.clone())],
+            &decode::<CycleComparisonEntry>(doc, cc_toks),
+        );
+    }
+}
+
+fn cc_toks(c: &CycleComparisonEntry) -> Vec<Tok> {
+    vec![
+        e("CycleKind", c.kind),
+        f(c.efficiency),
+        f(c.net_work),
+        f(c.back_work_ratio),
+        f(c.carnot_efficiency),
+        f(c.second_law_efficiency),
+    ]
+}
+
+fn dp_toks(p: &DiagramPoint) -> Vec<Tok> {
+    vec![f(p.x), f(p.y)]
+}
+
+/// The results the comparison and diagram rows run on: every cycle's, then results edited to reach each guard.
+fn sample_results() -> Vec<CycleResult> {
+    let otto = cy::otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).expect("otto");
+    let diesel = cy::diesel_cycle(300.0, 101_325.0, 20.0, 2.0, 1.4, 1.0).expect("diesel");
+    let bray = cy::brayton_cycle(300.0, 101_325.0, 10.0, 1400.0, 1.4, 1.0).expect("brayton");
+    let mono = cy::otto_cycle(300.0, 101_325.0, 10.0, 40_000.0, 5.0 / 3.0, 2.0).expect("otto, monatomic");
+    let rk = cy::rankine_cycle(10_000.0, 2_000_000.0, Some(623.15)).expect("rankine");
+    let rk_sat = cy::rankine_cycle(10_000.0, 1_000_000.0, None).expect("rankine, saturated");
+    let rk_sh = cy::rankine_cycle(100_000.0, 500_000.0, Some(573.15)).expect("rankine, superheated exhaust");
+    let rf = cy::refrigeration_cycle(7_384.0, 47_390.0).expect("refrigeration").cycle;
+    let mut v = vec![otto.clone(), diesel, bray.clone(), mono, rk, rk_sat, rk_sh, rf];
+    let edit = |base: &CycleResult, f: &dyn Fn(&mut CycleResult)| {
+        let mut c = base.clone();
+        f(&mut c);
+        c
+    };
+    v.push(edit(&otto, &|c| c.processes.truncate(1)));
+    v.push(edit(&otto, &|c| c.processes.clear()));
+    v.push(edit(&otto, &|c| c.state_points.clear()));
+    v.push(edit(&otto, &|c| c.state_points.truncate(1)));
+    v.push(edit(&bray, &|c| {
+        c.processes = vec![
+            ProcessKind::Isothermal,
+            ProcessKind::Isenthalpic,
+            ProcessKind::Isothermal,
+            ProcessKind::Isenthalpic,
+        ];
+    }));
+    v.push(edit(&otto, &|c| c.gamma = 0.0));
+    v.push(edit(&otto, &|c| c.gamma = f64::NAN));
+    v.push(edit(&otto, &|c| {
+        c.state_points[1].temperature = 0.0;
+        c.state_points[2].temperature = f64::NAN;
+        c.state_points[3].temperature = -5.0;
+    }));
+    v.push(edit(&bray, &|c| {
+        c.state_points[0].volume = 0.0;
+        c.state_points[2].pressure = -1.0;
+        c.processes[2] = ProcessKind::Isothermal;
+    }));
+    v.push(edit(&otto, &|c| {
+        let v0 = c.state_points[0].volume;
+        c.state_points[1].volume = v0;
+        c.state_points[3].volume = f64::from_bits(v0.to_bits() + 1);
+    }));
+    v.push(edit(&bray, &|c| {
+        c.state_points[1].volume = f64::INFINITY;
+        c.state_points[3].pressure = f64::NAN;
+    }));
+    v
+}
+
+fn comparison_rows(m: &mut Module) {
+    let results = sample_results();
+    let mut refrig = results[0].clone();
+    refrig.kind = CycleKind::Refrigeration;
+    refrig.efficiency = 5.0;
+    let row_of = |m: &mut Module, entries: &[(CycleKind, &CycleResult, f64, f64)]| {
+        let mut ins = vec![Tok::V(entries.len())];
+        for (k, r, th, tl) in entries {
+            ins.push(e("CycleKind", *k));
+            ins.extend(cycle_toks(r));
+            ins.extend([f(*th), f(*tl)]);
+        }
+        let out = cy::compare_cycles(entries);
+        let mut outs = vec![Tok::V(out.len())];
+        for c in &out {
+            outs.extend(cc_toks(c));
+        }
+        m.row("cycle::compare_cycles", Class::B, &ins, &outs);
+    };
+    // each result between its own hottest and coldest states, and between 300 and 250 K
+    for r in results.iter().take(8).chain([&refrig]) {
+        let (th, tl) = match (r.state_points.get(2), r.state_points.first()) {
+            (Some(h), Some(c)) => (h.temperature, c.temperature),
+            _ => (1000.0, 300.0),
+        };
+        row_of(m, &[(r.kind, r, th, tl)]);
+        row_of(m, &[(r.kind, r, 300.0, 250.0)]);
+    }
+    // the limits at the edges, and T_H at T_L ± 1 ulp, for a heat engine and for a refrigeration result
+    for r in [&results[0], &refrig] {
+        for x in crate::sweep::edges() {
+            row_of(m, &[(r.kind, r, x, 300.0)]);
+            row_of(m, &[(r.kind, r, 1000.0, x)]);
+        }
+        for th in around(300.0, 1) {
+            row_of(m, &[(r.kind, r, th, 300.0)]);
+        }
+    }
+    // a label that differs from the result's own kind; no entries; several at once
+    row_of(m, &[(CycleKind::Otto, &results[2], 1400.0, 300.0)]);
+    row_of(m, &[]);
+    let all: Vec<(CycleKind, &CycleResult, f64, f64)> =
+        results.iter().take(8).map(|r| (r.kind, r, 1200.0, 290.0)).collect();
+    row_of(m, &all);
+}
+
+fn diagram_rows(m: &mut Module) {
+    let results = sample_results();
+    for (k, r) in results.iter().enumerate() {
+        let mut ptss: Vec<usize> = vec![0, 1, 2, 3, 5, 10];
+        if k < 8 {
+            ptss.push(50);
+        }
+        for pts in ptss {
+            let mut ins = cycle_toks(r);
+            ins.push(i(i64::try_from(pts).expect("small")));
+            for (name, out) in [
+                ("cycle::cycle_ts_diagram", cy::cycle_ts_diagram(r, pts)),
+                ("cycle::cycle_pv_diagram", cy::cycle_pv_diagram(r, pts)),
+            ] {
+                let mut outs = vec![Tok::V(out.len())];
+                for p in &out {
+                    outs.extend(dp_toks(p));
+                }
+                m.row(name, Class::C, &ins, &outs);
+            }
+        }
+    }
 }
 
 pub fn emit() -> Module {
@@ -673,6 +897,8 @@ pub fn emit() -> Module {
     helpers(&mut m);
     gas_cycles(&mut m);
     steam_cycles(&mut m);
+    comparison_rows(&mut m);
+    diagram_rows(&mut m);
     json_rows(&mut m);
     m
 }

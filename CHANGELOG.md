@@ -42,6 +42,19 @@ ADRs 0001–0005.
 - **scripts/oracle** — serde_json is built with `float_roundtrip`: its default float parse reads 35,970 of 160,320 of its own shortest texts back 1–2 ulp off (probe 11). Writing is unchanged, and the golden corpus is unaffected
 
 ### Added
+- **M4c, comparison, diagrams and the M4 gates** (port plan §6): `us_compare_cycles` / `us_compare_cycle`, `us_cycle_ts_diagram`, `us_cycle_pv_diagram` and `us_cycle_diagram_len`, with `UsCycleComparison` and `UsDiagramPoint` and both types' JSON. cycle is 13 of 13, 44 of its 44 public items, and M4 is complete.
+  - **Shapes** (ADR 0002 row 12): a diagram writes `UsDiagramPoint` records into the caller's buffer and returns Ok(the count), or Err(`US_ERR_INVALID_PARAMETER`) when they would not fit. The check divides, so no point count overflows it. `us_compare_cycles(kinds, results, t_highs, t_lows, n, out)` takes Rust's tuples as four parallel lists and writes n records; `us_compare_cycle` does one.
+  - **Behaviour:** Rust's operation order, with ln and pow correctly rounded. The T-s isochores and isobars of an ideal gas follow T_a·(T_b/T_a)^f, and the P-v isentropes the polytropic through both state points. A refrigeration result is compared with the Carnot COP. Non-physical limits give 0 and 0.
+  - **Golden rows:** `tests/golden/cycle.tsv` grows to 5,607. M4c adds 434 (A 115, B 75, C 244):
+    - the comparison on every cycle's results and on relabelled ones, each limit at the edges and T_H at T_L ± 1 ulp;
+    - both diagrams at 0, 1, 2, 3, 5, 10 and 50 points a process, on every cycle's results and on results edited to reach each path's guard: short and empty process lists, isothermal and isenthalpic processes, γ 0 and NaN, non-positive and non-finite states, and volumes equal or 1 ulp apart;
+    - both types' JSON.
+    - Every row passes. glibc misrounds a pow inside one T-s and one P-v row (`cycle.cr.tsv` has 3 rows now), and 10 JSON rows are accepted under ADR 5.
+  - **`validate.py`** models the comparison and both diagrams from their raw tokens (`RAW_ARGS`) and reproduces all 319 rows.
+  - **Tests:** `tests/cycle.tcyr` (192 assertions) ports all 59 of Rust's cycle tests and checks a too-small buffer's refusal. The last 3 cycle integration tests are ported (85 assertions in `tests/integration.tcyr`): every Rust test due through M4, 339 of 479. The fuzz harness reads `DiagramPoint` and `CycleComparisonEntry` documents.
+  - **Benches:** Rust benches neither the diagrams nor the comparison. The record has them as Cyrius-only rows: a 200-point T-s diagram takes 16.5 µs and a P-v diagram 17.6 µs (100 correctly rounded pows each, about 146 ns apiece), and one comparison 20 ns.
+  - **The review** (work loop step 5): `us_cycle_push_process` now refuses a code that is not a `US_PROCESS_*` (Err(`US_ERR_INVALID_PARAMETER`)). Rust's enum holds no such value, and it would write a document that never reads back.
+  - **The M4 gates:** cycle is PORTED in `scripts/surface_parity.py` (44 of 44) and `scripts/rust_test_ledger.py`. Coverage is 166 of 166 public functions
 - **M4b, the steam cycles** (port plan §6): `us_rankine_cycle`, `us_refrigeration_cycle` and `us_heat_pump_cop`, with `UsRefrigerationResult` and its JSON. cycle has 10 of its 13 functions.
   - **Rankine:** Rust's `Option<f64>` superheat is a flag and a value (`superheated`, `t_superheat`; ADR 0002 row 11). The boiler exit is the saturated vapor or the superheated state. The turbine exhaust is wet, or superheated by entropy inversion where s₃ > s_g at the condenser.
   - **Refrigeration:** `UsRefrigerationResult` nests its `UsCycleResult` as the first field and adds the two COPs. `us_refrigeration_result_init` / `_init_a` make one, and `us_refrigeration_result_cycle` gives the cycle's address for the cycle accessors. Its `net_work` is Rust's `-w_comp`, a sign flip (`_us_neg`, new).

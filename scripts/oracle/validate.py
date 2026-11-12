@@ -1590,6 +1590,78 @@ def m_refrig(a, p):
     toks = _cycle_toks("Refrigeration", st, procs, [q_evap, q_cond, -w, cop_r, 1.0, 0.0])
     return toks + [fbits(cop_r), fbits(cop_h)]
 
+
+def _parse_cycle(toks, at):
+    """A CycleResult's tokens from toks[at]: (kind, state points, processes, its six numbers, the next index)."""
+    kind = toks[at][len("e:CycleKind."):]
+    n = int(toks[at + 1][2:])
+    at += 2
+    states = [[tok_f(t) for t in toks[at + 5 * k : at + 5 * k + 5]] for k in range(n)]
+    at += 5 * n
+    m = int(toks[at][2:])
+    procs = [t[len("e:ProcessKind."):] for t in toks[at + 1 : at + 1 + m]]
+    at += 1 + m
+    return kind, states, procs, [tok_f(t) for t in toks[at : at + 6]], at + 6
+
+
+def m_compare(ins, p):
+    m, at, out = int(ins[0][2:]), 1, [ins[0]]
+    for _ in range(m):
+        label = ins[at]
+        kind, _, _, nums, at = _parse_cycle(ins, at + 1)
+        th, tl = tok_f(ins[at]), tok_f(ins[at + 1])
+        at += 2
+        if not fgt(tl, 0.0) or not fgt(th, tl):
+            c = 0.0
+        elif kind == "Refrigeration":
+            c = fdiv(tl, th - tl)
+        else:
+            c = 1.0 - fdiv(tl, th)
+        second = fdiv(nums[3], c) if c > 0.0 else 0.0
+        out += [label] + [fbits(x) for x in (nums[3], nums[2], nums[4], c, second)]
+    return out
+
+
+def _diagram(ins, p, point):
+    """A diagram's tokens: `v:count`, then each point's x, y from `point(a, b, process, frac, p)`."""
+    _, st, procs, nums, at = _parse_cycle(ins, 0)
+    pts = max(int(ins[at][2:]), 2)
+    n, out = len(st), []
+    for i in range(n):
+        a, b = st[i], st[(i + 1) % n]
+        pk = procs[i] if i < len(procs) else None
+        for j in range(pts):
+            out += [fbits(x) for x in point(a, b, pk, fdiv(float(j), float(pts - 1)), nums[5], p)]
+    return [f"v:{n * pts}"] + out
+
+
+def _ts_point(a, b, pk, frac, gamma, p):
+    s = a[3] + frac * (b[3] - a[3])
+    if gamma > 0.0 and pk in ("Isochoric", "Isobaric") and fgt(a[0], 0.0) and fgt(b[0], 0.0):
+        return s, a[0] * p.pow(fdiv(b[0], a[0]), frac)
+    return s, a[0] + frac * (b[0] - a[0])
+
+
+def _pv_point(a, b, pk, frac, gamma, p):
+    pa, pb, va, vb = a[1], b[1], a[2], b[2]
+    positive = fgt(va, 0.0) and fgt(vb, 0.0) and fgt(pa, 0.0) and fgt(pb, 0.0)
+    ln_v = p.log(fdiv(va, vb)) if positive else 0.0
+    v = va + frac * (vb - va)
+    linear = pa + frac * (pb - pa)
+    if pk == "Isentropic" and abs(ln_v) > 1e-12:
+        return v, pa * p.pow(fdiv(va, v), fdiv(p.log(fdiv(pb, pa)), ln_v))
+    if pk == "Isochoric":
+        return va, linear
+    if pk == "Isobaric":
+        return v, pa
+    if pk == "Isothermal" and positive:
+        return v, fdiv(pa * va, v)
+    return v, linear
+
+
+# Functions whose rows hold whole cycle results: their models read the raw tokens.
+RAW_ARGS = {"cycle::compare_cycles", "cycle::cycle_ts_diagram", "cycle::cycle_pv_diagram"}
+
 def _gas_ok(g, n):
     return fgt(g, 1.0) and fgt(n, 0.0)
 
@@ -1726,6 +1798,9 @@ MODELS = {
         "cycle::rankine_cycle": m_rankine,
         "cycle::refrigeration_cycle": m_refrig,
         "cycle::heat_pump_cop": lambda a, p: F(a[0] + 1.0),
+        "cycle::compare_cycles": m_compare,
+        "cycle::cycle_ts_diagram": lambda a, p: _diagram(a, p, _ts_point),
+        "cycle::cycle_pv_diagram": lambda a, p: _diagram(a, p, _pv_point),
     },
     "steam": {
         "steam::saturation_pressure": m_sat_p,
@@ -1856,7 +1931,7 @@ def check_models(tables, rep, exact):
                 continue
             if cls == "C" and not exact:
                 continue
-            got = model(model_args(ins), Prim(False))
+            got = model(ins if fn in RAW_ARGS else model_args(ins), Prim(False))
             if len(got) == len(outs) and all(
                 g == w or (g.startswith("f:") and w.startswith("f:") and same(tok_f(g), tok_f(w))) for g, w in zip(got, outs)
             ):
@@ -1873,7 +1948,7 @@ def model_corrections(mod, rows):
         if cls != "C":
             continue
         p = Prim(True)
-        got = models[fn](model_args(ins), p)
+        got = models[fn](ins if fn in RAW_ARGS else model_args(ins), p)
         if [*got] == [*outs] or not p.calls:
             continue
         out.append((fn, toks_text(ins), " ".join(got), "; ".join([f"oracle {toks_text(outs)}"] + p.calls)))

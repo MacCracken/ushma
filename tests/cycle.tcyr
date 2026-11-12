@@ -1,10 +1,9 @@
 # cycle tests (M4a: the types, the process helpers, the Otto, Diesel and Brayton cycles; M4b: the Rankine and
-# refrigeration cycles, the heat-pump COP).
+# refrigeration cycles, the heat-pump COP; M4c: the comparison and the diagrams).
 #
-# Rust 1.4.0's cycle.rs tests for these, one for one (45 of its 59; comparison and the diagrams join with M4c), each
-# also checking the refusal's code. Then reference tests of the results' documents, of the five cycles' spans, of
-# results reused across calls (their vecs refilled, no allocation after the first), and of every allocation refused
-# in turn.
+# Rust 1.4.0's cycle.rs tests, all 59, one for one, each also checking the refusal's code. Then reference tests of the
+# results' documents, of the five cycles' spans, of results reused across calls (their vecs refilled, no allocation
+# after the first), and of every allocation refused in turn.
 
 include "src/constants.cyr"
 include "src/error.cyr"
@@ -444,6 +443,36 @@ fn test_refrigeration_json() {
     assert(n == load64(sb2 + 8) && memeq(load64(sb), load64(sb2), n) == 1, "written again, the same bytes");
 }
 
+# A diagram point's and a comparison's documents read back on the global heap, and the same bytes come out again.
+fn test_point_and_comparison_json() {
+    test_group("a point's and a comparison's documents");
+    var dp: UsDiagramPoint;
+    dp.x = 0.0246;
+    dp.y = 101325.0;
+    var sb = str_builder_new();
+    us_diagram_point_to_json(sb, &dp);
+    assert_streq(load64(sb), "{\"x\":0.0246,\"y\":101325.0}", "a point's document");
+    var dq: UsDiagramPoint;
+    var t1, v1 = us_diagram_point_from_json(load64(sb), load64(sb + 8), &dq);
+    var qx: f64 = dq.x;
+    var qy: f64 = dq.y;
+    assert(is_ok(t1) == 1 && qx == 0.0246 && qy == 101325.0, "it reads back");
+    var otto: UsCycleResult;
+    var ti, vi = us_cycle_result_init(&otto);
+    var t, v = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, &otto);
+    var c: UsCycleComparison;
+    us_compare_cycle(US_CYCLE_OTTO, &otto, 1800.0, 300.0, &c);
+    var sb2 = str_builder_new();
+    us_cycle_comparison_to_json(sb2, &c);
+    var c2: UsCycleComparison;
+    var t2, v2 = us_cycle_comparison_from_json(load64(sb2), load64(sb2 + 8), &c2);
+    var sb3 = str_builder_new();
+    us_cycle_comparison_to_json(sb3, &c2);
+    var n = load64(sb2 + 8);
+    assert(is_ok(t2) == 1 && c2.kind == US_CYCLE_OTTO, "a comparison reads back, its kind Otto");
+    assert(n == load64(sb3 + 8) && memeq(load64(sb2), load64(sb3), n) == 1, "written again, the same bytes");
+}
+
 # The steam cycles' spans: each opens under Rust's name, around the superheated inversion's own, and closes on a
 # refusal too.
 fn test_steam_spans() {
@@ -476,6 +505,217 @@ fn test_steam_spans() {
         k = k + 1;
     }
     assert_eq(alloc_used() - before, 0, "1,000 of each into reused results: 0 heap bytes");
+}
+
+# The x of point k in a diagram buffer.
+fn px(buf, k): f64 {
+    var x: f64 = load64(buf + (16 * k));
+    return x;
+}
+
+# The y of point k in a diagram buffer.
+fn py(buf, k): f64 {
+    var y: f64 = load64(buf + (16 * k) + 8);
+    return y;
+}
+
+# The T-s and P-v diagrams: their point counts, the isentropes vertical in T-s, the isochores vertical and the isobars
+# horizontal in P-v, the closed loop, a point's fields, the isochoric T-s path exponential, the steam isentropes through
+# both end states, the ideal-gas isentrope's exponent γ, and a short process list; then the caller buffer's refusal.
+# rust src/cycle.rs: test_ts_diagram_point_count, test_pv_diagram_point_count, test_ts_diagram_isentropic_vertical
+# rust src/cycle.rs: test_pv_diagram_isochoric_vertical, test_pv_diagram_isobaric_horizontal
+# rust src/cycle.rs: test_pv_diagram_closed_loop, test_diagram_point, test_ts_diagram_isochoric_is_exponential
+# rust src/cycle.rs: test_pv_diagram_steam_isentropes_hit_both_endpoints
+# rust src/cycle.rs: test_pv_diagram_ideal_gas_isentrope_matches_gamma, test_diagrams_tolerate_short_process_list
+fn test_diagrams() {
+    test_group("diagrams");
+    var cap = 400;
+    var buf = alloc(16 * cap);
+    var otto: UsCycleResult;
+    var ti, vi = us_cycle_result_init(&otto);
+    var t, v = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, &otto);
+    var bray: UsCycleResult;
+    var tj, vj = us_cycle_result_init(&bray);
+    var tb, vb = us_brayton_cycle(300.0, 101325.0, 10.0, 1400.0, 1.4, 1.0, &bray);
+    var t1, n1 = us_cycle_ts_diagram(&otto, 10, buf, cap);
+    assert_eq(n1, 40, "T-s: 4 processes x 10 points");
+    assert_eq(us_cycle_diagram_len(&otto, 10), 40, "us_cycle_diagram_len agrees");
+    var s0: f64 = px(buf, 0);
+    var vert = 1;
+    var k = 0;
+    while (k < 10) {
+        var sk: f64 = px(buf, k);
+        var dk: f64 = absdiff(sk, s0);
+        if (dk >= 0.0000000001) { vert = 0; }
+        k = k + 1;
+    }
+    assert_eq(vert, 1, "the isentrope 1-2 is vertical in T-s");
+    var t2, n2 = us_cycle_ts_diagram(&otto, 3, buf, cap);
+    var mid: f64 = py(buf, 4);
+    var ta: f64 = spf(&otto, 1, 0);
+    var tc: f64 = spf(&otto, 2, 0);
+    var geo: f64 = f64_sqrt(ta * tc);
+    var dm: f64 = absdiff(mid, geo);
+    assert(dm < 0.000001, "the isochore's midpoint in T-s is sqrt(T2 T3)");
+    var t3, n3 = us_cycle_pv_diagram(&bray, 20, buf, cap);
+    assert_eq(n3, 80, "P-v: 4 processes x 20 points");
+    var t4, n4 = us_cycle_pv_diagram(&otto, 10, buf, cap);
+    var v10: f64 = px(buf, 10);
+    var isoch = 1;
+    k = 10;
+    while (k < 20) {
+        var vk: f64 = px(buf, k);
+        var dv: f64 = absdiff(vk, v10);
+        if (dv >= 0.0000000001) { isoch = 0; }
+        k = k + 1;
+    }
+    assert_eq(isoch, 1, "the isochore 2-3 is vertical in P-v");
+    var fx: f64 = px(buf, 0);
+    var fy: f64 = py(buf, 0);
+    var lx: f64 = px(buf, n4 - 1);
+    var ly: f64 = py(buf, n4 - 1);
+    var cx: f64 = absdiff(fx, lx);
+    var cy: f64 = absdiff(fy, ly);
+    assert(cx / fx < 0.0000000001 && cy / fy < 0.0000000001, "the P-v loop closes");
+    var a1: f64 = spf(&otto, 0, 8);
+    var av: f64 = spf(&otto, 0, 16);
+    var t5, n5 = us_cycle_pv_diagram(&otto, 5, buf, cap);
+    var gam = 1;
+    k = 0;
+    while (k < 5) {
+        var xk: f64 = px(buf, k);
+        var yk: f64 = py(buf, k);
+        var pw: f64 = _us_cr_pow(av / xk, 1.4);
+        var want: f64 = a1 * pw;
+        var dr: f64 = absdiff(yk / want, 1.0);
+        if (dr >= 0.000000001) { gam = 0; }
+        k = k + 1;
+    }
+    assert_eq(gam, 1, "the ideal-gas isentrope is P V^1.4 = const");
+    var t6, n6 = us_cycle_pv_diagram(&bray, 10, buf, cap);
+    var p10: f64 = py(buf, 10);
+    var isob = 1;
+    k = 10;
+    while (k < 20) {
+        var pk: f64 = py(buf, k);
+        var dp: f64 = absdiff(pk, p10);
+        if (dp / p10 >= 0.0000000001) { isob = 0; }
+        k = k + 1;
+    }
+    assert_eq(isob, 1, "the isobar 2-3 is horizontal in P-v");
+    var rk: UsCycleResult;
+    var tk, vk2 = us_cycle_result_init(&rk);
+    var t7, v7 = us_rankine_cycle(10000.0, 2000000.0, 1, 623.15, &rk);
+    var t8, n8 = us_cycle_pv_diagram(&rk, 10, buf, cap);
+    var p3: f64 = spf(&rk, 2, 8);
+    var p4: f64 = spf(&rk, 3, 8);
+    var y20: f64 = py(buf, 20);
+    var y29: f64 = py(buf, 29);
+    var e3: f64 = absdiff(y20 / p3, 1.0);
+    var e4: f64 = absdiff(y29 / p4, 1.0);
+    var down = 1;
+    k = 21;
+    while (k < 30) {
+        var yk1: f64 = py(buf, k);
+        var yk0: f64 = py(buf, k - 1);
+        if (yk1 > yk0) { down = 0; }
+        k = k + 1;
+    }
+    assert(e3 < 0.000000001 && e4 < 0.000000001 && down == 1, "steam's turbine isentrope runs P3 to P4, falling");
+    var dpt: UsDiagramPoint;
+    dpt.x = 1.0;
+    dpt.y = 2.0;
+    var dx: f64 = dpt.x;
+    var dy: f64 = dpt.y;
+    assert(dx == 1.0 && dy == 2.0, "a diagram point holds x and y");
+    vec_truncate(otto.processes, 1);
+    var t9, n9 = us_cycle_pv_diagram(&otto, 4, buf, cap);
+    var ta2, na = us_cycle_ts_diagram(&otto, 4, buf, cap);
+    assert(n9 == 16 && na == 16, "one process code for four states: 16 points each");
+    var e1, f1 = us_cycle_ts_diagram(&otto, 10, buf, 39);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "a buffer one point short is refused");
+    var e2, f2 = us_cycle_pv_diagram(&otto, 1000000000000000000, buf, cap);
+    errc(e2, f2, US_ERR_INVALID_PARAMETER, "a huge point count is refused, not overflowed");
+    var t0, n0 = us_cycle_ts_diagram(&otto, 1, buf, 8);
+    assert_eq(n0, 8, "fewer than 2 points a process is 2");
+}
+
+# The comparison with the Carnot limits: Otto and Brayton below theirs, a refrigeration result against the Carnot
+# COP, and non-physical limits giving 0.
+# rust src/cycle.rs: test_compare_cycles_second_law, test_compare_cycles_refrigeration_uses_carnot_cop
+# rust src/cycle.rs: test_compare_cycles_rejects_nonphysical_limits
+fn test_compare() {
+    test_group("comparison");
+    var otto: UsCycleResult;
+    var ti, vi = us_cycle_result_init(&otto);
+    var t, v = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, &otto);
+    var bray: UsCycleResult;
+    var tj, vj = us_cycle_result_init(&bray);
+    var tb, vb = us_brayton_cycle(300.0, 101325.0, 10.0, 1400.0, 1.4, 1.0, &bray);
+    var kinds[16];
+    var res[16];
+    var ths[16];
+    var tls[16];
+    store64(&kinds, US_CYCLE_OTTO);
+    store64(&kinds + 8, US_CYCLE_BRAYTON);
+    store64(&res, &otto);
+    store64(&res + 8, &bray);
+    var h1: f64 = spf(&otto, 2, 0);
+    var l1: f64 = spf(&otto, 0, 0);
+    var h2: f64 = spf(&bray, 2, 0);
+    var l2: f64 = spf(&bray, 0, 0);
+    store64(&ths, h1);
+    store64(&ths + 8, h2);
+    store64(&tls, l1);
+    store64(&tls + 8, l2);
+    var out[96];
+    var n = us_compare_cycles(&kinds, &res, &ths, &tls, 2, &out);
+    assert_eq(n, 2, "two entries");
+    var ok = 1;
+    var k = 0;
+    while (k < 2) {
+        var c = &out + (48 * k);
+        var eff: f64 = load64(c + 8);
+        var car: f64 = load64(c + 32);
+        var sec: f64 = load64(c + 40);
+        if ((sec <= 1.0 && sec > 0.0 && car > eff) == 0) { ok = 0; }
+        k = k + 1;
+    }
+    assert_eq(ok, 1, "0 < eta_II <= 1 and eta < eta_Carnot for each");
+    otto.kind = US_CYCLE_REFRIGERATION;
+    otto.efficiency = 5.0;
+    var cc: UsCycleComparison;
+    us_compare_cycle(US_CYCLE_REFRIGERATION, &otto, 300.0, 250.0, &cc);
+    var car5: f64 = cc.carnot_efficiency;
+    var sec1: f64 = cc.second_law_efficiency;
+    var d5: f64 = absdiff(car5, 5.0);
+    var d1: f64 = absdiff(sec1, 1.0);
+    assert(d5 < 0.000000000001 && d1 < 0.000000000001, "refrigeration: COP_Carnot 250/50 = 5, eta_II 1");
+    otto.kind = US_CYCLE_OTTO;
+    var nan: f64 = 0.0 / 0.0;
+    var zeros = 1;
+    var hs: f64[4];
+    var ls: f64[4];
+    hs[0] = 300.0;
+    ls[0] = 0.0 - 100.0;
+    hs[1] = 300.0;
+    ls[1] = 0.0;
+    hs[2] = 250.0;
+    ls[2] = 300.0;
+    hs[3] = nan;
+    ls[3] = 300.0;
+    k = 0;
+    while (k < 4) {
+        var hk: f64 = hs[k];
+        var lk: f64 = ls[k];
+        us_compare_cycle(US_CYCLE_OTTO, &otto, hk, lk, &cc);
+        var ck: f64 = cc.carnot_efficiency;
+        var sk: f64 = cc.second_law_efficiency;
+        if ((ck == 0.0 && sk == 0.0) == 0) { zeros = 0; }
+        k = k + 1;
+    }
+    assert_eq(zeros, 1, "T_L < 0, T_L = 0, T_H < T_L and NaN limits: 0 and 0");
+    assert_eq(us_compare_cycles(&kinds, &res, &ths, &tls, 0, &out), 0, "no entries, none written");
 }
 
 # A result reused across calls refills its vecs: no heap after the first; and the three cycles' spans.
@@ -551,6 +791,10 @@ fn test_out_of_memory() {
         k = k + 1;
     }
     var t6, v6 = us_cycle_push_process(&r2, US_PROCESS_ISOBARIC);
+    var tq, vq = us_cycle_push_process(&r2, US_PROCESS_COUNT);
+    errc(tq, vq, US_ERR_INVALID_PARAMETER, "a code past the processes is refused");
+    var tm, vm = us_cycle_push_process(&r2, 0 - 1);
+    errc(tm, vm, US_ERR_INVALID_PARAMETER, "a negative code too");
     assert_eq(oks, 16, "sixteen processes fit");
     errc(t6, v6, US_ERR_OUT_OF_MEMORY, "a seventeenth needs a grow");
     assert_eq(us_cycle_process_count(&r2), 16, "which leaves the sixteen");
@@ -613,8 +857,11 @@ fn main() {
     test_rankine();
     test_refrigeration();
     test_nan_inf();
+    test_diagrams();
+    test_compare();
     test_result_json();
     test_refrigeration_json();
+    test_point_and_comparison_json();
     test_reuse_and_spans();
     test_steam_spans();
     test_out_of_memory();

@@ -1079,13 +1079,18 @@ fn _par_got_cycle(r: *UsCycleResult) {
 # A UsCycleResult from the row's input tokens (as _par_got_cycle writes them) into *r: the index of the token after
 # them, or 0.
 fn _par_cycle_in(r: *UsCycleResult): i64 {
-    var kind = _par_in_enum(0, &_par_cycle_text, US_CYCLE_COUNT);
+    return _par_cycle_in_at(r, 0);
+}
+
+# _par_cycle_in from input token `start` on.
+fn _par_cycle_in_at(r: *UsCycleResult, start): i64 {
+    var kind = _par_in_enum(start, &_par_cycle_text, US_CYCLE_COUNT);
     if (kind < 0) { return 0; }
     vec_truncate(r.states, 0);
     vec_truncate(r.processes, 0);
     r.kind = kind;
-    var n = _par_in(1);
-    var at = 2;
+    var n = _par_in(start + 1);
+    var at = start + 2;
     var j = 0;
     while (j < 5 * n) {
         vec_push(r.states, _par_in(at + j));
@@ -1130,6 +1135,93 @@ fn _par_refr_in(rr: *UsRefrigerationResult): i64 {
 
 var _par_cyc = 0;
 var _par_rr = 0;
+# compare_cycles' entries (up to _PAR_CMP_MAX: their results, labels, limits and outputs) and a diagram's points.
+var _PAR_CMP_MAX = 16;
+var _par_cmp_res = 0;
+var _par_cmp_kinds = 0;
+var _par_cmp_ptrs = 0;
+var _par_cmp_th = 0;
+var _par_cmp_tl = 0;
+var _par_cmp_out = 0;
+var _PAR_DIAG_CAP = 2048;
+var _par_diag = 0;
+
+# The comparison and diagram scratch, made once.
+fn _par_cycle_scratch() {
+    if (_par_cmp_res != 0) { return 0; }
+    _par_cmp_res = alloc(_PAR_CMP_MAX * sizeof(UsCycleResult));
+    var k = 0;
+    while (k < _PAR_CMP_MAX) {
+        var tk, vk = us_cycle_result_init(_par_cmp_res + k * sizeof(UsCycleResult));
+        k = k + 1;
+    }
+    _par_cmp_kinds = alloc(8 * _PAR_CMP_MAX);
+    _par_cmp_ptrs = alloc(8 * _PAR_CMP_MAX);
+    _par_cmp_th = alloc(8 * _PAR_CMP_MAX);
+    _par_cmp_tl = alloc(8 * _PAR_CMP_MAX);
+    _par_cmp_out = alloc(_PAR_CMP_MAX * sizeof(UsCycleComparison));
+    _par_diag = alloc(_PAR_DIAG_CAP * sizeof(UsDiagramPoint));
+    return 0;
+}
+
+# A compare_cycles row: its `v:m` entries (label, result, T_H, T_L) in, `v:m` comparisons out. 1, or -1 for unusable
+# inputs.
+fn _par_compare_cycles(): i64 {
+    _par_cycle_scratch();
+    var m = _par_in(0);
+    if (m < 0 || m > _PAR_CMP_MAX) { return 0 - 1; }
+    var at = 1;
+    var k = 0;
+    while (k < m) {
+        var label = _par_in_enum(at, &_par_cycle_text, US_CYCLE_COUNT);
+        if (label < 0) { return 0 - 1; }
+        var r = _par_cmp_res + k * sizeof(UsCycleResult);
+        at = _par_cycle_in_at(r, at + 1);
+        if (at == 0) { return 0 - 1; }
+        store64(_par_cmp_kinds + 8 * k, label);
+        store64(_par_cmp_ptrs + 8 * k, r);
+        store64(_par_cmp_th + 8 * k, _par_in(at));
+        store64(_par_cmp_tl + 8 * k, _par_in(at + 1));
+        at = at + 2;
+        k = k + 1;
+    }
+    var w = us_compare_cycles(_par_cmp_kinds, _par_cmp_ptrs, _par_cmp_th, _par_cmp_tl, m, _par_cmp_out);
+    _par_got_seq(w);
+    k = 0;
+    while (k < w) {
+        var c = _par_cmp_out + k * sizeof(UsCycleComparison);
+        _par_got_e(_par_cycle_text(load64(c)));
+        _par_got_words(c + 8, 5);
+        k = k + 1;
+    }
+    return 1;
+}
+
+# A diagram row (`ts` 1 for T-s, 0 for P-v): a result and `i:points_per_process` in, `v:count` and the points out.
+fn _par_diagram(ts): i64 {
+    _par_cycle_scratch();
+    var at = _par_cycle_in(_par_cyc);
+    if (at == 0 || _par_in_n != at + 1) { return 0 - 1; }
+    var pts = _par_in(at);
+    var t = 0;
+    var v = 0;
+    if (ts == 1) {
+        var t1, v1 = us_cycle_ts_diagram(_par_cyc, pts, _par_diag, _PAR_DIAG_CAP);
+        t = t1;
+        v = v1;
+    } else {
+        var t2, v2 = us_cycle_pv_diagram(_par_cyc, pts, _par_diag, _PAR_DIAG_CAP);
+        t = t2;
+        v = v2;
+    }
+    if (is_ok(t) == 0) {
+        _par_got_err(v);
+        return 1;
+    }
+    _par_got_seq(v);
+    _par_got_words(_par_diag, 2 * v);
+    return 1;
+}
 
 # One cycle JSON row: 1 when handled, 0 for none, -1 for unusable inputs.
 fn _par_cycle_json(fp, fl): i64 {
@@ -1170,6 +1262,27 @@ fn _par_cycle_json(fp, fl): i64 {
         _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
         return 1;
     }
+    if (_par_eq(fp, fl, "cycle::DiagramPoint::to_json") == 1) {
+        if (_par_in_n != 2) { return 0 - 1; }
+        var dp: UsDiagramPoint;
+        _par_in_words(0, 2, &dp);
+        store64(_par_mat_sb + 8, 0);
+        us_diagram_point_to_json(_par_mat_sb, &dp);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "cycle::CycleComparisonEntry::to_json") == 1) {
+        var ck2 = _par_in_enum(0, &_par_cycle_text, US_CYCLE_COUNT);
+        if (ck2 < 0 || _par_in_n != 6) { return 0 - 1; }
+        var cc: UsCycleComparison;
+        cc.kind = ck2;
+        var ccb = &cc;
+        _par_in_words(1, 5, ccb + 8);
+        store64(_par_mat_sb + 8, 0);
+        us_cycle_comparison_to_json(_par_mat_sb, &cc);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
     if (_par_eq(fp, fl, "cycle::RefrigerationResult::to_json") == 1) {
         if (_par_refr_in(_par_rr) == 0) { return 0 - 1; }
         store64(_par_mat_sb + 8, 0);
@@ -1183,6 +1296,8 @@ fn _par_cycle_json(fp, fl): i64 {
     if (_par_eq(fp, fl, "cycle::CycleKind::from_json") == 1) { kind = 3; }
     if (_par_eq(fp, fl, "cycle::CycleResult::from_json") == 1) { kind = 4; }
     if (_par_eq(fp, fl, "cycle::RefrigerationResult::from_json") == 1) { kind = 5; }
+    if (_par_eq(fp, fl, "cycle::DiagramPoint::from_json") == 1) { kind = 6; }
+    if (_par_eq(fp, fl, "cycle::CycleComparisonEntry::from_json") == 1) { kind = 7; }
     if (kind == 0) { return 0; }
     var doc = _par_in_text(0, &dn);
     if (doc == 0) { return 0 - 1; }
@@ -1215,6 +1330,24 @@ fn _par_cycle_json(fp, fl): i64 {
         var t5, v5 = us_refrigeration_result_from_json_a(_par_mat_arena, doc, n, &rr);
         if (is_ok(t5) == 1) { _par_got_refr(&rr); } else { _par_got_err(v5); }
         ok = is_ok(t5);
+    }
+    if (kind == 6) {
+        var dq: UsDiagramPoint;
+        var t6, v6 = us_diagram_point_from_json_a(_par_mat_arena, doc, n, &dq);
+        if (is_ok(t6) == 1) { _par_got_words(&dq, 2); } else { _par_got_err(v6); }
+        ok = is_ok(t6);
+    }
+    if (kind == 7) {
+        var cq: UsCycleComparison;
+        var t7, v7 = us_cycle_comparison_from_json_a(_par_mat_arena, doc, n, &cq);
+        if (is_ok(t7) == 1) {
+            _par_got_e(_par_cycle_text(cq.kind));
+            var cqb = &cq;
+            _par_got_words(cqb + 8, 5);
+        } else {
+            _par_got_err(v7);
+        }
+        ok = is_ok(t7);
     }
     if (ok == 0 && _par_bayan_mapped_refusal(doc, n) == 1) { _par_adr5 = 1; }
     if (ok == 1 && _par_has_int_neg_zero(doc, n) == 1) { _par_adr5 = 1; }
@@ -1291,6 +1424,9 @@ fn _par_cycle(fp, fl): i64 {
         if (is_ok(t5) == 1) { _par_got_refr(_par_rr); } else { _par_got_err(v5); }
         return 1;
     }
+    if (_par_eq(fp, fl, "cycle::compare_cycles") == 1) { return _par_compare_cycles(); }
+    if (_par_eq(fp, fl, "cycle::cycle_ts_diagram") == 1) { return _par_diagram(1); }
+    if (_par_eq(fp, fl, "cycle::cycle_pv_diagram") == 1) { return _par_diagram(0); }
     if (_par_eq(fp, fl, "cycle::heat_pump_cop") == 1) {
         var hp: f64 = us_heat_pump_cop(a);
         _par_got_f(hp);

@@ -28,10 +28,10 @@ from pathlib import Path
 root = Path(sys.argv[1]).resolve()
 
 # The modules whose milestone has come.
-PORTED = ["error", "validate", "logging", "material", "transfer", "state", "entropy", "phase", "steam"]
+PORTED = ["error", "validate", "logging", "material", "transfer", "state", "entropy", "phase", "steam", "cycle"]
 # The rest, with their milestone (port plan §3.1).
 SCHEDULED = {
-    "cycle": "M4", "chem": "M5", "stat": "M5",
+    "chem": "M5", "stat": "M5",
     "numerical": "M6", "bridge": "M7", "integration/soorat": "M7", "ai": "M7",
 }
 WIRING = {
@@ -55,6 +55,8 @@ TYPES = {
     "CycleKind": ("UsCycle", "cycle"),
     "CycleResult": ("UsCycleResult", "cycle_result"),
     "RefrigerationResult": ("UsRefrigerationResult", "refrigeration_result"),
+    "CycleComparisonEntry": ("UsCycleComparison", "cycle_comparison"),
+    "DiagramPoint": ("UsDiagramPoint", "diagram_point"),
 }
 # Rust item -> the Cyrius names that carry it ("fn x", "const X", "enum X", "struct X"), where the rules give none.
 MAPPED = {

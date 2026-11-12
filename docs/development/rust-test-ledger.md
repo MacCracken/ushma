@@ -5,14 +5,14 @@
 > (`# rust <file>: <test>`), at its module's milestone. Nothing is deferred: a test not ported yet is one whose
 > milestone hasn't come. The golden corpus (`tests/golden/`) checks every ported function on its grid besides.
 
-**479 Rust tests:** 322 ported; 17 at M4, 62 at M5, 27 at M6, 51 at M7.
+**479 Rust tests:** 339 ported; 62 at M5, 27 at M6, 51 at M7.
 
 | Rust file | Tests | Ported | Due, unported | Later (milestone) |
 |---|---:|---:|---:|---|
 | `src/ai.rs` | 7 | 0 | 0 | 7 (M7) |
 | `src/bridge.rs` | 31 | 0 | 0 | 31 (M7) |
 | `src/chem.rs` | 23 | 0 | 0 | 23 (M5) |
-| `src/cycle.rs` | 59 | 45 | 0 | 14 (M4) |
+| `src/cycle.rs` | 59 | 59 | 0 | — |
 | `src/entropy.rs` | 23 | 23 | 0 | — |
 | `src/error.rs` | 18 | 18 | 0 | — |
 | `src/integration/soorat.rs` | 13 | 0 | 0 | 13 (M7) |
@@ -25,8 +25,8 @@
 | `src/steam.rs` | 46 | 46 | 0 | — |
 | `src/transfer.rs` | 67 | 67 | 0 | — |
 | `src/validate.rs` | 2 | 2 | 0 | — |
-| `tests/integration.rs` | 30 | 21 | 0 | 3 (M4), 6 (M5) |
-| **Total** | **479** | **322** | **0** | |
+| `tests/integration.rs` | 30 | 24 | 0 | 6 (M5) |
+| **Total** | **479** | **339** | **0** | |
 
 ## Where each is ported
 
@@ -41,9 +41,14 @@
 | `src/cycle.rs` `test_brayton_energy_conservation` | `tests/cycle.tcyr` `test_brayton` |
 | `src/cycle.rs` `test_brayton_invalid_inputs` | `tests/cycle.tcyr` `test_brayton` |
 | `src/cycle.rs` `test_brayton_t3_must_exceed_t2` | `tests/cycle.tcyr` `test_brayton` |
+| `src/cycle.rs` `test_compare_cycles_refrigeration_uses_carnot_cop` | `tests/cycle.tcyr` `test_compare` |
+| `src/cycle.rs` `test_compare_cycles_rejects_nonphysical_limits` | `tests/cycle.tcyr` `test_compare` |
+| `src/cycle.rs` `test_compare_cycles_second_law` | `tests/cycle.tcyr` `test_compare` |
 | `src/cycle.rs` `test_cycle_kind_serde_roundtrip` | `tests/cycle.tcyr` `test_types` |
 | `src/cycle.rs` `test_cycle_kind_traits` | `tests/cycle.tcyr` `test_types` |
 | `src/cycle.rs` `test_cycles_reject_nan_and_inf` | `tests/cycle.tcyr` `test_nan_inf` |
+| `src/cycle.rs` `test_diagram_point` | `tests/cycle.tcyr` `test_diagrams` |
+| `src/cycle.rs` `test_diagrams_tolerate_short_process_list` | `tests/cycle.tcyr` `test_diagrams` |
 | `src/cycle.rs` `test_diesel_efficiency_analytical` | `tests/cycle.tcyr` `test_diesel` |
 | `src/cycle.rs` `test_diesel_energy_conservation` | `tests/cycle.tcyr` `test_diesel` |
 | `src/cycle.rs` `test_diesel_invalid_inputs` | `tests/cycle.tcyr` `test_diesel` |
@@ -62,6 +67,12 @@
 | `src/cycle.rs` `test_otto_temperature_ordering` | `tests/cycle.tcyr` `test_otto` |
 | `src/cycle.rs` `test_process_kind_serde_roundtrip` | `tests/cycle.tcyr` `test_types` |
 | `src/cycle.rs` `test_process_kind_traits` | `tests/cycle.tcyr` `test_types` |
+| `src/cycle.rs` `test_pv_diagram_closed_loop` | `tests/cycle.tcyr` `test_diagrams` |
+| `src/cycle.rs` `test_pv_diagram_ideal_gas_isentrope_matches_gamma` | `tests/cycle.tcyr` `test_diagrams` |
+| `src/cycle.rs` `test_pv_diagram_isobaric_horizontal` | `tests/cycle.tcyr` `test_diagrams` |
+| `src/cycle.rs` `test_pv_diagram_isochoric_vertical` | `tests/cycle.tcyr` `test_diagrams` |
+| `src/cycle.rs` `test_pv_diagram_point_count` | `tests/cycle.tcyr` `test_diagrams` |
+| `src/cycle.rs` `test_pv_diagram_steam_isentropes_hit_both_endpoints` | `tests/cycle.tcyr` `test_diagrams` |
 | `src/cycle.rs` `test_rankine_at_exact_tier_pressure` | `tests/cycle.tcyr` `test_rankine` |
 | `src/cycle.rs` `test_rankine_basic` | `tests/cycle.tcyr` `test_rankine` |
 | `src/cycle.rs` `test_rankine_energy_conservation` | `tests/cycle.tcyr` `test_rankine` |
@@ -77,6 +88,9 @@
 | `src/cycle.rs` `test_state_point_construction` | `tests/cycle.tcyr` `test_types` |
 | `src/cycle.rs` `test_state_point_serde_roundtrip` | `tests/cycle.tcyr` `test_types` |
 | `src/cycle.rs` `test_steam_cycles_reject_nan` | `tests/cycle.tcyr` `test_nan_inf` |
+| `src/cycle.rs` `test_ts_diagram_isentropic_vertical` | `tests/cycle.tcyr` `test_diagrams` |
+| `src/cycle.rs` `test_ts_diagram_isochoric_is_exponential` | `tests/cycle.tcyr` `test_diagrams` |
+| `src/cycle.rs` `test_ts_diagram_point_count` | `tests/cycle.tcyr` `test_diagrams` |
 | `src/entropy.rs` `test_carnot_cop` | `tests/entropy.tcyr` `test_carnot` |
 | `src/entropy.rs` `test_carnot_cop_invalid` | `tests/entropy.tcyr` `test_carnot` |
 | `src/entropy.rs` `test_carnot_efficiency` | `tests/entropy.tcyr` `test_carnot` |
@@ -335,10 +349,13 @@
 | `src/validate.rs` `finite_gt_rejects_nan_and_inf` | `tests/foundation.tcyr` `test_validate_predicates` |
 | `tests/integration.rs` `carnot_engine_efficiency` | `tests/integration.tcyr` `carnot_engine_efficiency` |
 | `tests/integration.rs` `clausius_clapeyron_vs_steam_table` | `tests/integration.tcyr` `clausius_clapeyron_vs_steam_table` |
+| `tests/integration.rs` `cycle_comparison_all_below_carnot` | `tests/integration.tcyr` `cycle_comparison_all_below_carnot` |
+| `tests/integration.rs` `cycle_pv_diagram_closed_loop_all_types` | `tests/integration.tcyr` `cycle_pv_diagram_closed_loop_all_types` |
 | `tests/integration.rs` `energy_conservation_adiabatic_process` | `tests/integration.tcyr` `energy_conservation_adiabatic_process` |
 | `tests/integration.rs` `entropy_increase_irreversible_heat_transfer` | `tests/integration.tcyr` `entropy_increase_irreversible_heat_transfer` |
 | `tests/integration.rs` `eos_comparison_co2_stp` | `tests/integration.tcyr` `eos_comparison_co2_stp` |
 | `tests/integration.rs` `heat_conduction_through_copper_wall` | `tests/integration.tcyr` `heat_conduction_through_copper_wall` |
+| `tests/integration.rs` `ideal_gas_cycle_efficiency_ordering` | `tests/integration.tcyr` `ideal_gas_cycle_efficiency_ordering` |
 | `tests/integration.rs` `ideal_gas_law_roundtrip` | `tests/integration.tcyr` `ideal_gas_law_roundtrip` |
 | `tests/integration.rs` `lmtd_vs_ntu_same_heat_exchanger` | `tests/integration.tcyr` `lmtd_vs_ntu_same_heat_exchanger` |
 | `tests/integration.rs` `material_thermal_diffusivity_matches_manual` | `tests/integration.tcyr` `material_thermal_diffusivity_matches_manual` |

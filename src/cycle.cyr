@@ -1,7 +1,8 @@
 # cycle.cyr — thermodynamic cycles (Rust 1.4.0 `cycle`): the ideal-gas process heats and works; the Otto, Diesel and
-# Brayton cycles; the Rankine and vapor-compression refrigeration cycles on the steam tables (src/steam.cyr), and the
-# heat-pump COP. All SI: kelvins, pascals, joules, moles; the ideal-gas cycles use the calorically perfect gas, and the
-# steam cycles work per kilogram of water.
+# Brayton cycles; the Rankine and vapor-compression refrigeration cycles on the steam tables (src/steam.cyr); the
+# heat-pump COP; the comparison of cycles with their Carnot limits; and the T-s and P-v diagrams. All SI: kelvins,
+# pascals, joules, moles; the ideal-gas cycles use the calorically perfect gas, and the steam cycles work per kilogram
+# of water.
 #
 # Each function computes in the order Rust 1.4.0 writes, so its arithmetic is bit-identical (class B), and its ln, exp
 # and pow are correctly rounded (ADR 0004, class C). A refusal returns Err(US_ERR_*) and reports its value at DEBUG
@@ -14,7 +15,9 @@
 # allocator the result was made with and are overwritten in place on every call, so a result reused across calls
 # allocates nothing after its first (ADR 0002 row 10). us_cycle_result_init makes one; us_cycle_state /
 # us_cycle_process read it, us_cycle_push_state / us_cycle_push_process build one by hand. A refused analysis leaves
-# the result unchanged; a refused allocation is Err(US_ERR_OUT_OF_MEMORY), where Rust would abort the process. JSON
+# the result unchanged; a refused allocation is Err(US_ERR_OUT_OF_MEMORY), where Rust would abort the process. A
+# diagram is a list of UsDiagramPoint records written into the caller's buffer, and a comparison a list of
+# UsCycleComparison records into the caller's (ADR 0002 row 12). JSON
 # is serde_json's: the enums as their variant names, the structs as their documents (ADR 0005; src/json.cyr has the
 # rules).
 
@@ -59,6 +62,22 @@ struct UsCycleResult {
     efficiency: f64;
     back_work_ratio: f64;
     gamma: f64;
+}
+
+# A point of a T-s or P-v diagram.
+struct UsDiagramPoint {
+    x: f64;
+    y: f64;
+}
+
+# One cycle against its Carnot limit (Rust's CycleComparisonEntry).
+struct UsCycleComparison {
+    kind;
+    efficiency: f64;
+    net_work: f64;
+    back_work_ratio: f64;
+    carnot_efficiency: f64;
+    second_law_efficiency: f64;
 }
 
 # A refrigeration cycle's result: its cycle (the first field, so a *UsRefrigerationResult is also the address of its
@@ -201,9 +220,15 @@ fn us_cycle_process(r: *UsCycleResult, i): i64 {
     return vec_get(r.processes, i);
 }
 
-# Appends process `kind` to *r: Ok(0), or Err(US_ERR_OUT_OF_MEMORY) when a grow was refused (*r is then unchanged).
+# Appends process `kind` to *r: Ok(0), Err(US_ERR_INVALID_PARAMETER) unless `kind` is a US_PROCESS_* code (Rust's
+# enum holds no other value, and no other would read back from JSON), or Err(US_ERR_OUT_OF_MEMORY) when a grow was
+# refused. *r is unchanged on a refusal.
 #must_use
 fn us_cycle_push_process(r: *UsCycleResult, kind): Result {
+    if (kind < 0 || kind >= US_PROCESS_COUNT) {
+        var kf: f64 = f64_from(kind);
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_cycle_push_process", "kind", kf));
+    }
     if (vec_push_a(r.alloc, r.processes, kind) < 0) {
         return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_cycle_push_process"));
     }
@@ -771,6 +796,193 @@ fn us_heat_pump_cop(cop_refrigeration: f64): f64 {
     return c;
 }
 
+# --- Comparison ---
+
+# Fills *out with cycle *r (labelled `kind`) against its Carnot limit between `t_high` and `t_low` K: for a
+# refrigeration result (by *r's own kind) the Carnot COP T_L/(T_H − T_L), for any other 1 − T_L/T_H, and 0 when the
+# limits are not physical (T_L ≤ 0, T_H ≤ T_L, or not finite). The second-law efficiency is η / η_Carnot, or 0 when
+# the limit is not positive. *out takes *r's efficiency, net work and back-work ratio.
+fn us_compare_cycle(kind, r: *UsCycleResult, t_high: f64, t_low: f64, out: *UsCycleComparison) {
+    var c: f64 = 0.0;
+    if (_us_finite_gt(t_low, 0.0) == 1 && _us_finite_gt(t_high, t_low) == 1) {
+        if (r.kind == US_CYCLE_REFRIGERATION) {
+            c = t_low / (t_high - t_low);
+        } else {
+            c = 1.0 - t_low / t_high;
+        }
+    }
+    var eff: f64 = r.efficiency;
+    var second: f64 = 0.0;
+    if (c > 0.0) { second = eff / c; }
+    var w: f64 = r.net_work;
+    var bwr: f64 = r.back_work_ratio;
+    out.kind = kind;
+    out.efficiency = eff;
+    out.net_work = w;
+    out.back_work_ratio = bwr;
+    out.carnot_efficiency = c;
+    out.second_law_efficiency = second;
+    return 0;
+}
+
+# Compares `n` cycles with their Carnot limits, as us_compare_cycle does each, into the `n` UsCycleComparison records
+# at `out`: entry k is labelled kinds[k] (a US_CYCLE_* code), is the result at results[k] (a *UsCycleResult) and has
+# the limits t_highs[k], t_lows[k] (f64 K). Rust's `&[(CycleKind, &CycleResult, f64, f64)]` as four parallel lists.
+# The number of records written (n, or 0 for n ≤ 0).
+fn us_compare_cycles(kinds, results, t_highs, t_lows, n, out): i64 {
+    if (n <= 0) { return 0; }
+    var o = out;
+    var k = 0;
+    while (k < n) {
+        var th: f64 = load64(t_highs + (8 * k));
+        var tl: f64 = load64(t_lows + (8 * k));
+        us_compare_cycle(load64(kinds + (8 * k)), load64(results + (8 * k)), th, tl, o + (48 * k));
+        k = k + 1;
+    }
+    return n;
+}
+
+# --- Diagrams ---
+
+# The number of points a diagram of *r has at `points_per_process` points a process (at least 2): one process per
+# state point, the last closing the loop. Size a diagram's buffer with it: that many UsDiagramPoint records.
+#must_use
+fn us_cycle_diagram_len(r: *UsCycleResult, points_per_process): i64 {
+    var pts = points_per_process;
+    if (pts < 2) { pts = 2; }
+    return us_cycle_state_count(r) * pts;
+}
+
+# The points a process (at least 2) when *r's diagram fits `cap` records, else -1. Compared by division, so a huge
+# `points_per_process` cannot overflow the product.
+fn _us_diagram_pts(r: *UsCycleResult, points_per_process, cap): i64 {
+    var pts = points_per_process;
+    if (pts < 2) { pts = 2; }
+    var n = us_cycle_state_count(r);
+    if (n > 0 && (cap < 0 || pts > cap / n)) { return 0 - 1; }
+    return pts;
+}
+
+# Writes the T-s diagram of *r into the `cap` UsDiagramPoint records at `out` (x the entropy, J/K; y the temperature,
+# K): `points_per_process` points (at least 2) along each process, the entropy linear between its state points. An
+# isochoric or isobaric process on an ideal gas (γ > 0, both temperatures positive) follows its real path, T = T_a·
+# (T_b/T_a)^f, since ds = C·dT/T; every other process, and every process of a steam cycle (γ = 0), is a straight line
+# (the saturation dome is not traced). Ok(the number of points, us_cycle_diagram_len), or
+# Err(US_ERR_INVALID_PARAMETER) when they would not fit in `cap`.
+#must_use
+fn us_cycle_ts_diagram(r: *UsCycleResult, points_per_process, out, cap): Result {
+    var pts = _us_diagram_pts(r, points_per_process, cap);
+    if (pts < 0) {
+        var cf: f64 = f64_from(cap);
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_cycle_ts_diagram", "cap", cf));
+    }
+    var n = us_cycle_state_count(r);
+    var g: f64 = r.gamma;
+    var ideal = 0;
+    if (g > 0.0) { ideal = 1; }
+    var d = slice_ptr(r.states);
+    var o = out;
+    var last: f64 = f64_from(pts - 1);
+    var k = 0;
+    var i = 0;
+    while (i < n) {
+        var a = d + (40 * i);
+        var b = d + (40 * ((i + 1) % n));
+        var ta: f64 = load64(a);
+        var tb: f64 = load64(b);
+        var sa: f64 = load64(a + 24);
+        var sb: f64 = load64(b + 24);
+        var pk = us_cycle_process(r, i);
+        var log_t = 0;
+        if (ideal == 1 && (pk == US_PROCESS_ISOCHORIC || pk == US_PROCESS_ISOBARIC)) {
+            log_t = _us_finite_gt(ta, 0.0) & _us_finite_gt(tb, 0.0);
+        }
+        var j = 0;
+        while (j < pts) {
+            var jf: f64 = f64_from(j);
+            var frac: f64 = jf / last;
+            var sv: f64 = sa + frac * (sb - sa);
+            var t: f64 = ta + frac * (tb - ta);
+            if (log_t == 1) {
+                var pw: f64 = _us_cr_pow(tb / ta, frac);
+                t = ta * pw;
+            }
+            store64(o + (16 * k), sv);
+            store64(o + (16 * k) + 8, t);
+            k = k + 1;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return Ok(k);
+}
+
+# Writes the P-v diagram of *r into the `cap` UsDiagramPoint records at `out` (x the volume, m³; y the pressure, Pa):
+# `points_per_process` points (at least 2) along each process, the volume linear between its state points. An
+# isentropic process is the polytropic P = P_a·(V_a/V)^k through both state points, k = ln(P_b/P_a)/ln(V_a/V_b) (γ for
+# an ideal gas, and steam's own; a straight line when V does not change, as in a liquid pump); an isochoric one a
+# vertical line, an isobaric one a horizontal line, an isothermal one the hyperbola P = P_a·V_a/V, and any other a
+# straight line. Ok(the number of points), or Err(US_ERR_INVALID_PARAMETER) when they would not fit in `cap`.
+#must_use
+fn us_cycle_pv_diagram(r: *UsCycleResult, points_per_process, out, cap): Result {
+    var pts = _us_diagram_pts(r, points_per_process, cap);
+    if (pts < 0) {
+        var cf: f64 = f64_from(cap);
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_cycle_pv_diagram", "cap", cf));
+    }
+    var n = us_cycle_state_count(r);
+    var d = slice_ptr(r.states);
+    var o = out;
+    var last: f64 = f64_from(pts - 1);
+    var k = 0;
+    var i = 0;
+    while (i < n) {
+        var a = d + (40 * i);
+        var b = d + (40 * ((i + 1) % n));
+        var pa: f64 = load64(a + 8);
+        var pb: f64 = load64(b + 8);
+        var va: f64 = load64(a + 16);
+        var vb: f64 = load64(b + 16);
+        var pos_v = _us_finite_gt(va, 0.0) & _us_finite_gt(vb, 0.0);
+        var positive = pos_v & _us_finite_gt(pa, 0.0) & _us_finite_gt(pb, 0.0);
+        var ln_v: f64 = 0.0;
+        if (positive == 1) { ln_v = _us_cr_ln(va / vb); }
+        var pk = us_cycle_process(r, i);
+        # 1 isentropic (polytropic), 2 isochoric, 3 isobaric, 4 isothermal, 0 a straight line.
+        var path = 0;
+        var kexp: f64 = 0.0;
+        var alv: f64 = f64_abs(ln_v);
+        if (pk == US_PROCESS_ISENTROPIC && alv > 0.000000000001) {
+            path = 1;
+            var lp: f64 = _us_cr_ln(pb / pa);
+            kexp = lp / ln_v;
+        }
+        if (pk == US_PROCESS_ISOCHORIC) { path = 2; }
+        if (pk == US_PROCESS_ISOBARIC) { path = 3; }
+        if (pk == US_PROCESS_ISOTHERMAL && positive == 1) { path = 4; }
+        var j = 0;
+        while (j < pts) {
+            var jf: f64 = f64_from(j);
+            var frac: f64 = jf / last;
+            var v: f64 = va + frac * (vb - va);
+            var p: f64 = pa + frac * (pb - pa);
+            if (path == 1) {
+                var pw: f64 = _us_cr_pow(va / v, kexp);
+                p = pa * pw;
+            }
+            if (path == 2) { v = va; }
+            if (path == 3) { p = pa; }
+            if (path == 4) { p = pa * va / v; }
+            store64(o + (16 * k), v);
+            store64(o + (16 * k) + 8, p);
+            k = k + 1;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return Ok(k);
+}
+
 # --- JSON ---
 
 # The field names of a StatePoint, in declaration order.
@@ -1040,4 +1252,104 @@ fn us_refrigeration_result_from_json_a(a, buf, n, out: *UsRefrigerationResult): 
 #must_use
 fn us_refrigeration_result_from_json(buf, n, out: *UsRefrigerationResult): Result {
     return us_refrigeration_result_from_json_a(default_alloc(), buf, n, out);
+}
+
+# The field names of a DiagramPoint.
+fn _us_dp_field(k): cstring {
+    match k {
+        0 => { return "x"; }
+        1 => { return "y"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# Appends *dp as serde_json writes a `DiagramPoint`.
+fn us_diagram_point_to_json(sb, dp: *UsDiagramPoint) {
+    return _us_jw_f64_struct(sb, dp, 2, &_us_dp_field);
+}
+
+# Reads a `DiagramPoint` document (`n` bytes at `buf`; its tree on allocator `a`) into *out: Ok(0), or
+# Err(US_ERR_DESERIALIZE), leaving *out unchanged.
+#must_use
+fn us_diagram_point_from_json_a(a, buf, n, out: *UsDiagramPoint): Result {
+    var w[16];
+    if (_us_jr_f64_struct(a, buf, n, &w, 2, &_us_dp_field) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_diagram_point_from_json"));
+    }
+    var x: f64 = load64(&w);
+    var y: f64 = load64(&w + 8);
+    out.x = x;
+    out.y = y;
+    return Ok(0);
+}
+
+# us_diagram_point_from_json_a on the global heap.
+#must_use
+fn us_diagram_point_from_json(buf, n, out: *UsDiagramPoint): Result {
+    return us_diagram_point_from_json_a(default_alloc(), buf, n, out);
+}
+
+# The fields of a CycleComparisonEntry, in declaration order.
+fn _us_cc_field(k): cstring {
+    match k {
+        0 => { return "kind"; }
+        1 => { return "efficiency"; }
+        2 => { return "net_work"; }
+        3 => { return "back_work_ratio"; }
+        4 => { return "carnot_efficiency"; }
+        5 => { return "second_law_efficiency"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# Appends *c as serde_json writes a `CycleComparisonEntry`.
+fn us_cycle_comparison_to_json(sb, c: *UsCycleComparison) {
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "kind", 1);
+    us_cycle_to_json(sb, c.kind);
+    var base = c;
+    var k = 1;
+    while (k < 6) {
+        _us_jw_key(sb, _us_cc_field(k), 0);
+        var x: f64 = load64(base + (8 * k));
+        _us_jw_f64(sb, x);
+        k = k + 1;
+    }
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# Reads a `CycleComparisonEntry` document (`n` bytes at `buf`; an object, or a 6-element sequence; its tree on
+# allocator `a`) into *out: Ok(0), or Err(US_ERR_DESERIALIZE), leaving *out unchanged.
+#must_use
+fn us_cycle_comparison_from_json_a(a, buf, n, out: *UsCycleComparison): Result {
+    var v = _us_jr_parse(a, buf, n);
+    var form = _us_jr_form(v, 6);
+    if (form == 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_cycle_comparison_from_json")); }
+    var w[48];
+    var kind = _us_jr_unit_enum(_us_jr_at(v, form, 0, "kind"), &us_cycle_name, US_CYCLE_COUNT);
+    if (kind < 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_cycle_comparison_from_json")); }
+    store64(&w, kind);
+    var k = 1;
+    while (k < 6) {
+        if (_us_jr_f64(_us_jr_at(v, form, k, _us_cc_field(k)), &w + (8 * k)) == 0) {
+            return Err(_us_fail(US_ERR_DESERIALIZE, "us_cycle_comparison_from_json"));
+        }
+        k = k + 1;
+    }
+    var o = out;
+    k = 0;
+    while (k < 6) {
+        store64(o + (8 * k), load64(&w + (8 * k)));
+        k = k + 1;
+    }
+    return Ok(0);
+}
+
+# us_cycle_comparison_from_json_a on the global heap.
+#must_use
+fn us_cycle_comparison_from_json(buf, n, out: *UsCycleComparison): Result {
+    return us_cycle_comparison_from_json_a(default_alloc(), buf, n, out);
 }

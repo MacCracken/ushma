@@ -558,9 +558,9 @@ The harness's summary at the end of M3 is `10 modules, 0 failing | rows: 132784 
 
 ## 7. M4 (2026-11-12)
 
-After M4b the harness's summary is `11 modules, 0 failing | rows: 137941 ok, 0 failed, 0 measured, 0 pending, 92
-accepted (ADR 4: 47)`. It is identical on x86_64 ELF, `--bounds`, PE and aarch64 (after M4a: 135,612 ok, 87
-accepted).
+At the end of M4 the harness's summary is `11 modules, 0 failing | rows: 138363 ok, 0 failed, 0 measured, 0 pending,
+104 accepted (ADR 4: 49)`, identical on x86_64 ELF, `--bounds`, PE and aarch64 (after M4a: 135,612 ok and 87 accepted;
+after M4b: 137,941 and 92).
 
 - **cycle, the ideal-gas part** (M4a): 2,839 rows (class A 144, B 747, C 1,948; 395 refusals).
   - **The helpers:** the isochoric and isobaric heats and the adiabatic work, on seeded grids and every argument at
@@ -612,3 +612,22 @@ accepted).
     row of another module after a JSON row would have been accepted as ADR 5. The tightened check showed it, by
     accepting the two series rows; the flag is now reset per row.
   - **Surface parity:** probed as ported, cycle has 35 of its 44 items. The missing 9 are M4c's.
+- **cycle, comparison and diagrams** (M4c): 434 rows more, 5,607 in all (M4c's: class A 115, B 75, C 244).
+  - **`compare_cycles`** (75 rows, bit-identical): every cycle's results between their own hottest and coldest states
+    and between 300 and 250 K, plus a result relabelled as refrigeration (its efficiency a COP). Each limit runs at the
+    edges and T_H at T_L ± 1 ulp, the switch to the 0 / 0 of non-physical limits, for a heat engine and for a
+    refrigeration result. Also a label that differs from the result's kind, no entries, and eight at once.
+  - **`cycle_ts_diagram`, `cycle_pv_diagram`** (122 rows each): 19 results at 0, 1, 2, 3, 5 and 10 points a process,
+    and the 8 cycles' own at 50. The edited results reach each path's guard:
+    - one process code for four states, and none;
+    - no states, and one;
+    - isothermal and isenthalpic processes;
+    - γ 0 (steam's straight T-s lines) and γ NaN;
+    - a zero, a NaN and a negative temperature (no exponential T-s path);
+    - a zero volume and a negative pressure (no P-v hyperbola, ln V 0);
+    - equal volumes and volumes 1 ulp apart, where |ln(V_a/V_b)| ≤ 1e-12 makes the isentrope a straight line;
+    - an infinite volume and a NaN pressure.
+    Every point is 0 ulp against MPFR. glibc misrounds a pow inside one row of each diagram.
+  - **JSON:** `DiagramPoint` 54 rows and `CycleComparisonEntry` 61, 5 each accepted under ADR 5's mapped divergences.
+  - **Surface parity:** cycle is PORTED, 44 of 44. **Tests:** all 59 of cycle's and the 3 remaining cycle integration
+    tests; the ledger has 339 of 479, every one due through M4.

@@ -392,6 +392,28 @@ fn b_refrigeration(rr: *UsRefrigerationResult): i64 {
     return c;
 }
 
+var _bn_diag = 0;
+
+# cycle_ts_diagram of the Otto result at 50 points a process (200 points), into one caller buffer.
+fn b_ts_diagram(r: *UsCycleResult): i64 {
+    var t, v = us_cycle_ts_diagram(r, 50, _bn_diag, 200);
+    return v;
+}
+
+# cycle_pv_diagram of the same result.
+fn b_pv_diagram(r: *UsCycleResult): i64 {
+    var t, v = us_cycle_pv_diagram(r, 50, _bn_diag, 200);
+    return v;
+}
+
+# compare_cycle of the Otto result between 1800 and 300 K.
+fn b_compare(r: *UsCycleResult): i64 {
+    var c: UsCycleComparison;
+    us_compare_cycle(US_CYCLE_OTTO, r, 1800.0, 300.0, &c);
+    var e: f64 = c.second_law_efficiency;
+    return e;
+}
+
 # Fills the two resistance lists the benchmarks use.
 fn bn_lists() {
     _bn_series = alloc(40);
@@ -507,6 +529,11 @@ fn main(): i64 {
     var rr: UsRefrigerationResult;
     var trr, vrr = us_refrigeration_result_init(&rr);
     bn_run("cycle/refrigeration", &b_refrigeration, &rr, 100000);
+    _bn_diag = alloc(16 * 200);
+    var ttd, vtd = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, &cr);
+    bn_run("cycle/ts_diagram, 200 points (Cyrius only)", &b_ts_diagram, &cr, 100000);
+    bn_run("cycle/pv_diagram, 200 points (Cyrius only)", &b_pv_diagram, &cr, 100000);
+    bn_run("cycle/compare, one entry (Cyrius only)", &b_compare, &cr, 1000000);
     return 0;
 }
 

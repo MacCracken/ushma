@@ -28,7 +28,7 @@ dependency, hisab 1.4.0 above all, is the version the oracle was tested with.
 | `tests/golden/constants.tsv` | 9 | every public scalar const of ushma 1.4.0 (8 `f64`, 1 `usize`), class A |
 | `tests/golden/fmtf.tsv` | 26,088 | Rust's `{}` and `serde_json::to_string` of 13,044 doubles (`m_fmtf.rs`: the specials, every power of two, the powers of ten ± 1 ulp, the form thresholds, 0 … 1000 in tenths and hundredths, 4,000 random bit patterns, 2,000 short decimals), class A; `validate.py` checks each text by its properties |
 | `tests/golden/steam.tsv` | 31,113 | M3 (`m_steam.rs`): Region 4 both ways, both saturated lookups at every row ± 1 ulp and between rows, quality and wet steam around their tolerances (class B); the superheated lookup at every tier ± 1 ulp and between tiers, and `superheated_by_entropy` over every breakpoint's entropy (class C; `steam.cr.tsv`: 10 rows); the three steam types' JSON (class A). The tables are private: their rows come from `t_steam::saturated_rows` / `superheated_rows` |
-| `tests/golden/cycle.tsv` | 5,173 | M4a and M4b (`m_cycle.rs`): the process helpers (class B; `adiabatic_temp_from_pressure` class C); Otto, Diesel and Brayton over r, γ and T grids, with Diesel's r_c at r ± 1 ulp and Brayton's T₃ at T₂ ± 1 ulp, each row the whole result; Rankine (its `Option<f64>` superheat as `n:` or `f:`) and refrigeration over the steam tables, each branch switch tried either side (the exhaust's and the compressor exit's found by bisection on the bit patterns); `heat_pump_cop` (class B). Class C for the cycles (`cycle.cr.tsv`: 1 row). JSON for the five cycle types (class A). M4c adds the comparison and the diagrams |
+| `tests/golden/cycle.tsv` | 5,607 | M4 (`m_cycle.rs`): the process helpers (class B; `adiabatic_temp_from_pressure` class C); Otto, Diesel and Brayton over r, γ and T grids, with Diesel's r_c at r ± 1 ulp and Brayton's T₃ at T₂ ± 1 ulp, each row the whole result; Rankine (its `Option<f64>` superheat as `n:` or `f:`) and refrigeration over the steam tables, each branch switch tried either side (the exhaust's and the compressor exit's found by bisection on the bit patterns); `heat_pump_cop` and `compare_cycles` (class B); the T-s and P-v diagrams on every cycle's results and on results edited to reach each path's guard (a result and `i:points_per_process` in, `v:count` and the points out). Class C for the cycles and diagrams (`cycle.cr.tsv`: 3 rows). JSON for the seven cycle types (class A) |
 | `tests/golden/transfer.tsv` | 15,100 | M1c–M1d (`m_transfer.rs`): each of the 32 public transfer functions over a seeded physical sweep, every argument at each edge, and each branch switch (LMTD at ΔT₁ = ΔT₂ and across the 1e-10 band, NTU 0…100 × C_r 0…1 with both switches, view factors across 0.01); class B, or C where `exp`, `ln`, `powf`, `tanh` or `atan` enters (`transfer.cr.tsv`: 8 rows) |
 | `tests/golden/math.tsv` | 15,687 | every std f64 method ushma's library calls, over ushma's ranges (port plan §7.1) |
 | `tests/golden/entropy.tsv` | 3,454 | M2c (`m_entropy.rs`): the 9 entropy functions over seeded sweeps, every edge and each switch (T₁ = T₂, V₁ = V₂, T_cold at and around T_hot, 344 mixtures); classes A, B and C (`entropy.cr.tsv`: 1 row) |
@@ -112,7 +112,7 @@ struct literal in the Rust source, and the `ALL_*` row against the slice's entri
 are checked against MPFR by the corrected-oracle tooling (M0 part 2c). Run it with
 `python3 -I -B`. A tampered row fails it, as checked when it was written.
 
-From M1 it also models each ported module's functions (`MODELS`: transfer's 32, state's 21, entropy's 9, phase's 10, steam's 10, cycle's 10 so far): each is recomputed in Rust's
+From M1 it also models each ported module's functions (`MODELS`: transfer's 32, state's 21, entropy's 9, phase's 10, steam's 10, cycle's 13; the comparison and diagrams read their raw tokens, `RAW_ARGS`): each is recomputed in Rust's
 operation order with Python binary64 arithmetic, its transcendentals (`exp`, `ln`, `pow`, `tanh`, `atan`) taken from
 glibc through ctypes, and every row must come out token for token. With MPFR's primitives instead, the same models
 give the module's corrected oracle (`<module>.cr.tsv`), each misrounded call recorded.
@@ -138,7 +138,7 @@ fn <TAB> inputs <TAB> corrected outputs <TAB> note
 The plain `validate.py .` run recomputes the file and checks it. On the recorded libm platform
 it also checks that each note's glibc value is this machine's libm result, and the exact text.
 `math.cr.tsv` has 26 rows (exp_m1 23, ln 1, powf 2), `transfer.cr.tsv` 8 (pow 4, exp 3, atan 1),
-`state.cr.tsv` 1 (pow), `entropy.cr.tsv` 1 (log), `steam.cr.tsv` 10 (log 5, exp 5) and `cycle.cr.tsv` 1 (log).
+`state.cr.tsv` 1 (pow), `entropy.cr.tsv` 1 (log), `steam.cr.tsv` 10 (log 5, exp 5) and `cycle.cr.tsv` 3 (log 1, pow 2).
 
 ## mathx_tables.py
 
