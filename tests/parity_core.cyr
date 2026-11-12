@@ -435,11 +435,12 @@ fn _par_print_num(n, width) {
     fmt_int(n);
 }
 
-# Prints the text [p, p + len) padded to `width`.
+# Prints the text [p, p + len) padded to `width`, and at least one space after it.
 fn _par_print_pad(p, len, width) {
     print(p, len);
     var k = len;
     while (k < width) { print(" ", 1); k = k + 1; }
+    if (len >= width) { print(" ", 1); }
 }
 
 # One line per function of the current module.
@@ -448,7 +449,7 @@ fn _par_report_fns() {
     while (k < _par_fn_n) {
         var at = k * 8;
         print("  ", 2);
-        _par_print_pad(load64(_par_fn_p + at), load64(_par_fn_l + at), 40);
+        _par_print_pad(load64(_par_fn_p + at), load64(_par_fn_l + at), 43);
         var cls = load64(_par_fn_cls + at);
         var cb[8];
         store8(&cb, cls);

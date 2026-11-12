@@ -192,7 +192,7 @@
 | M1 | `error.rs` | 37 | — | 18 | `src/error.cyr` (codes, names, messages) |
 | M1 | `validate.rs` | 19 | (private) | 2 | `src/validate.cyr` |
 | M1 | `logging.rs` | 14 | 2 | 1 | `src/logging.cyr` (log + sakshi, `USHMA_LOG`) |
-| M1 | *(8 public constants in 4 modules)* | — | (consts) | — | `src/constants.cyr` (generated) |
+| M1 | *(9 public constants in 5 modules)* | — | (consts) | — | `src/constants.cyr` (generated) |
 | M1 | `material.rs` | 106 | 2 | 8 | `src/material_data.cyr` (generated), `src/material.cyr` |
 | M1 | `transfer.rs` | 443 | 32 | 67 | `src/transfer.cyr` |
 | M2 | `state.rs` | 473 | 21 | 47 | `src/state_data.cyr` (generated), `src/state.cyr` |
@@ -689,7 +689,7 @@ ports filed, and the note for kimiya.
 | Milestone | Status | Golden rows | Reference tests | Benches | Notes |
 |---|---|---|---|---|---|
 | M0 Prep & initialize | 🟡 part 1 done 2026-11-11 (steps 0–3: tag verified, Rust bench baseline, `cyrius port`, repairs, manifest, ADRs 0001–0005; gates green on ELF, `--bounds`, PE, aarch64) | 15,738 (constants 9, math 15,687, table presets 42) | — | Rust baseline: 63 | Parts 2a (math check, generator, validate.py), 2b (table data, probe_tables.py), 2c-1 (parity harness: 3,374 ok, 0 failed) 2c-2a (MPFR corrected oracle: 26 rows), 2c-2b (mathx vendored) and 2c-3 (CR tanh, cr_verify: every golden row gated, 15,712 ok + 26 accepted) done. Part 3a (probes 2, 3, 4, 5, 6, 8, 12) done; P6 settled as a written prefix. Part 3b (probes 1, 7, 9, 10, 11) done: Simpson class D, P4 moved to LU (class B), the ai client sets `read_ms`, both bundles link on three targets, P7 stands with the ADR 0005 amendment's decoder rules. Upstream filed (step 10, §8: 11 issues with verified repros, 7 addenda, a kimiya note; `upstream/README.md`), uncommitted in the targets. Next: M1 |
-| M1 Foundation, logging & transfer | 🟡 M1a, M1b, M1c done 2026-11-11 | fmtf 26,088; material 2,927; transfer 7,217 | foundation 68, material 54, transfer 100 | 16 (material, span, transfer 11) | Parts: **M1a** error (codes, names, messages; detail to sakshi), validate, fmtf (vendored), logging (`USHMA_LOG`, level-gated spans), the `[lib]` / `[lib.ai]` profiles; **M1b** json helpers, material + its JSON, the first fuzz target; **M1c** transfer 1 (conduction to boundary layers, 18 fns); **M1d** transfer 2 (fins, exchangers, view factors, 14 fns), benches against Rust, coverage, surface parity, the M1 gates |
+| M1 Foundation, logging & transfer | ✅ done 2026-11-12 (M1a–M1c 2026-11-11, M1d 2026-11-12) | fmtf 26,088; material 2,927; transfer 15,100 (32 fns; `transfer.cr.tsv` 8) | foundation 120, material 54, transfer 260, integration 19; Rust tests 102 of 102 due (96 unit, 6 integration) | 21 (material 4, span, transfer 16) | Parts: **M1a** error (codes, names, messages; detail to sakshi), validate, fmtf (vendored), logging (`USHMA_LOG`, level-gated spans), the `[lib]` / `[lib.ai]` profiles; **M1b** json helpers, material + its JSON, the first fuzz target; **M1c** transfer 1 (conduction to boundary layers, 18 fns); **M1d** transfer 2 (fins, exchangers, view factors, 14 fns), the review (inlined finite checks, powi as products: diffusivity 33 → 16 ns, radiation 50 → 25), coverage 100 % of public fns executed, `scripts/surface_parity.py` and `scripts/rust_test_ledger.py` in the gates and CI, the spans under Rust's span names |
 | M2 Equations of state & entropy | ☐ | | | | |
 | M3 Phase & steam | ☐ | | | | M3a/b/c |
 | M4 Cycles | ☐ | | | | M4a/b/c |

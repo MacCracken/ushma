@@ -1,0 +1,141 @@
+# Rust 1.4.0's integration tests (rust-old/tests/integration.rs), cross-module, each ported at the milestone of the
+# last module it calls. M1: the six on transfer and material alone.
+
+include "src/constants.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+include "src/json.cyr"
+include "src/material_data.cyr"
+include "src/material.cyr"
+include "src/transfer.cyr"
+
+# |a − b| as an f64.
+fn absdiff(a: f64, b: f64): f64 {
+    var d: f64 = a - b;
+    if (d < 0.0) { d = 0.0 - d; }
+    return d;
+}
+
+# The Ok value of a Result (asserting it is Ok).
+fn okv(t, v, name): i64 {
+    assert_eq(is_ok(t), 1, name);
+    return v;
+}
+
+# Fourier's law through a 10 cm copper wall, 1 m², 100 °C to 20 °C: 320,800 W.
+# rust tests/integration.rs: heat_conduction_through_copper_wall
+fn heat_conduction_through_copper_wall() {
+    test_group("heat conduction through a copper wall");
+    var cu: UsMaterial;
+    var tp, vp = us_material_preset(US_MATERIAL_COPPER, &cu);
+    var k: f64 = cu.conductivity;
+    var t, v = us_conduction(k, 1.0, 373.15, 293.15, 0.1);
+    var q: f64 = okv(t, v, "conduction is Ok");
+    var d: f64 = absdiff(q, 320800.0);
+    assert(d < 1.0, "q = 401 x 1 x 80 / 0.1 = 320,800 W");
+}
+
+# Lumped-capacitance cooling falls monotonically to the environment.
+# rust tests/integration.rs: thermal_equilibrium_lumped_capacitance
+fn thermal_equilibrium_lumped_capacitance() {
+    test_group("lumped-capacitance equilibrium");
+    var t1: f64 = us_lumped_capacitance(500.0, 293.15, 60.0, 60.0);
+    var t5: f64 = us_lumped_capacitance(500.0, 293.15, 300.0, 60.0);
+    var t30: f64 = us_lumped_capacitance(500.0, 293.15, 1800.0, 60.0);
+    assert(t1 < 500.0, "cooler after a minute");
+    assert(t5 < t1, "cooler after five");
+    assert(t30 < t5, "cooler after thirty");
+    var d: f64 = absdiff(t30, 293.15);
+    assert(d < 0.01, "after 30 time constants, at the environment");
+}
+
+# Copper's diffusivity three ways: by hand, by the material, by transfer.
+# rust tests/integration.rs: material_thermal_diffusivity_matches_manual
+fn material_thermal_diffusivity_matches_manual() {
+    test_group("material diffusivity matches the hand formula");
+    var cu: UsMaterial;
+    var tp, vp = us_material_preset(US_MATERIAL_COPPER, &cu);
+    var k: f64 = cu.conductivity;
+    var rho: f64 = cu.density;
+    var cp: f64 = cu.specific_heat;
+    var manual: f64 = k / (rho * cp);
+    var method: f64 = us_material_diffusivity(&cu);
+    var d: f64 = absdiff(manual, method);
+    assert(d < 0.000000000000001, "the material's diffusivity is k / (rho cp)");
+    var t, v = us_thermal_diffusivity(k, rho, cp);
+    var byfn: f64 = okv(t, v, "transfer's diffusivity is Ok");
+    var d2: f64 = absdiff(byfn, method);
+    assert(d2 < 0.000000000000001, "and transfer's agrees");
+}
+
+# Dittus–Boelter → Nu → h → convection for air over a 0.1 m plate.
+# rust tests/integration.rs: nusselt_to_h_to_convection_chain
+fn nusselt_to_h_to_convection_chain() {
+    test_group("Nusselt to h to convection");
+    var t, v = us_nusselt_dittus_boelter(50000.0, 0.7);
+    var nu: f64 = okv(t, v, "Dittus-Boelter is Ok");
+    var h: f64 = nu * 0.026 / 0.1;
+    var q: f64 = us_convection(h, 0.1, 373.15, 293.15);
+    assert(q > 0.0, "heat flows to the cooler air");
+    assert(h > 1.0 && h < 1000.0, "h is reasonable for forced convection");
+}
+
+# One counter-flow exchanger by LMTD and by ε-NTU: the same heat within 1 %.
+# rust tests/integration.rs: lmtd_vs_ntu_same_heat_exchanger
+fn lmtd_vs_ntu_same_heat_exchanger() {
+    test_group("LMTD and e-NTU agree");
+    var t, v = us_lmtd_counter(400.0, 350.0, 300.0, 330.0);
+    var lmtd: f64 = okv(t, v, "LMTD is Ok");
+    var q_lmtd: f64 = us_heat_exchanger_lmtd(500.0, 2.0, lmtd);
+    var c_h: f64 = q_lmtd / (400.0 - 350.0);
+    var c_c: f64 = q_lmtd / (330.0 - 300.0);
+    var c_min: f64 = _us_min(c_h, c_c);
+    var c_max: f64 = _us_max(c_h, c_c);
+    var cr: f64 = c_min / c_max;
+    var t2, v2 = us_ntu(500.0, 2.0, c_min);
+    var n: f64 = okv(t2, v2, "NTU is Ok");
+    var t3, v3 = us_effectiveness_counter(n, cr);
+    var eff: f64 = okv(t3, v3, "effectiveness is Ok");
+    var q_ntu: f64 = us_heat_exchanger_ntu(eff, c_min, 400.0, 300.0);
+    var d: f64 = absdiff(q_lmtd, q_ntu);
+    var rel: f64 = d / q_lmtd;
+    assert(rel < 0.01, "Q by LMTD = Q by e-NTU within 1%");
+}
+
+# Coaxial disks obey reciprocity A₁F₁₂ = A₂F₂₁.
+# rust tests/integration.rs: view_factor_reciprocity
+fn view_factor_reciprocity() {
+    test_group("view-factor reciprocity");
+    var t, v = us_view_factor_coaxial_disks(0.3, 0.5, 0.4);
+    var f12: f64 = okv(t, v, "F12 is Ok");
+    var t2, v2 = us_view_factor_coaxial_disks(0.5, 0.3, 0.4);
+    var f21: f64 = okv(t2, v2, "F21 is Ok");
+    var pi: f64 = F64_PI;
+    var a1: f64 = pi * 0.3 * 0.3;
+    var a2: f64 = pi * 0.5 * 0.5;
+    var a1f: f64 = a1 * f12;
+    var a2f: f64 = a2 * f21;
+    var d: f64 = absdiff(a1f, a2f);
+    var rel: f64 = d / a1f;
+    assert(rel < 0.01, "A1 F12 = A2 F21");
+}
+
+# Runs every test and returns the failure count.
+fn main() {
+    alloc_init();
+    heat_conduction_through_copper_wall();
+    thermal_equilibrium_lumped_capacitance();
+    material_thermal_diffusivity_matches_manual();
+    nusselt_to_h_to_convection_chain();
+    lmtd_vs_ntu_same_heat_exchanger();
+    view_factor_reciprocity();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

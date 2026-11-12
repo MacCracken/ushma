@@ -58,7 +58,20 @@ jobs:
       - name: Audit (fmt, lint, docs, tests, bench)
         run: cyrius audit
 
-      # From M1: `cyrius distlib --check` (both bundles, [lib] and [lib.ai]), surface parity
-      # against rust-old/, the Rust-test ledger and the fuzz targets (port plan §6). The golden
-      # corpus is generated locally from rust-old/, so CI has no Rust job; the PE (wine) and
-      # aarch64 (qemu) runs are local release gates (scripts/gates.sh).
+      - name: Bundles current ([lib] and [lib.ai])
+        run: cyrius distlib --check
+
+      - name: Fuzz every reader of untrusted input
+        run: cyrius fuzz --poison --bounds
+
+      - name: Coverage (execution, at least 80 %)
+        run: cyrius coverage --exec --min 80
+
+      - name: Surface parity against rust-old/
+        run: python3 -I -B scripts/surface_parity.py .
+
+      - name: Rust-test ledger
+        run: python3 -I -B scripts/rust_test_ledger.py . --check
+
+      # The golden corpus is generated locally from rust-old/, so CI has no Rust job; the PE (wine)
+      # and aarch64 (qemu) runs are local release gates (scripts/gates.sh).

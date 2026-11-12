@@ -9,22 +9,22 @@
 # `conductivity=-1`); otherwise it costs one level test. The value is written by fmtf's Display form into a stack
 # buffer, so a refusal never allocates unless a value's text is longer than the buffer.
 
-# 1 when x is finite and strictly greater than `bound`, else 0.
+# 1 when x is finite and strictly greater than `bound` (a finite bound), else 0. `x > bound` is false for NaN and −∞,
+# `x < +∞` for NaN and +∞, so one branch-free expression is the whole test, and #inline takes it: three checks cost
+# 6 ns instead of 21 (M1d's review, docs/benchmarks-rust-v-cyrius.md).
 #must_use
 #pure
+#inline
 fn _us_finite_gt(x: f64, bound: f64): i64 {
-    if (_us_is_finite(x) == 0) { return 0; }
-    if (x > bound) { return 1; }
-    return 0;
+    return (x > bound) & (x < _US_INF);
 }
 
-# 1 when x is finite and greater than or equal to `bound`, else 0.
+# 1 when x is finite and greater than or equal to `bound` (a finite bound), else 0, as _us_finite_gt.
 #must_use
 #pure
+#inline
 fn _us_finite_ge(x: f64, bound: f64): i64 {
-    if (_us_is_finite(x) == 0) { return 0; }
-    if (x >= bound) { return 1; }
-    return 0;
+    return (x >= bound) & (x < _US_INF);
 }
 
 # A str_builder over a caller's stack buffer: header `hdr` (24 bytes: buf, len, cap) on `buf` of `cap` bytes. It grows
@@ -92,6 +92,19 @@ fn _us_fail_ff(code, fname, what, w1, x1: f64, w2, x2: f64): i64 {
         str_builder_putc(vb, 61);
         _us_fmt_f64_display(vb, x2);
         _us_fail_event(code, fname, what, vb);
+    }
+    return code;
+}
+
+# The refusal of `fname` with `code` on the text [p, p + n), named `what` (`"name"`). Returns `code`.
+#must_use
+fn _us_fail_s(code, fname, what, p, n): i64 {
+    if (sakshi_get_level() >= SK_DEBUG) {
+        var vh[24];
+        store64(&vh, p);
+        store64(&vh + 8, n);
+        store64(&vh + 16, n);
+        _us_fail_event(code, fname, what, &vh);
     }
     return code;
 }

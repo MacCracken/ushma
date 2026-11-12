@@ -1,8 +1,10 @@
-# transfer tests (M1c: conduction to boundary layers).
+# transfer tests.
 #
-# Rust 1.4.0's transfer.rs tests for these 18 functions, ported one for one (32), plus the part-1 assertions of the
-# two shared ones (`test_transfer_validation_consistency`, `test_transfer_rejects_nan`; their part-2 assertions join
-# with M1d). Each also checks the refusal's code, which Rust's `is_err()` leaves open.
+# Rust 1.4.0's 67 transfer.rs tests, ported one for one: conduction to boundary layers (32), fins (7), LMTD (5), ε-NTU
+# (7), view factors (10), the 1.4.0 audit's regressions (4), and the two shared ones
+# (`test_transfer_validation_consistency`, `test_transfer_rejects_nan`), whose assertions sit with the functions they
+# test. Each also checks the refusal's code, which Rust's `is_err()` leaves open. Then a reference test of the spans:
+# the seven functions Rust instruments open a DEBUG span under Rust's span name, and close it on every path.
 
 include "src/constants.cyr"
 include "src/error.cyr"
@@ -37,7 +39,31 @@ fn errc(t, v, code, name) {
     return 0;
 }
 
+# |a/b − 1| < tol as 1 or 0.
+fn rel_close(a: f64, b: f64, tol: f64): i64 {
+    var r: f64 = a / b - 1.0;
+    if (r < 0.0) { r = 0.0 - r; }
+    if (r < tol) { return 1; }
+    return 0;
+}
+
+# The ring's raw bytes contain the C string `s`: 1 or 0.
+fn ring_has(s): i64 {
+    var cap = 8192;
+    var buf = alloc(cap);
+    var n = sakshi_ring_read_raw(buf, cap);
+    var sl = strlen(s);
+    var k = 0;
+    while (k + sl <= n) {
+        if (memeq(buf + k, s, sl) == 1) { return 1; }
+        k = k + 1;
+    }
+    return 0;
+}
+
 # Fourier conduction: flux, zero gradient, and its refusals (Rust's conduction tests).
+# rust src/transfer.rs: test_conduction_positive_flux, test_conduction_zero_gradient, test_invalid_conductivity
+# rust src/transfer.rs: test_conduction_zero_thickness, test_conduction_rejects_nan_and_inf
 fn test_conduction() {
     test_group("conduction");
     var t, v = us_conduction(401.0, 0.01, 373.15, 293.15, 0.1);
@@ -59,6 +85,8 @@ fn test_conduction() {
 }
 
 # Newton cooling and Stefan–Boltzmann radiation, with radiation's emissivity and temperature refusals.
+# rust src/transfer.rs: test_convection, test_radiation, test_radiation_negative_temp, test_radiation_invalid_emissivity
+# rust src/transfer.rs: test_radiation_nan_emissivity, test_transfer_rejects_nan
 fn test_convection_radiation() {
     test_group("convection, radiation");
     var q: f64 = us_convection(25.0, 1.0, 373.15, 293.15);
@@ -83,6 +111,9 @@ fn test_convection_radiation() {
 }
 
 # Series and parallel resistance, and the conduction and convection resistances' refusals.
+# rust src/transfer.rs: test_thermal_resistance_series, test_thermal_resistance_parallel
+# rust src/transfer.rs: test_thermal_resistance_parallel_single, test_thermal_resistance_convection_zero
+# rust src/transfer.rs: test_transfer_validation_consistency
 fn test_resistances() {
     test_group("thermal resistances");
     var l[24];
@@ -123,6 +154,9 @@ fn test_resistances() {
 }
 
 # Heat stored, diffusivity, the Biot number and lumped-capacitance cooling.
+# rust src/transfer.rs: test_heat_stored, test_heat_stored_negative_delta, test_thermal_diffusivity
+# rust src/transfer.rs: test_thermal_diffusivity_zero_density, test_biot_number, test_biot_number_zero_conductivity
+# rust src/transfer.rs: test_lumped_capacitance, test_transfer_validation_consistency
 fn test_storage_diffusivity_biot() {
     test_group("heat stored, diffusivity, Biot, lumped capacitance");
     var q: f64 = us_heat_stored(1.0, 4186.0, 10.0);
@@ -151,6 +185,10 @@ fn test_storage_diffusivity_biot() {
 }
 
 # Reynolds, Prandtl and Nusselt numbers, Dittus–Boelter and Churchill–Chu.
+# rust src/transfer.rs: test_reynolds_number, test_reynolds_invalid, test_prandtl_number, test_nusselt_number
+# rust src/transfer.rs: test_dittus_boelter, test_dittus_boelter_invalid, test_nusselt_natural_vertical
+# rust src/transfer.rs: test_nusselt_natural_vertical_zero_ra, test_transfer_validation_consistency
+# rust src/transfer.rs: test_transfer_rejects_nan
 fn test_dimensionless() {
     test_group("dimensionless numbers");
     var t, v = us_reynolds_number(1.0, 0.1, 0.000001);
@@ -192,6 +230,7 @@ fn test_dimensionless() {
 }
 
 # The Blasius and thermal boundary-layer thicknesses.
+# rust src/transfer.rs: test_boundary_layer_thickness, test_thermal_boundary_layer, test_boundary_layer_invalid
 fn test_boundary_layers() {
     test_group("boundary layers");
     var t, v = us_boundary_layer_thickness(0.5, 100000.0);
@@ -208,6 +247,284 @@ fn test_boundary_layers() {
     errc(t5, v5, US_ERR_INVALID_PARAMETER, "Pr = 0");
 }
 
+# Fin parameter, rectangular-fin heat, efficiency and effectiveness (Rust's 7 fin tests, and the fin assertions of the
+# shared validation test).
+# rust src/transfer.rs: test_fin_parameter, test_fin_rectangular_heat, test_fin_efficiency_short_fin
+# rust src/transfer.rs: test_fin_efficiency_long_fin, test_fin_efficiency_zero_length
+# rust src/transfer.rs: test_fin_effectiveness_greater_than_one, test_fin_parameter_invalid
+# rust src/transfer.rs: test_transfer_validation_consistency
+fn test_fins() {
+    test_group("fins");
+    var t, v = us_fin_parameter(25.0, 0.02, 237.0, 0.0001);
+    var m: f64 = okv(t, v, "fin parameter is Ok");
+    assert_eq(close(m, 4.59, 0.1), 1, "aluminium fin: m ~ 4.59 1/m");
+    var t2, v2 = us_fin_rectangular_heat(25.0, 0.02, 237.0, 0.0001, 0.05, 373.15, 293.15);
+    var q: f64 = okv(t2, v2, "fin heat is Ok");
+    assert(q > 0.0, "heat flows from the hot base to the cooler fluid");
+    var t3, v3 = us_fin_efficiency_rectangular(5.0, 0.001);
+    var es: f64 = okv(t3, v3, "short fin is Ok");
+    assert_eq(close(es, 1.0, 0.01), 1, "a very short fin: eta ~ 1");
+    var t4, v4 = us_fin_efficiency_rectangular(5.0, 0.5);
+    var el: f64 = okv(t4, v4, "long fin is Ok");
+    assert(el < 1.0 && el > 0.0, "a long fin: 0 < eta < 1");
+    var t5, v5 = us_fin_efficiency_rectangular(5.0, 0.0);
+    var e0: f64 = okv(t5, v5, "zero length is Ok");
+    assert_eq(close(e0, 1.0, 0.0000000001), 1, "a zero-length fin is 100% efficient");
+    var t6, v6 = us_fin_effectiveness(q, 25.0, 0.0001, 373.15, 293.15);
+    var eff: f64 = okv(t6, v6, "effectiveness is Ok");
+    assert(eff > 1.0, "the fin improves heat transfer: effectiveness > 1");
+    var t7, v7 = us_fin_parameter(25.0, 0.02, 0.0, 0.0001);
+    errc(t7, v7, US_ERR_DIVISION_BY_ZERO, "k = 0");
+    var t8, v8 = us_fin_parameter(25.0, 0.0, 237.0, 0.0001);
+    errc(t8, v8, US_ERR_INVALID_PARAMETER, "P = 0");
+    var t9, v9 = us_fin_parameter(25.0, 0.1, -200.0, -0.0001);
+    errc(t9, v9, US_ERR_DIVISION_BY_ZERO, "negative k and A_c");
+    var ta, va = us_fin_efficiency_rectangular(-10.0, 0.05);
+    errc(ta, va, US_ERR_INVALID_PARAMETER, "negative m");
+    var tb, vb = us_fin_rectangular_heat(25.0, 0.02, 237.0, 0.0001, 0.0, 373.15, 293.15);
+    errc(tb, vb, US_ERR_INVALID_PARAMETER, "zero fin length");
+    var tc, vc = us_fin_effectiveness(q, 25.0, 0.0001, 300.0, 300.0);
+    errc(tc, vc, US_ERR_DIVISION_BY_ZERO, "no temperature difference");
+}
+
+# Parallel- and counter-flow LMTD and the LMTD heat rate (Rust's 5 LMTD tests, and the NaN assertion of the shared
+# test).
+# rust src/transfer.rs: test_lmtd_parallel, test_lmtd_counter, test_lmtd_counter_gte_parallel, test_lmtd_invalid
+# rust src/transfer.rs: test_heat_exchanger_lmtd_basic, test_transfer_rejects_nan
+fn test_lmtd() {
+    test_group("LMTD");
+    var t, v = us_lmtd_parallel(150.0, 100.0, 30.0, 80.0);
+    var lp: f64 = okv(t, v, "parallel LMTD is Ok");
+    var l6: f64 = _us_cr_ln(6.0);
+    var want: f64 = (120.0 - 20.0) / l6;
+    assert_eq(close(lp, want, 0.1), 1, "dT1 = 120, dT2 = 20");
+    var t2, v2 = us_lmtd_counter(150.0, 100.0, 30.0, 80.0);
+    var lc: f64 = okv(t2, v2, "counter LMTD is Ok");
+    assert_eq(close(lc, 70.0, 0.1), 1, "equal differences: the arithmetic mean, 70");
+    var t3, v3 = us_lmtd_parallel(200.0, 120.0, 50.0, 90.0);
+    var p3: f64 = okv(t3, v3, "parallel is Ok");
+    var t4, v4 = us_lmtd_counter(200.0, 120.0, 50.0, 90.0);
+    var c4: f64 = okv(t4, v4, "counter is Ok");
+    assert(c4 >= p3, "counter-flow LMTD >= parallel-flow");
+    var t5, v5 = us_lmtd_parallel(50.0, 40.0, 60.0, 30.0);
+    errc(t5, v5, US_ERR_INVALID_PARAMETER, "cold side hotter at the inlet");
+    var t6, v6 = us_lmtd_counter(_nan, 340.0, 290.0, 320.0);
+    errc(t6, v6, US_ERR_INVALID_PARAMETER, "NaN inlet");
+    var q: f64 = us_heat_exchanger_lmtd(500.0, 2.0, 50.0);
+    assert_eq(close(q, 50000.0, 0.0000000001), 1, "Q = UA LMTD");
+}
+
+# NTU, parallel- and counter-flow effectiveness and the e-NTU heat rate (Rust's 7 e-NTU tests, and the infinite-NTU
+# assertion of the shared test).
+# rust src/transfer.rs: test_ntu_basic, test_effectiveness_parallel_increases_with_ntu
+# rust src/transfer.rs: test_effectiveness_counter_gte_parallel, test_effectiveness_counter_balanced
+# rust src/transfer.rs: test_effectiveness_cr_zero, test_effectiveness_invalid, test_heat_exchanger_ntu_basic
+# rust src/transfer.rs: test_transfer_rejects_nan
+fn test_entu() {
+    test_group("e-NTU");
+    var t, v = us_ntu(500.0, 2.0, 1000.0);
+    var n: f64 = okv(t, v, "NTU is Ok");
+    assert_eq(close(n, 1.0, 0.0000000001), 1, "UA / C_min = 1");
+    var t2, v2 = us_effectiveness_parallel(1.0, 0.5);
+    var e1: f64 = okv(t2, v2, "NTU = 1 is Ok");
+    var t3, v3 = us_effectiveness_parallel(3.0, 0.5);
+    var e3: f64 = okv(t3, v3, "NTU = 3 is Ok");
+    assert(e3 > e1, "effectiveness rises with NTU");
+    assert(e3 <= 1.0, "and stays at most 1");
+    var t4, v4 = us_effectiveness_parallel(2.0, 0.5);
+    var ep: f64 = okv(t4, v4, "parallel is Ok");
+    var t5, v5 = us_effectiveness_counter(2.0, 0.5);
+    var ec: f64 = okv(t5, v5, "counter is Ok");
+    assert(ec >= ep, "counter-flow >= parallel-flow");
+    var t6, v6 = us_effectiveness_counter(2.0, 1.0);
+    var eb: f64 = okv(t6, v6, "balanced is Ok");
+    var two3: f64 = 2.0 / 3.0;
+    assert_eq(close(eb, two3, 0.0000000001), 1, "C_r = 1: NTU / (1 + NTU)");
+    var e2: f64 = _us_cr_exp(0.0 - 2.0);
+    var w0: f64 = 1.0 - e2;
+    var t7, v7 = us_effectiveness_parallel(2.0, 0.0);
+    var p0: f64 = okv(t7, v7, "C_r = 0, parallel, is Ok");
+    assert_eq(close(p0, w0, 0.0000000001), 1, "a condenser, parallel: 1 - exp(-NTU)");
+    var t8, v8 = us_effectiveness_counter(2.0, 0.0);
+    var c0: f64 = okv(t8, v8, "C_r = 0, counter, is Ok");
+    assert_eq(close(c0, w0, 0.0000000001), 1, "a condenser, counter: 1 - exp(-NTU)");
+    var t9, v9 = us_effectiveness_parallel(-1.0, 0.5);
+    errc(t9, v9, US_ERR_INVALID_PARAMETER, "negative NTU");
+    var ta, va = us_effectiveness_parallel(2.0, 1.5);
+    errc(ta, va, US_ERR_INVALID_PARAMETER, "C_r above 1");
+    var tb, vb = us_effectiveness_counter(2.0, -0.1);
+    errc(tb, vb, US_ERR_INVALID_PARAMETER, "C_r below 0");
+    var tc, vc = us_effectiveness_counter(_inf, 0.5);
+    errc(tc, vc, US_ERR_INVALID_PARAMETER, "infinite NTU");
+    var td, vd = us_effectiveness_parallel(2.0, _nan);
+    errc(td, vd, US_ERR_INVALID_PARAMETER, "NaN C_r");
+    var te, ve = us_ntu(500.0, 2.0, 0.0);
+    errc(te, ve, US_ERR_DIVISION_BY_ZERO, "C_min = 0");
+    var qn: f64 = us_heat_exchanger_ntu(0.8, 1000.0, 200.0, 50.0);
+    var wq: f64 = 0.8 * 1000.0 * 150.0;
+    assert_eq(close(qn, wq, 0.0000000001), 1, "Q = e C_min (T_h,in - T_c,in)");
+}
+
+# Parallel, perpendicular and coaxial-disk view factors (Rust's 10 view-factor tests, and the NaN assertion of the
+# shared test).
+# rust src/transfer.rs: test_view_factor_parallel_plates_close, test_view_factor_parallel_plates_far
+# rust src/transfer.rs: test_view_factor_parallel_plates_range, test_view_factor_parallel_plates_invalid
+# rust src/transfer.rs: test_view_factor_perpendicular_range, test_view_factor_perpendicular_invalid
+# rust src/transfer.rs: test_view_factor_coaxial_disks_equal, test_view_factor_coaxial_disks_far
+# rust src/transfer.rs: test_view_factor_coaxial_disks_range, test_view_factor_invalid, test_transfer_rejects_nan
+fn test_view_factors() {
+    test_group("view factors");
+    var t, v = us_view_factor_parallel_plates(10.0, 10.0, 0.1);
+    var fc: f64 = okv(t, v, "close plates are Ok");
+    assert(fc > 0.9, "large plates close together: F near 1");
+    var t2, v2 = us_view_factor_parallel_plates(0.1, 0.1, 10.0);
+    var ff: f64 = okv(t2, v2, "far plates are Ok");
+    assert(ff < 0.01, "small plates far apart: F near 0");
+    var t3, v3 = us_view_factor_parallel_plates(1.0, 1.0, 1.0);
+    var f1: f64 = okv(t3, v3, "unit plates are Ok");
+    assert(f1 > 0.0 && f1 < 1.0, "0 < F < 1");
+    var t4, v4 = us_view_factor_parallel_plates(0.0, 1.0, 1.0);
+    errc(t4, v4, US_ERR_INVALID_PARAMETER, "W = 0");
+    var t5, v5 = us_view_factor_parallel_plates(1.0, 0.0, 1.0);
+    errc(t5, v5, US_ERR_INVALID_PARAMETER, "H = 0");
+    var t6, v6 = us_view_factor_parallel_plates(1.0, 1.0, 0.0);
+    errc(t6, v6, US_ERR_INVALID_PARAMETER, "D = 0");
+    var t7, v7 = us_view_factor_perpendicular_plates(1.0, 1.0, 1.0);
+    var fp: f64 = okv(t7, v7, "perpendicular squares are Ok");
+    assert(fp > 0.0 && fp < 1.0, "0 < F < 1");
+    var t8, v8 = us_view_factor_perpendicular_plates(0.0, 1.0, 1.0);
+    errc(t8, v8, US_ERR_INVALID_PARAMETER, "W = 0");
+    var t9, v9 = us_view_factor_coaxial_disks(1.0, 1.0, 0.1);
+    var fd: f64 = okv(t9, v9, "close disks are Ok");
+    assert(fd > 0.9, "equal disks close together: F near 1");
+    var ta, va = us_view_factor_coaxial_disks(0.1, 0.1, 10.0);
+    var fe: f64 = okv(ta, va, "far disks are Ok");
+    assert(fe < 0.01, "far apart: F near 0");
+    var tb, vb = us_view_factor_coaxial_disks(0.5, 0.5, 1.0);
+    var fh: f64 = okv(tb, vb, "half-radius disks are Ok");
+    assert(fh > 0.0 && fh < 1.0, "0 < F < 1");
+    var tc, vc = us_view_factor_coaxial_disks(0.0, 0.5, 1.0);
+    errc(tc, vc, US_ERR_INVALID_PARAMETER, "r1 = 0");
+    var td, vd = us_view_factor_coaxial_disks(0.5, 0.0, 1.0);
+    errc(td, vd, US_ERR_INVALID_PARAMETER, "r2 = 0");
+    var te, ve = us_view_factor_coaxial_disks(0.5, 0.5, 0.0);
+    errc(te, ve, US_ERR_INVALID_PARAMETER, "d = 0");
+    var tf, vf = us_view_factor_coaxial_disks(_nan, 1.0, 1.0);
+    errc(tf, vf, US_ERR_INVALID_PARAMETER, "NaN r1");
+}
+
+# The perpendicular factor at one (W, H1, H2) against its reference value.
+fn perp_ref(w: f64, h1: f64, h2: f64, want: f64, name) {
+    var t, v = us_view_factor_perpendicular_plates(w, h1, h2);
+    var f: f64 = okv(t, v, name);
+    assert_eq(close(f, want, 0.00000001), 1, name);
+    return 0;
+}
+
+# Reciprocity A1 F12 = A2 F21 for perpendicular plates at (W, H1, H2).
+fn perp_recip(w: f64, h1: f64, h2: f64, name) {
+    var t, v = us_view_factor_perpendicular_plates(w, h1, h2);
+    var f12: f64 = okv(t, v, name);
+    var t2, v2 = us_view_factor_perpendicular_plates(w, h2, h1);
+    var f21: f64 = okv(t2, v2, name);
+    var a: f64 = w * h1 * f12;
+    var b: f64 = w * h2 * f21;
+    assert_eq(close(a, b, 0.000000000001), 1, name);
+    return 0;
+}
+
+# Small parallel plates x × x at D = 1 against the asymptote x²/π.
+fn par_small(x: f64, name) {
+    var t, v = us_view_factor_parallel_plates(x, x, 1.0);
+    var f: f64 = okv(t, v, name);
+    var pi: f64 = F64_PI;
+    var asym: f64 = x * x / pi;
+    assert_eq(rel_close(f, asym, 0.0001), 1, name);
+    return 0;
+}
+
+# Small equal coaxial disks r at d = 1 against r²/(1 + r²).
+fn disk_small(r: f64, name) {
+    var t, v = us_view_factor_coaxial_disks(r, r, 1.0);
+    var f: f64 = okv(t, v, name);
+    var want: f64 = r * r / (1.0 + r * r);
+    assert_eq(rel_close(f, want, 0.001), 1, name);
+    return 0;
+}
+
+# The 1.4.0 audit's regressions: the perpendicular formula's reference values and reciprocity, and the
+# cancellation-free small-plate and small-disk forms (Rust's 4 regression tests).
+# rust src/transfer.rs: test_view_factor_perpendicular_reference_values, test_view_factor_perpendicular_reciprocity
+# rust src/transfer.rs: test_view_factor_parallel_small_plates, test_view_factor_coaxial_small_disks
+fn test_view_factor_regressions() {
+    test_group("view factors (1.4.0 regressions)");
+    perp_ref(1.0, 1.0, 1.0, 0.200043776, "unit squares: 0.200043776");
+    perp_ref(1.0, 1.0, 2.0, 0.232852603, "(1, 1, 2): 0.232852603");
+    perp_ref(1.0, 1.0, 10.0, 0.249209486, "(1, 1, 10): 0.249209486");
+    perp_ref(2.0, 1.0, 1.0, 0.240636006, "(2, 1, 1): 0.240636006");
+    perp_recip(1.0, 1.0, 2.0, "reciprocity (1, 1, 2)");
+    perp_recip(0.3, 2.0, 0.7, "reciprocity (0.3, 2, 0.7)");
+    perp_recip(5.0, 0.1, 3.0, "reciprocity (5, 0.1, 3)");
+    par_small(0.0001, "plates 1e-4: the asymptote");
+    par_small(0.001, "plates 1e-3: the asymptote");
+    par_small(0.005, "plates 5e-3: the asymptote");
+    var t, v = us_view_factor_parallel_plates(0.0099999, 0.0099999, 1.0);
+    var below: f64 = okv(t, v, "just below the switch");
+    var t2, v2 = us_view_factor_parallel_plates(0.0100001, 0.0100001, 1.0);
+    var above: f64 = okv(t2, v2, "just above the switch");
+    assert_eq(rel_close(below, above, 0.0001), 1, "continuous across the switch at 0.01");
+    disk_small(0.01, "disks 1e-2: r^2/(d^2 + r^2)");
+    disk_small(0.0001, "disks 1e-4: r^2/(d^2 + r^2)");
+    disk_small(0.00003, "disks 3e-5: r^2/(d^2 + r^2)");
+    var t3, v3 = us_view_factor_coaxial_disks(1.0, 1.0, 1.0);
+    var f: f64 = okv(t3, v3, "unit disks are Ok");
+    assert_eq(close(f, 0.381966011250105, 0.000000000001), 1, "unit disks: (3 - sqrt 5) / 2");
+}
+
+# The span named `name` opened and closed: depth back to 0, and `events` events in the ring (ENTER and EXIT, with the
+# failure event between them on a refusal).
+fn span_seen(name, events, label) {
+    assert_eq(sakshi_span_depth(), 0, label);
+    assert_eq(sakshi_ring_event_count(), events, label);
+    assert_eq(ring_has(name), 1, label);
+    sakshi_ring_clear();
+    return 0;
+}
+
+# The seven instrumented functions open a DEBUG span under Rust's span name and close it on Ok and on Err; at INFO
+# they record nothing.
+fn test_spans() {
+    test_group("spans");
+    sakshi_output_buffer();
+    sakshi_set_level(SK_DEBUG);
+    sakshi_ring_clear();
+    var t, v = us_conduction(401.0, 1.0, 400.0, 300.0, 0.1);
+    span_seen("conduction", 2, "conduction");
+    var t1, v1 = us_conduction(-1.0, 1.0, 400.0, 300.0, 0.1);
+    span_seen("conduction", 3, "conduction, refused");
+    var t2, v2 = us_radiation(0.9, 1.0, 500.0, 300.0);
+    span_seen("radiation", 2, "radiation");
+    var t3, v3 = us_fin_rectangular_heat(25.0, 0.02, 237.0, 0.0001, 0.05, 373.15, 293.15);
+    span_seen("fin_rectangular_heat", 2, "fin_rectangular_heat");
+    var t4, v4 = us_fin_rectangular_heat(25.0, 0.02, 0.0, 0.0001, 0.05, 373.15, 293.15);
+    span_seen("fin_rectangular_heat", 3, "fin_rectangular_heat, refused");
+    var t5, v5 = us_lmtd_parallel(150.0, 100.0, 30.0, 80.0);
+    span_seen("lmtd_parallel", 2, "lmtd_parallel");
+    var t6, v6 = us_lmtd_counter(150.0, 100.0, 30.0, 80.0);
+    span_seen("lmtd_counter", 2, "lmtd_counter");
+    var t7, v7 = us_view_factor_parallel_plates(1.0, 1.0, 1.0);
+    span_seen("view_factor_parallel_plates", 2, "view_factor_parallel_plates");
+    var t8, v8 = us_view_factor_parallel_plates(0.0, 1.0, 1.0);
+    span_seen("view_factor_parallel_plates", 3, "view_factor_parallel_plates, refused");
+    var t9, v9 = us_view_factor_perpendicular_plates(1.0, 1.0, 1.0);
+    span_seen("view_factor_perpendicular_plates", 2, "view_factor_perpendicular_plates");
+    sakshi_set_level(SK_INFO);
+    sakshi_ring_clear();
+    var ta, va = us_lmtd_counter(150.0, 100.0, 30.0, 80.0);
+    assert_eq(sakshi_ring_event_count(), 0, "no span event at INFO");
+    assert_eq(sakshi_span_depth(), 0, "no span opened at INFO");
+}
+
 # Runs every group and returns the failure count.
 fn main() {
     alloc_init();
@@ -219,6 +536,12 @@ fn main() {
     test_storage_diffusivity_biot();
     test_dimensionless();
     test_boundary_layers();
+    test_fins();
+    test_lmtd();
+    test_entu();
+    test_view_factors();
+    test_view_factor_regressions();
+    test_spans();
     return assert_summary();
 }
 

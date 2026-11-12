@@ -137,6 +137,36 @@ fn b_nusselt_db(x): i64 {
     return v;
 }
 
+# fin_rectangular_heat(25, 0.02, 237, 1e-4, 0.05, 373.15, 293.15).
+fn b_fin_heat(x): i64 {
+    var t, v = us_fin_rectangular_heat(25.0, 0.02, 237.0, 0.0001, 0.05, 373.15, 293.15);
+    return v;
+}
+
+# lmtd_counter(400, 350, 300, 330).
+fn b_lmtd_counter(x): i64 {
+    var t, v = us_lmtd_counter(400.0, 350.0, 300.0, 330.0);
+    return v;
+}
+
+# effectiveness_counter(2, 0.5).
+fn b_eff_counter(x): i64 {
+    var t, v = us_effectiveness_counter(2.0, 0.5);
+    return v;
+}
+
+# view_factor_coaxial_disks(0.5, 0.5, 1).
+fn b_vf_disks(x): i64 {
+    var t, v = us_view_factor_coaxial_disks(0.5, 0.5, 1.0);
+    return v;
+}
+
+# view_factor_perpendicular_plates(1, 1, 2).
+fn b_vf_perpendicular(x): i64 {
+    var t, v = us_view_factor_perpendicular_plates(1.0, 1.0, 2.0);
+    return v;
+}
+
 # Fills the two resistance lists the benchmarks use.
 fn bn_lists() {
     _bn_series = alloc(40);
@@ -197,6 +227,11 @@ fn main(): i64 {
     bn_run("transfer/lumped_capacitance", &b_lumped, 0, 1000000);
     bn_run("transfer/reynolds", &b_reynolds, 0, 1000000);
     bn_run("transfer/nusselt_db", &b_nusselt_db, 0, 1000000);
+    bn_run("transfer/fin_rect_heat", &b_fin_heat, 0, 1000000);
+    bn_run("transfer/lmtd_counter", &b_lmtd_counter, 0, 1000000);
+    bn_run("transfer/eff_counter", &b_eff_counter, 0, 1000000);
+    bn_run("transfer/view_factor_disks", &b_vf_disks, 0, 1000000);
+    bn_run("transfer/view_factor_perpendicular", &b_vf_perpendicular, 0, 1000000);
     return 0;
 }
 

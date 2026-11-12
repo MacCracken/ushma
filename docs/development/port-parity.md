@@ -422,10 +422,10 @@ serde_json's default float parse is best-effort, so the oracle crate enables `fl
 So P7 stands: hand-written codecs on bayan's tree, with the ADR 0005 amendment's rules. The summaries are identical on
 x86_64, PE and aarch64.
 
-## 4. M1 (2026-11-11)
+## 4. M1 (2026-11-11 to 2026-11-12)
 
-The harness's summary after M1c, identical on x86_64 ELF, `--bounds`, PE (wine) and aarch64 (qemu):
-`8 modules, 0 failing | rows: 51924 ok, 0 failed, 0 measured, 0 pending, 35 accepted (ADR 4: 30)`.
+The harness's summary at the end of M1, identical on x86_64 ELF, `--bounds`, PE (wine) and aarch64 (qemu):
+`8 modules, 0 failing | rows: 59803 ok, 0 failed, 0 measured, 0 pending, 39 accepted (ADR 4: 34)`.
 
 - **fmtf** (M1a): 26,088 rows, every one ok. The vendored printer writes Rust's `{}` and serde_json's text for 13,044
   doubles. `validate.py` checks each row independently (read-back, shortest digits, closest, form).
@@ -449,3 +449,27 @@ The harness's summary after M1c, identical on x86_64 ELF, `--bounds`, PE (wine) 
     (`transfer.cr.tsv`, each call listed). The port matches MPFR there, and the oracle's own results are 1–2 ulp off.
   - **`validate.py`'s models** recompute every transfer row in Rust's order. With glibc's primitives all 7,217 match;
     with MPFR's, they write the corrections.
+- **transfer, part 2** (M1d): 7,883 rows over 14 functions (fins, LMTD, ε-NTU, view factors), so 15,100 in all.
+  - **The grid** adds each function's branch switches to the edges: LMTD at ΔT₁ = ΔT₂, 1 and 2 ulps apart, and at
+    |ΔT₁/ΔT₂ − 1| = 1e-10 and its neighbours; ε-NTU over NTU 0…100 × C_r 0…1, with C_r at 1e-30 and 1 − 1e-10 and
+    their neighbours; the parallel-plate factor across max(X, Y) = 0.01; fin efficiency at m·L = 1e-30; the
+    perpendicular factor at aspect ratios where its clamp acts.
+  - **Class B** (fin parameter, fin effectiveness, the two heat rates, NTU, coaxial disks): every row bit-identical,
+    the 99 refusals included.
+  - **Class C** (the fin heat and efficiency, both LMTDs, both effectivenesses, the parallel and perpendicular
+    factors): 0 ulp against the corrected oracle, the 209 refusals included. glibc misrounds inside 4 rows, 3 `exp`
+    (two in parallel-flow effectiveness, one in counter-flow) and 1 `atan` (the parallel-plate factor), so
+    `transfer.cr.tsv` has 8 rows. The port matches MPFR there.
+  - **`validate.py`** models all 32 functions: 15,100 rows reproduced with glibc's primitives.
+- **The review** (M1d) changed two things, and every row above is unchanged by them:
+  - `_us_finite_gt` / `_us_finite_ge` are one branch-free expression, `(x > bound) & (x < +∞)`, which `#inline` takes
+    (three checks: 21 → 6 ns);
+  - Rust's `powi(2)` and `powi(4)` are written as the products `__powidf2` forms, x·x and (x·x)·(x·x).
+
+  The numbers are in `docs/benchmarks-rust-v-cyrius.md`.
+- **Surface parity** (`scripts/surface_parity.py`): every public item of error (19), logging (2), material (16) and
+  transfer (34) has its Cyrius name, and the 7 public constants of later modules have theirs. A missing name fails
+  it, as checked by renaming one.
+- **Tests** (`scripts/rust_test_ledger.py`, `docs/development/rust-test-ledger.md`): all 96 unit tests of error,
+  validate, logging, material and transfer are ported, and the 6 integration tests that call only transfer and
+  material (`tests/integration.tcyr`). The other 377 are counted under their milestones.

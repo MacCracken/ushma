@@ -470,6 +470,89 @@ fn _par_got_res(t, v) {
 
 var _par_list = 0;
 
+# One row of transfer's part 2 (fins, heat exchangers, view factors): 1 when handled, 0 for a function with no
+# counterpart.
+fn _par_transfer2(fp, fl): i64 {
+    var a: f64 = _par_in(0);
+    var b: f64 = _par_in(1);
+    var c: f64 = _par_in(2);
+    var d: f64 = _par_in(3);
+    var e: f64 = _par_in(4);
+    if (_par_eq(fp, fl, "transfer::fin_parameter") == 1) {
+        var t, v = us_fin_parameter(a, b, c, d);
+        _par_got_res(t, v);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::fin_rectangular_heat") == 1) {
+        var g5: f64 = _par_in(5);
+        var g6: f64 = _par_in(6);
+        var t1, v1 = us_fin_rectangular_heat(a, b, c, d, e, g5, g6);
+        _par_got_res(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::fin_efficiency_rectangular") == 1) {
+        var t2, v2 = us_fin_efficiency_rectangular(a, b);
+        _par_got_res(t2, v2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::fin_effectiveness") == 1) {
+        var t3, v3 = us_fin_effectiveness(a, b, c, d, e);
+        _par_got_res(t3, v3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::lmtd_parallel") == 1) {
+        var t4, v4 = us_lmtd_parallel(a, b, c, d);
+        _par_got_res(t4, v4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::lmtd_counter") == 1) {
+        var t5, v5 = us_lmtd_counter(a, b, c, d);
+        _par_got_res(t5, v5);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::heat_exchanger_lmtd") == 1) {
+        var q: f64 = us_heat_exchanger_lmtd(a, b, c);
+        _par_got_f(q);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::ntu") == 1) {
+        var t6, v6 = us_ntu(a, b, c);
+        _par_got_res(t6, v6);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::effectiveness_parallel") == 1) {
+        var t7, v7 = us_effectiveness_parallel(a, b);
+        _par_got_res(t7, v7);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::effectiveness_counter") == 1) {
+        var t8, v8 = us_effectiveness_counter(a, b);
+        _par_got_res(t8, v8);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::heat_exchanger_ntu") == 1) {
+        var qn: f64 = us_heat_exchanger_ntu(a, b, c, d);
+        _par_got_f(qn);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::view_factor_parallel_plates") == 1) {
+        var t9, v9 = us_view_factor_parallel_plates(a, b, c);
+        _par_got_res(t9, v9);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::view_factor_perpendicular_plates") == 1) {
+        var ta, va = us_view_factor_perpendicular_plates(a, b, c);
+        _par_got_res(ta, va);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "transfer::view_factor_coaxial_disks") == 1) {
+        var tb, vb = us_view_factor_coaxial_disks(a, b, c);
+        _par_got_res(tb, vb);
+        return 1;
+    }
+    return 0;
+}
+
 # One transfer row: 1 when handled, 0 for a function with no counterpart yet.
 fn _par_transfer(fp, fl): i64 {
     var a: f64 = _par_in(0);
@@ -571,7 +654,7 @@ fn _par_transfer(fp, fl): i64 {
         _par_got_res(td, vd);
         return 1;
     }
-    return 0;
+    return _par_transfer2(fp, fl);
 }
 
 # ── routing and hooks ───────────────────────────────────────────────────────────────
@@ -693,10 +776,8 @@ fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "f64::powf") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::atan") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::tanh") == 1) { return 0; }
-    if (_par_eq(fp, fl, "transfer::lumped_capacitance") == 1) { return 0; }
-    if (_par_eq(fp, fl, "transfer::nusselt_dittus_boelter") == 1) { return 0; }
-    if (_par_eq(fp, fl, "transfer::nusselt_natural_vertical") == 1) { return 0; }
-    if (_par_eq(fp, fl, "transfer::thermal_boundary_layer") == 1) { return 0; }
+    # Every class-C transfer function computes on the _us_cr_* primitives.
+    if (fl > 10 && _par_eq(fp, 10, "transfer::") == 1) { return 0; }
     return 0 - 1;
 }
 

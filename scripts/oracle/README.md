@@ -21,13 +21,13 @@ python3 -I -B scripts/oracle/validate.py .                                      
 `Cargo.lock` is committed. It was seeded from `rust-old/Cargo.lock`, so every shared
 dependency, hisab 1.4.0 above all, is the version the oracle was tested with.
 
-## What's generated (M0 parts 2a and 2b, M1a)
+## What's generated (M0 parts 2a and 2b, M1)
 
 | Output | Rows / lines | What it is |
 |---|---|---|
 | `tests/golden/constants.tsv` | 9 | every public scalar const of ushma 1.4.0 (8 `f64`, 1 `usize`), class A |
 | `tests/golden/fmtf.tsv` | 26,088 | Rust's `{}` and `serde_json::to_string` of 13,044 doubles (`m_fmtf.rs`: the specials, every power of two, the powers of ten ± 1 ulp, the form thresholds, 0 … 1000 in tenths and hundredths, 4,000 random bit patterns, 2,000 short decimals), class A; `validate.py` checks each text by its properties |
-| `tests/golden/transfer.tsv` | 7,217 | M1c (`m_transfer.rs`): each public transfer function over a seeded physical sweep and every argument at each edge; class B, or C where `exp` / `powf` enters (`transfer.cr.tsv`: 4 rows) |
+| `tests/golden/transfer.tsv` | 15,100 | M1c–M1d (`m_transfer.rs`): each of the 32 public transfer functions over a seeded physical sweep, every argument at each edge, and each branch switch (LMTD at ΔT₁ = ΔT₂ and across the 1e-10 band, NTU 0…100 × C_r 0…1 with both switches, view factors across 0.01); class B, or C where `exp`, `ln`, `powf`, `tanh` or `atan` enters (`transfer.cr.tsv`: 8 rows) |
 | `tests/golden/math.tsv` | 15,687 | every std f64 method ushma's library calls, over ushma's ranges (port plan §7.1) |
 | `tests/golden/material.tsv` | 2,927 | M1b (`m_material.rs`): the presets, then 1,410 rows per method (`diffusivity`, `volumetric_heat_capacity`, class B), 19 `to_json` and 77 `from_json` documents (class A; the variants from `json_cases.rs`, shared with probe 11) |
 | `tests/golden/{state,phase,chem}.tsv` | 9 / 9 / 13 | every public table preset (name + fields) and its `ALL_*` order, class A; each module's function rows join it at its milestone |
@@ -107,6 +107,11 @@ struct literal in the Rust source, and the `ALL_*` row against the slice's entri
 are checked against MPFR by the corrected-oracle tooling (M0 part 2c). Run it with
 `python3 -I -B`. A tampered row fails it, as checked when it was written.
 
+From M1 it also models each ported module's functions (`MODELS`; transfer's 32 so far): each is recomputed in Rust's
+operation order with Python binary64 arithmetic, its transcendentals (`exp`, `ln`, `pow`, `tanh`, `atan`) taken from
+glibc through ctypes, and every row must come out token for token. With MPFR's primitives instead, the same models
+give the module's corrected oracle (`<module>.cr.tsv`), each misrounded call recorded.
+
 ## mpfr_ref.py and the corrected oracle (ADR 0004)
 
 `mpfr_ref.py` calls the system MPFR (4.x, through ctypes): 53 bits, binary64's exponent range,
@@ -127,7 +132,7 @@ fn <TAB> inputs <TAB> corrected outputs <TAB> note
 
 The plain `validate.py .` run recomputes the file and checks it. On the recorded libm platform
 it also checks that each note's glibc value is this machine's libm result, and the exact text.
-26 rows at part 2c-2a: exp_m1 23, ln 1, powf 2.
+`math.cr.tsv` has 26 rows (exp_m1 23, ln 1, powf 2); `transfer.cr.tsv` has 8 (pow 4, exp 3, atan 1).
 
 ## mathx_tables.py
 

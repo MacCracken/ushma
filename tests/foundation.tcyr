@@ -1,10 +1,10 @@
 # M1a foundation tests: src/error.cyr, src/validate.cyr, src/logging.cyr.
 #
 # Rust 1.4.0's error.rs tests (18) check that each variant's Display text names its value. ushma's errors are
-# codes with fixed messages (ADR 0002 row 1), so these check the codes instead: one per Rust variant, in Rust's
-# order, each with its Rust name and a message; and that a refusal reports its value through sakshi at DEBUG and
-# stays silent otherwise. validate.rs's two tests (finite_gt / finite_ge on NaN and ±∞) and logging.rs's one
-# (init is safe to call twice) port as they are, with every USHMA_LOG form.
+# codes with fixed messages (ADR 0002 row 1), whose value goes to the refusal's sakshi event at DEBUG, so they port as
+# that event's text, one per Rust test; then the codes themselves, in Rust's order, each with its Rust name and a
+# message, and the refusal's silence below DEBUG. validate.rs's two tests (finite_gt / finite_ge on NaN and ±∞) and
+# logging.rs's one (init is safe to call twice) port as they are, with every USHMA_LOG form.
 
 include "src/constants.cyr"
 include "src/error.cyr"
@@ -26,6 +26,76 @@ fn ring_has(s): i64 {
         k = k + 1;
     }
     return 0;
+}
+
+# The f64 refusal with `code` on `x` (named `what`) at DEBUG: its event holds `k1` and `k2`.
+fn ev_f(code, what, x: f64, k1, k2, name) {
+    sakshi_ring_clear();
+    var c = _us_fail_f(code, "us_test", what, x);
+    assert_eq(c, code, name);
+    assert_eq(ring_has(k1), 1, name);
+    assert_eq(ring_has(k2), 1, name);
+    return 0;
+}
+
+# The two-value refusal with `code` on (T, P) at DEBUG: its event holds `k1` and `k2`.
+fn ev_ff(code, t: f64, pr: f64, k1, k2, name) {
+    sakshi_ring_clear();
+    var c = _us_fail_ff(code, "us_test", "state", "T", t, "P", pr);
+    assert_eq(c, code, name);
+    assert_eq(ring_has(k1), 1, name);
+    assert_eq(ring_has(k2), 1, name);
+    return 0;
+}
+
+# The text refusal with `code` on `s` (named `what`) at DEBUG: its event holds `s` and `k`.
+fn ev_s(code, what, s, k, name) {
+    sakshi_ring_clear();
+    var c = _us_fail_s(code, "us_test", what, s, strlen(s));
+    assert_eq(c, code, name);
+    assert_eq(ring_has(s), 1, name);
+    assert_eq(ring_has(k), 1, name);
+    return 0;
+}
+
+# Rust's 18 error.rs tests, one for one in the port's form. Rust checks that a variant's Display text names its subject
+# and its value; a refusal's DEBUG event carries both (`<fn>: <message>`, `<what>=<value>`, ADR 0002 row 1). Rust's
+# Debug text is the variant's name (us_error_name), and its Result alias is the value-form Result.
+# rust src/error.rs: test_invalid_temperature, test_invalid_pressure, test_invalid_volume, test_invalid_conductivity
+# rust src/error.rs: test_invalid_specific_heat, test_phase_transition, test_division_by_zero, test_invalid_parameter
+# rust src/error.rs: test_result_alias, test_substance_not_found, test_steam_table_out_of_range, test_invalid_quality
+# rust src/error.rs: test_superheat_out_of_range, test_invalid_compression_ratio, test_invalid_cutoff_ratio
+# rust src/error.rs: test_invalid_pressure_ratio, test_invalid_cycle_parameter, test_error_is_debug
+fn test_rust_error_variants() {
+    test_group("error variants (Rust 1.4.0's tests)");
+    sakshi_output_buffer();
+    sakshi_set_level(SK_DEBUG);
+    ev_f(US_ERR_INVALID_TEMPERATURE, "kelvin", -10.0, "-10", "positive", "InvalidTemperature names -10 K");
+    ev_f(US_ERR_INVALID_PRESSURE, "pascals", -100.0, "-100", "pressure", "InvalidPressure names -100 Pa");
+    ev_f(US_ERR_INVALID_VOLUME, "cubic_meters", -0.5, "-0.5", "volume", "InvalidVolume names -0.5 m^3");
+    ev_f(US_ERR_INVALID_CONDUCTIVITY, "value", -1.0, "-1", "conductivity", "InvalidConductivity names -1");
+    ev_f(US_ERR_INVALID_SPECIFIC_HEAT, "value", -500.0, "-500", "specific heat", "InvalidSpecificHeat names -500");
+    ev_ff(US_ERR_UNDEFINED_PHASE_TRANSITION, 373.15, 101325.0, "373.15", "phase", "phase transition names 373.15 K");
+    ev_s(US_ERR_DIVISION_BY_ZERO, "context", "heat flux", "division by zero", "DivisionByZero names its context");
+    ev_s(US_ERR_INVALID_PARAMETER, "reason", "mole count must be positive", "invalid parameter",
+        "InvalidParameter names its reason");
+    ev_s(US_ERR_SUBSTANCE_NOT_FOUND, "name", "unobtainium", "substance not found", "SubstanceNotFound names it");
+    ev_ff(US_ERR_STEAM_TABLE_OUT_OF_RANGE, 700.0, 100000000.0, "700", "steam table", "steam table names 700 K");
+    ev_f(US_ERR_INVALID_QUALITY, "quality", 1.5, "1.5", "[0, 1]", "InvalidQuality names 1.5 and [0, 1]");
+    ev_ff(US_ERR_SUPERHEAT_OUT_OF_RANGE, 200.0, 101325.0, "200", "superheated", "superheat names 200 K");
+    ev_f(US_ERR_INVALID_COMPRESSION_RATIO, "ratio", 0.5, "0.5", "compression", "compression ratio names 0.5");
+    ev_f(US_ERR_INVALID_CUTOFF_RATIO, "ratio", 0.8, "0.8", "cutoff", "cutoff ratio names 0.8");
+    ev_f(US_ERR_INVALID_PRESSURE_RATIO, "ratio", -1.0, "-1", "pressure ratio", "pressure ratio names -1");
+    ev_s(US_ERR_INVALID_CYCLE_PARAMETER, "reason", "T3 must exceed T2", "cycle parameter",
+        "InvalidCycleParameter names its reason");
+    sakshi_set_level(SK_INFO);
+    sakshi_ring_clear();
+    var t, v = Ok(300);
+    assert_eq(is_ok(t), 1, "an Ok Result is Ok");
+    var t2, v2 = Err(US_ERR_INVALID_TEMPERATURE);
+    assert_eq(is_err_result(t2), 1, "an Err Result is Err");
+    assert_eq(v2, US_ERR_INVALID_TEMPERATURE, "and carries its code");
+    assert_streq(us_error_name(US_ERR_INVALID_TEMPERATURE), "InvalidTemperature", "the Debug name");
 }
 
 # The codes: Rust's 16 variants in order, then Deserialize; names and messages.
@@ -62,6 +132,7 @@ fn test_error_codes() {
 }
 
 # finite_gt / finite_ge: NaN, ±∞ and the bound itself.
+# rust src/validate.rs: finite_gt_rejects_nan_and_inf, finite_ge_accepts_bound
 fn test_validate_predicates() {
     test_group("validate predicates");
     var nan: f64 = 0.0 / 0.0;
@@ -136,6 +207,7 @@ fn test_log_parse() {
 }
 
 # init applies the default with USHMA_LOG unset, and is safe to call twice (logging.rs's test).
+# rust src/logging.rs: init_does_not_panic
 fn test_log_init() {
     test_group("logging init");
     if (getenv("USHMA_LOG") == 0) {
@@ -157,18 +229,18 @@ fn test_spans() {
     sakshi_output_buffer();
     sakshi_set_level(SK_INFO);
     sakshi_ring_clear();
-    _us_span_enter("us_conduction", 13);
+    _us_span_enter("conduction", 10);
     _us_span_exit();
     assert_eq(sakshi_ring_event_count(), 0, "no span event at INFO");
     assert_eq(sakshi_span_depth(), 0, "no span opened at INFO");
     sakshi_set_level(SK_DEBUG);
     sakshi_ring_clear();
-    _us_span_enter("us_conduction", 13);
+    _us_span_enter("conduction", 10);
     assert_eq(sakshi_span_depth(), 1, "a span opened at DEBUG");
     _us_span_exit();
     assert_eq(sakshi_span_depth(), 0, "and closed");
     assert_eq(sakshi_ring_event_count(), 2, "ENTER and EXIT at DEBUG");
-    assert_eq(ring_has("us_conduction"), 1, "the span carries its name");
+    assert_eq(ring_has("conduction"), 1, "the span carries its name");
     sakshi_set_level(SK_INFO);
     sakshi_ring_clear();
 }
@@ -177,6 +249,7 @@ fn test_spans() {
 fn main() {
     alloc_init();
     test_error_codes();
+    test_rust_error_variants();
     test_validate_predicates();
     test_validate_failures();
     test_log_parse();

@@ -537,14 +537,14 @@ def check_module_corrections(root, mod, rows, want, rep, write):
 import ctypes as _ct
 
 _LIBM = _ct.CDLL("libm.so.6")
-for _n in ("exp", "pow"):
+for _n in ("exp", "pow", "log", "tanh", "atan"):
     getattr(_LIBM, _n).restype = _ct.c_double
-_LIBM.exp.argtypes = [_ct.c_double]
-_LIBM.pow.argtypes = [_ct.c_double, _ct.c_double]
+    getattr(_LIBM, _n).argtypes = [_ct.c_double, _ct.c_double] if _n == "pow" else [_ct.c_double]
 
 
 class Prim:
-    """exp / pow from glibc (cr=False) or MPFR (cr=True); with cr=True, records each call glibc misrounds."""
+    """exp, pow, ln, tanh and atan from glibc (cr=False) or MPFR (cr=True); with cr=True, records each call glibc
+    misrounds."""
 
     def __init__(self, cr):
         self.cr = cr
@@ -562,6 +562,15 @@ class Prim:
 
     def pow(self, x, y):
         return self._one("pow", [x, y], _LIBM.pow(x, y), MPFR.pow(x, y))
+
+    def log(self, x):
+        return self._one("log", [x], _LIBM.log(x), MPFR.log(x))
+
+    def tanh(self, x):
+        return self._one("tanh", [x], _LIBM.tanh(x), MPFR.tanh(x))
+
+    def atan(self, x):
+        return self._one("atan", [x], _LIBM.atan(x), MPFR.atan(x))
 
 
 def fdiv(a, b):
@@ -737,6 +746,137 @@ def m_thermal_bl(a, p):
     return F(fdiv(d, p.pow(pr, 1.0 / 3.0)))
 
 
+def _fin_m(h, per, k, ac):
+    """fin_parameter: (error name, None) or (None, m)."""
+    d = k * ac
+    if not fgt(k, 0.0) or not fgt(ac, 0.0):
+        return "DivisionByZero", None
+    if not fge(h, 0.0) or not fgt(per, 0.0):
+        return "InvalidParameter", None
+    return None, fsqrt(fdiv(h * per, d))
+
+
+def m_fin_parameter(a, p):
+    e, m = _fin_m(*a)
+    return E(e) if e else F(m)
+
+
+def m_fin_heat(a, p):
+    h, per, k, ac, length, tb, tf = a
+    e, m = _fin_m(h, per, k, ac)
+    if e:
+        return E(e)
+    if not fgt(length, 0.0):
+        return E("InvalidParameter")
+    return F(fsqrt(h * per * k * ac) * (tb - tf) * p.tanh(m * length))
+
+
+def m_fin_efficiency(a, p):
+    m, length = a
+    if not fge(m, 0.0) or not fge(length, 0.0):
+        return E("InvalidParameter")
+    ml = m * length
+    if abs(ml) < TINY:
+        return F(1.0)
+    return F(fdiv(p.tanh(ml), ml))
+
+
+def m_fin_effectiveness(a, p):
+    q, h, ac, tb, tf = a
+    q0 = h * ac * (tb - tf)
+    if not fge(abs(q0), TINY):
+        return E("DivisionByZero")
+    return F(fdiv(q, q0))
+
+
+def _lmtd(dt1, dt2, p):
+    if not fgt(dt1, 0.0) or not fgt(dt2, 0.0):
+        return E("InvalidParameter")
+    ratio = fdiv(dt1, dt2)
+    if abs(ratio - 1.0) < 1e-10:
+        return F(0.5 * (dt1 + dt2))
+    return F(fdiv(dt1 - dt2, p.log(ratio)))
+
+
+def m_ntu(a, p):
+    u, area, c = a
+    if not fgt(c, 0.0):
+        return E("DivisionByZero")
+    return F(fdiv(u * area, c))
+
+
+def _entu_ok(n, cr):
+    return fge(n, 0.0) and 0.0 <= cr <= 1.0
+
+
+def m_eff_parallel(a, p):
+    n, cr = a
+    if not _entu_ok(n, cr):
+        return E("InvalidParameter")
+    if cr < TINY:
+        return F(1.0 - p.exp(-n))
+    return F(fdiv(1.0 - p.exp(-(1.0 + cr) * n), 1.0 + cr))
+
+
+def m_eff_counter(a, p):
+    n, cr = a
+    if not _entu_ok(n, cr):
+        return E("InvalidParameter")
+    if cr < TINY:
+        return F(1.0 - p.exp(-n))
+    if abs(cr - 1.0) < 1e-10:
+        return F(fdiv(n, 1.0 + n))
+    e = p.exp(-(1.0 - cr) * n)
+    return F(fdiv(1.0 - e, 1.0 - cr * e))
+
+
+def _dims_ok(a):
+    return all(fgt(x, 0.0) for x in a)
+
+
+def m_vf_parallel(a, p):
+    if not _dims_ok(a):
+        return E("InvalidParameter")
+    w, h, d = a
+    x, y = fdiv(w, d), fdiv(h, d)
+    x2, y2 = x * x, y * y
+    if rust_max(x, y) < 1e-2:
+        return F(fdiv(x * y, math.pi) * (1.0 - fdiv(x2 + y2, 3.0)))
+    t1 = p.log(fsqrt(fdiv((1.0 + x2) * (1.0 + y2), 1.0 + x2 + y2)))
+    sy, sx = fsqrt(1.0 + y2), fsqrt(1.0 + x2)
+    t2 = x * sy * p.atan(fdiv(x, sy))
+    t3 = y * sx * p.atan(fdiv(y, sx))
+    t4, t5 = x * p.atan(x), y * p.atan(y)
+    return F(fdiv(2.0, math.pi * x * y) * (t1 + t2 + t3 - t4 - t5))
+
+
+def m_vf_perpendicular(a, p):
+    if not _dims_ok(a):
+        return E("InvalidParameter")
+    width, h1, h2 = a
+    w, h = fdiv(h1, width), fdiv(h2, width)
+    w2, hh = w * w, h * h
+    s = hh + w2
+    rs = fsqrt(s)
+    at = w * p.atan(fdiv(1.0, w)) + h * p.atan(fdiv(1.0, h)) - rs * p.atan(fdiv(1.0, rs))
+    lt = (
+        p.log(fdiv((1.0 + w2) * (1.0 + hh), 1.0 + s))
+        + w2 * p.log(fdiv(w2 * (1.0 + s), (1.0 + w2) * s))
+        + hh * p.log(fdiv(hh * (1.0 + s), (1.0 + hh) * s))
+    )
+    return F(rust_clamp(fdiv(at + 0.25 * lt, math.pi * w), 0.0, 1.0))
+
+
+def m_vf_disks(a, p):
+    if not _dims_ok(a):
+        return E("InvalidParameter")
+    r1, r2, d = a
+    r1d, r2d = fdiv(r1, d), fdiv(r2, d)
+    s = 1.0 + fdiv(1.0 + r2d * r2d, r1d * r1d)
+    k2 = powidf2(fdiv(r2, r1), 2)
+    return F(fdiv(2.0 * k2, s + fsqrt(s * s - 4.0 * k2)))
+
+
 MODELS = {
     "transfer": {
         "transfer::conduction": m_conduction,
@@ -757,6 +897,20 @@ MODELS = {
         "transfer::nusselt_natural_vertical": m_natural,
         "transfer::boundary_layer_thickness": m_blasius,
         "transfer::thermal_boundary_layer": m_thermal_bl,
+        "transfer::fin_parameter": m_fin_parameter,
+        "transfer::fin_rectangular_heat": m_fin_heat,
+        "transfer::fin_efficiency_rectangular": m_fin_efficiency,
+        "transfer::fin_effectiveness": m_fin_effectiveness,
+        "transfer::lmtd_parallel": lambda a, p: _lmtd(a[0] - a[2], a[1] - a[3], p),
+        "transfer::lmtd_counter": lambda a, p: _lmtd(a[0] - a[3], a[1] - a[2], p),
+        "transfer::heat_exchanger_lmtd": lambda a, p: F(a[0] * a[1] * a[2]),
+        "transfer::ntu": m_ntu,
+        "transfer::effectiveness_parallel": m_eff_parallel,
+        "transfer::effectiveness_counter": m_eff_counter,
+        "transfer::heat_exchanger_ntu": lambda a, p: F(a[0] * a[1] * (a[2] - a[3])),
+        "transfer::view_factor_parallel_plates": m_vf_parallel,
+        "transfer::view_factor_perpendicular_plates": m_vf_perpendicular,
+        "transfer::view_factor_coaxial_disks": m_vf_disks,
     },
 }
 

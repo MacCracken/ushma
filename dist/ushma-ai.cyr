@@ -3895,22 +3895,22 @@ fn _us_fmt_f64_json(sb, x: f64) {
 # `conductivity=-1`); otherwise it costs one level test. The value is written by fmtf's Display form into a stack
 # buffer, so a refusal never allocates unless a value's text is longer than the buffer.
 
-# 1 when x is finite and strictly greater than `bound`, else 0.
+# 1 when x is finite and strictly greater than `bound` (a finite bound), else 0. `x > bound` is false for NaN and −∞,
+# `x < +∞` for NaN and +∞, so one branch-free expression is the whole test, and #inline takes it: three checks cost
+# 6 ns instead of 21 (M1d's review, docs/benchmarks-rust-v-cyrius.md).
 #must_use
 #pure
+#inline
 fn _us_finite_gt(x: f64, bound: f64): i64 {
-    if (_us_is_finite(x) == 0) { return 0; }
-    if (x > bound) { return 1; }
-    return 0;
+    return (x > bound) & (x < _US_INF);
 }
 
-# 1 when x is finite and greater than or equal to `bound`, else 0.
+# 1 when x is finite and greater than or equal to `bound` (a finite bound), else 0, as _us_finite_gt.
 #must_use
 #pure
+#inline
 fn _us_finite_ge(x: f64, bound: f64): i64 {
-    if (_us_is_finite(x) == 0) { return 0; }
-    if (x >= bound) { return 1; }
-    return 0;
+    return (x >= bound) & (x < _US_INF);
 }
 
 # A str_builder over a caller's stack buffer: header `hdr` (24 bytes: buf, len, cap) on `buf` of `cap` bytes. It grows
@@ -3978,6 +3978,19 @@ fn _us_fail_ff(code, fname, what, w1, x1: f64, w2, x2: f64): i64 {
         str_builder_putc(vb, 61);
         _us_fmt_f64_display(vb, x2);
         _us_fail_event(code, fname, what, vb);
+    }
+    return code;
+}
+
+# The refusal of `fname` with `code` on the text [p, p + n), named `what` (`"name"`). Returns `code`.
+#must_use
+fn _us_fail_s(code, fname, what, p, n): i64 {
+    if (sakshi_get_level() >= SK_DEBUG) {
+        var vh[24];
+        store64(&vh, p);
+        store64(&vh + 8, n);
+        store64(&vh + 16, n);
+        _us_fail_event(code, fname, what, &vh);
     }
     return code;
 }
@@ -4566,13 +4579,16 @@ fn us_material_from_json(buf, n, out: *UsMaterial): Result {
 # --- transfer.cyr ---
 
 # transfer.cyr — heat transfer: conduction, convection, radiation, resistance networks, dimensionless numbers,
-# boundary layers (Rust 1.4.0 `transfer`). All SI: watts, meters, kelvins, seconds.
+# boundary layers, fins, heat exchangers (LMTD, ε-NTU) and view factors (Rust 1.4.0 `transfer`). All SI: watts,
+# meters, kelvins, seconds.
 #
-# Each function computes in the order Rust 1.4.0 writes, so its arithmetic is bit-identical (class B), and its
-# transcendentals (exp, pow) are correctly rounded (ADR 0004, class C). A correlation's exponents (Dittus–Boelter's
-# 0.8 and 0.4, Churchill–Chu's 1/6, 9/16 and 8/27, Pohlhausen's 1/3) are the doubles Rust writes (ADR 0002 row 9).
-# A refusal returns Err(US_ERR_*) and reports its value at DEBUG (src/validate.cyr). conduction and radiation open a
-# DEBUG span, as Rust instruments them.
+# Each function computes in the order Rust 1.4.0 writes, so its arithmetic is bit-identical (class B; Rust's powi(2)
+# and powi(4) are x·x and (x·x)·(x·x), the products __powidf2 forms), and its transcendentals (exp, ln, pow, tanh,
+# atan) are correctly rounded (ADR 0004, class C). A correlation's exponents (Dittus–Boelter's 0.8 and 0.4,
+# Churchill–Chu's 1/6, 9/16 and 8/27, Pohlhausen's 1/3) are the doubles Rust writes (ADR 0002 row 9). A refusal
+# returns Err(US_ERR_*) and reports its value at DEBUG (src/validate.cyr). The seven functions Rust instruments open a
+# DEBUG span under Rust's span name: conduction, radiation, fin_rectangular_heat, lmtd_parallel, lmtd_counter,
+# view_factor_parallel_plates and view_factor_perpendicular_plates.
 
 # The smallest magnitude a divisor may have (Rust's 1e-30).
 var _US_TINY: f64 = 0.000000000000000000000000000001;
@@ -4581,7 +4597,7 @@ var _US_TINY: f64 = 0.000000000000000000000000000001;
 # Err(US_ERR_DIVISION_BY_ZERO) when |L| < 1e-30 or L is not finite.
 #must_use
 fn us_conduction(conductivity: f64, area: f64, t_hot: f64, t_cold: f64, thickness: f64): Result {
-    _us_span_enter("us_conduction", 13);
+    _us_span_enter("conduction", 10);
     if (_us_finite_ge(conductivity, 0.0) == 0) {
         _us_span_exit();
         return Err(_us_fail_f(US_ERR_INVALID_CONDUCTIVITY, "us_conduction", "conductivity", conductivity));
@@ -4608,7 +4624,7 @@ fn us_convection(h: f64, area: f64, t_surface: f64, t_fluid: f64): f64 {
 # (or NaN), Err(US_ERR_INVALID_TEMPERATURE) when a temperature is negative or not finite.
 #must_use
 fn us_radiation(emissivity: f64, area: f64, t_surface: f64, t_surrounding: f64): Result {
-    _us_span_enter("us_radiation", 12);
+    _us_span_enter("radiation", 9);
     if (emissivity >= 0.0 && emissivity <= 1.0) {
         if (_us_finite_ge(t_surface, 0.0) == 0) {
             _us_span_exit();
@@ -4618,8 +4634,11 @@ fn us_radiation(emissivity: f64, area: f64, t_surface: f64, t_surrounding: f64):
             _us_span_exit();
             return Err(_us_fail_f(US_ERR_INVALID_TEMPERATURE, "us_radiation", "t_surrounding", t_surrounding));
         }
-        var ts4: f64 = _us_powi(t_surface, 4);
-        var tr4: f64 = _us_powi(t_surrounding, 4);
+        # Rust's powi(4): __powidf2 squares twice, so T⁴ is (T·T)·(T·T) exactly.
+        var ts2: f64 = t_surface * t_surface;
+        var ts4: f64 = ts2 * ts2;
+        var tr2: f64 = t_surrounding * t_surrounding;
+        var tr4: f64 = tr2 * tr2;
         var q: f64 = emissivity * US_STEFAN_BOLTZMANN * area * (ts4 - tr4);
         _us_span_exit();
         return Ok(q);
@@ -4836,7 +4855,7 @@ fn us_nusselt_natural_vertical(ra: f64, pr: f64): Result {
     var psi: f64 = _us_cr_pow(1.0 + p1, em827);
     var r16: f64 = _us_cr_pow(ra, e16);
     var inner: f64 = 0.825 + 0.387 * r16 * psi;
-    var nu: f64 = _us_powi(inner, 2);
+    var nu: f64 = inner * inner;
     return Ok(nu);
 }
 
@@ -4869,6 +4888,302 @@ fn us_thermal_boundary_layer(x: f64, re_x: f64, pr: f64): Result {
     var p: f64 = _us_cr_pow(pr, e13);
     var dt: f64 = delta / p;
     return Ok(dt);
+}
+
+# --- Fins ---
+
+# Fin parameter m = √(h·P / (k·A_c)) (1/m). Err(US_ERR_DIVISION_BY_ZERO) unless k > 0 and A_c > 0;
+# Err(US_ERR_INVALID_PARAMETER) unless h ≥ 0 and P > 0.
+#must_use
+fn us_fin_parameter(h: f64, perimeter: f64, k: f64, cross_area: f64): Result {
+    if (_us_finite_gt(k, 0.0) == 0 || _us_finite_gt(cross_area, 0.0) == 0) {
+        return Err(_us_fail_ff(US_ERR_DIVISION_BY_ZERO, "us_fin_parameter", "k*A_c", "k", k, "cross_area",
+            cross_area));
+    }
+    if (_us_finite_ge(h, 0.0) == 0 || _us_finite_gt(perimeter, 0.0) == 0) {
+        return Err(_us_fail_ff(US_ERR_INVALID_PARAMETER, "us_fin_parameter", "inputs", "h", h, "perimeter",
+            perimeter));
+    }
+    var denom: f64 = k * cross_area;
+    var q: f64 = h * perimeter / denom;
+    var m: f64 = f64_sqrt(q);
+    return Ok(m);
+}
+
+# Heat from a rectangular fin with an insulated tip: Q = √(h·P·k·A_c)·(T_base − T_fluid)·tanh(m·L) (W).
+# us_fin_parameter's refusals, then Err(US_ERR_INVALID_PARAMETER) unless L > 0.
+#must_use
+fn us_fin_rectangular_heat(h: f64, perimeter: f64, k: f64, cross_area: f64, length: f64, t_base: f64,
+  t_fluid: f64): Result {
+    _us_span_enter("fin_rectangular_heat", 20);
+    var t, v = us_fin_parameter(h, perimeter, k, cross_area);
+    if (is_err_result(t) == 1) {
+        _us_span_exit();
+        return Err(v);
+    }
+    var m: f64 = v;
+    if (_us_finite_gt(length, 0.0) == 0) {
+        _us_span_exit();
+        return Err(_us_fail_f(US_ERR_INVALID_PARAMETER, "us_fin_rectangular_heat", "length", length));
+    }
+    var hpka: f64 = h * perimeter * k * cross_area;
+    var coeff: f64 = f64_sqrt(hpka);
+    var ml: f64 = m * length;
+    var th: f64 = _us_cr_tanh(ml);
+    var q: f64 = coeff * (t_base - t_fluid) * th;
+    _us_span_exit();
+    return Ok(q);
+}
+
+# Efficiency of a rectangular fin with an insulated tip: η = tanh(m·L) / (m·L), and 1 when |m·L| < 1e-30 (a
+# zero-length fin). Err(US_ERR_INVALID_PARAMETER) unless m ≥ 0 and L ≥ 0.
+#must_use
+fn us_fin_efficiency_rectangular(m: f64, length: f64): Result {
+    if (_us_finite_ge(m, 0.0) == 0 || _us_finite_ge(length, 0.0) == 0) {
+        return Err(_us_fail_ff(US_ERR_INVALID_PARAMETER, "us_fin_efficiency_rectangular", "inputs", "m", m,
+            "length", length));
+    }
+    var ml: f64 = m * length;
+    var aml: f64 = f64_abs(ml);
+    if (aml < _US_TINY) { return Ok(1.0); }
+    var th: f64 = _us_cr_tanh(ml);
+    var eta: f64 = th / ml;
+    return Ok(eta);
+}
+
+# Fin effectiveness ε = Q_fin / (h·A_c·(T_base − T_fluid)), the fin's heat over the bare base's.
+# Err(US_ERR_DIVISION_BY_ZERO) when the bare base's heat is below 1e-30 in magnitude or not finite.
+#must_use
+fn us_fin_effectiveness(q_fin: f64, h: f64, cross_area: f64, t_base: f64, t_fluid: f64): Result {
+    var q0: f64 = h * cross_area * (t_base - t_fluid);
+    var aq: f64 = f64_abs(q0);
+    if (_us_finite_ge(aq, _US_TINY) == 0) {
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_fin_effectiveness", "q_no_fin", q0));
+    }
+    var eps: f64 = q_fin / q0;
+    return Ok(eps);
+}
+
+# --- Heat exchangers ---
+
+# The LMTD (ΔT₁ − ΔT₂) / ln(ΔT₁/ΔT₂) for `fname`, and the arithmetic mean when |ΔT₁/ΔT₂ − 1| < 1e-10.
+# Err(US_ERR_INVALID_PARAMETER) unless ΔT₁ > 0 and ΔT₂ > 0.
+fn _us_lmtd(dt1: f64, dt2: f64, fname): Result {
+    if (_us_finite_gt(dt1, 0.0) == 0 || _us_finite_gt(dt2, 0.0) == 0) {
+        return Err(_us_fail_ff(US_ERR_INVALID_PARAMETER, fname, "temperature differences", "dt1", dt1, "dt2",
+            dt2));
+    }
+    var ratio: f64 = dt1 / dt2;
+    var dev: f64 = f64_abs(ratio - 1.0);
+    if (dev < 0.0000000001) {
+        var mean: f64 = 0.5 * (dt1 + dt2);
+        return Ok(mean);
+    }
+    var lr: f64 = _us_cr_ln(ratio);
+    var lm: f64 = (dt1 - dt2) / lr;
+    return Ok(lm);
+}
+
+# Log mean temperature difference of a parallel-flow exchanger (K), with ΔT₁ = T_h,in − T_c,in and
+# ΔT₂ = T_h,out − T_c,out. Err(US_ERR_INVALID_PARAMETER) unless both are positive.
+#must_use
+fn us_lmtd_parallel(t_h_in: f64, t_h_out: f64, t_c_in: f64, t_c_out: f64): Result {
+    _us_span_enter("lmtd_parallel", 13);
+    var t, v = _us_lmtd(t_h_in - t_c_in, t_h_out - t_c_out, "us_lmtd_parallel");
+    _us_span_exit();
+    return (t, v);
+}
+
+# Log mean temperature difference of a counter-flow exchanger (K), with ΔT₁ = T_h,in − T_c,out and
+# ΔT₂ = T_h,out − T_c,in. Err(US_ERR_INVALID_PARAMETER) unless both are positive.
+#must_use
+fn us_lmtd_counter(t_h_in: f64, t_h_out: f64, t_c_in: f64, t_c_out: f64): Result {
+    _us_span_enter("lmtd_counter", 12);
+    var t, v = _us_lmtd(t_h_in - t_c_out, t_h_out - t_c_in, "us_lmtd_counter");
+    _us_span_exit();
+    return (t, v);
+}
+
+# Heat rate by the LMTD method: Q = U·A·LMTD (W).
+#must_use
+#pure
+fn us_heat_exchanger_lmtd(u: f64, area: f64, lmtd: f64): f64 {
+    var q: f64 = u * area * lmtd;
+    return q;
+}
+
+# Number of transfer units NTU = U·A / C_min. Err(US_ERR_DIVISION_BY_ZERO) unless C_min > 0.
+#must_use
+fn us_ntu(u: f64, area: f64, c_min: f64): Result {
+    if (_us_finite_gt(c_min, 0.0) == 0) {
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_ntu", "c_min", c_min));
+    }
+    var n: f64 = u * area / c_min;
+    return Ok(n);
+}
+
+# The ε-NTU inputs' refusal for `fname`, or 0: Err(US_ERR_INVALID_PARAMETER) unless NTU ≥ 0 and 0 ≤ C_r ≤ 1.
+fn _us_entu_check(ntu_val: f64, c_ratio: f64, fname): i64 {
+    if (_us_finite_ge(ntu_val, 0.0) == 0) {
+        return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, "ntu", ntu_val);
+    }
+    if (c_ratio >= 0.0 && c_ratio <= 1.0) { return 0; }
+    return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, "c_ratio", c_ratio);
+}
+
+# Effectiveness of a parallel-flow exchanger: ε = (1 − e^(−NTU·(1 + C_r))) / (1 + C_r), and 1 − e^(−NTU) when
+# C_r < 1e-30. Err(US_ERR_INVALID_PARAMETER) unless NTU ≥ 0 and 0 ≤ C_r ≤ 1.
+#must_use
+fn us_effectiveness_parallel(ntu_val: f64, c_ratio: f64): Result {
+    var code = _us_entu_check(ntu_val, c_ratio, "us_effectiveness_parallel");
+    if (code != 0) { return Err(code); }
+    if (c_ratio < _US_TINY) {
+        var e0: f64 = _us_cr_exp(0.0 - ntu_val);
+        var eps0: f64 = 1.0 - e0;
+        return Ok(eps0);
+    }
+    var cr1: f64 = 1.0 + c_ratio;
+    var e: f64 = _us_cr_exp((0.0 - cr1) * ntu_val);
+    var eps: f64 = (1.0 - e) / cr1;
+    return Ok(eps);
+}
+
+# Effectiveness of a counter-flow exchanger: ε = (1 − e^(−NTU·(1 − C_r))) / (1 − C_r·e^(−NTU·(1 − C_r))), with
+# 1 − e^(−NTU) when C_r < 1e-30 and NTU / (1 + NTU) when |C_r − 1| < 1e-10. Err(US_ERR_INVALID_PARAMETER) unless
+# NTU ≥ 0 and 0 ≤ C_r ≤ 1.
+#must_use
+fn us_effectiveness_counter(ntu_val: f64, c_ratio: f64): Result {
+    var code = _us_entu_check(ntu_val, c_ratio, "us_effectiveness_counter");
+    if (code != 0) { return Err(code); }
+    if (c_ratio < _US_TINY) {
+        var e0: f64 = _us_cr_exp(0.0 - ntu_val);
+        var eps0: f64 = 1.0 - e0;
+        return Ok(eps0);
+    }
+    var dev: f64 = f64_abs(c_ratio - 1.0);
+    if (dev < 0.0000000001) {
+        var eps1: f64 = ntu_val / (1.0 + ntu_val);
+        return Ok(eps1);
+    }
+    var ncr: f64 = 0.0 - (1.0 - c_ratio);
+    var e: f64 = _us_cr_exp(ncr * ntu_val);
+    var eps: f64 = (1.0 - e) / (1.0 - c_ratio * e);
+    return Ok(eps);
+}
+
+# Heat rate by the ε-NTU method: Q = ε·C_min·(T_h,in − T_c,in) (W).
+#must_use
+#pure
+fn us_heat_exchanger_ntu(effectiveness: f64, c_min: f64, t_h_in: f64, t_c_in: f64): f64 {
+    var q: f64 = effectiveness * c_min * (t_h_in - t_c_in);
+    return q;
+}
+
+# --- Radiation view factors ---
+
+# The refusal of `fname` on three dimensions: US_ERR_INVALID_PARAMETER, reporting the first that is not positive and
+# finite (named by `n1`, `n2`, `n3`), or 0 when all three are. The view factors test the three inline and call this
+# only to refuse (6 ns a call, M1d's review).
+fn _us_dims_check(fname, n1, a: f64, n2, b: f64, n3, c: f64): i64 {
+    if (_us_finite_gt(a, 0.0) == 0) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, n1, a); }
+    if (_us_finite_gt(b, 0.0) == 0) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, n2, b); }
+    if (_us_finite_gt(c, 0.0) == 0) { return _us_fail_f(US_ERR_INVALID_PARAMETER, fname, n3, c); }
+    return 0;
+}
+
+# atan(x), correctly rounded: atan2(x, 1) is atan exactly (ADR 0004).
+fn _us_atan(x: f64): f64 {
+    var r: f64 = _us_cr_atan2(x, 1.0);
+    return r;
+}
+
+# View factor F₁₂ between two identical, directly opposed parallel rectangles W × H at distance D (Incropera
+# Table 13.2). With X = W/D and Y = H/D both below 0.01 it is the asymptotic XY/π·(1 − (X² + Y²)/3), where the exact
+# form cancels. Err(US_ERR_INVALID_PARAMETER) unless W, H and D are positive.
+#must_use
+fn us_view_factor_parallel_plates(width: f64, height: f64, distance: f64): Result {
+    _us_span_enter("view_factor_parallel_plates", 27);
+    if ((_us_finite_gt(width, 0.0) & _us_finite_gt(height, 0.0) & _us_finite_gt(distance, 0.0)) == 0) {
+        _us_span_exit();
+        return Err(_us_dims_check("us_view_factor_parallel_plates", "width", width, "height", height, "distance",
+            distance));
+    }
+    var pi: f64 = F64_PI;
+    var x: f64 = width / distance;
+    var y: f64 = height / distance;
+    var x2: f64 = x * x;
+    var y2: f64 = y * y;
+    var mxy: f64 = _us_max(x, y);
+    if (mxy < 0.01) {
+        var fa: f64 = x * y / pi * (1.0 - (x2 + y2) / 3.0);
+        _us_span_exit();
+        return Ok(fa);
+    }
+    var q1: f64 = (1.0 + x2) * (1.0 + y2) / (1.0 + x2 + y2);
+    var s1: f64 = f64_sqrt(q1);
+    var term1: f64 = _us_cr_ln(s1);
+    var sy: f64 = f64_sqrt(1.0 + y2);
+    var a2: f64 = _us_atan(x / sy);
+    var term2: f64 = x * sy * a2;
+    var sx: f64 = f64_sqrt(1.0 + x2);
+    var a3: f64 = _us_atan(y / sx);
+    var term3: f64 = y * sx * a3;
+    var a4: f64 = _us_atan(x);
+    var term4: f64 = x * a4;
+    var a5: f64 = _us_atan(y);
+    var term5: f64 = y * a5;
+    var f12: f64 = 2.0 / (pi * x * y) * (term1 + term2 + term3 - term4 - term5);
+    _us_span_exit();
+    return Ok(f12);
+}
+
+# View factor F₁₂ from rectangle 1 (W × H₁) to rectangle 2 (W × H₂), perpendicular and sharing the edge W
+# (Incropera Table 13.2, Howell C-14), clamped to [0, 1]. The logarithm of the product is a sum of logarithms, so its
+# powers can't overflow. Err(US_ERR_INVALID_PARAMETER) unless W, H₁ and H₂ are positive.
+#must_use
+fn us_view_factor_perpendicular_plates(width: f64, h1: f64, h2: f64): Result {
+    _us_span_enter("view_factor_perpendicular_plates", 32);
+    if ((_us_finite_gt(width, 0.0) & _us_finite_gt(h1, 0.0) & _us_finite_gt(h2, 0.0)) == 0) {
+        _us_span_exit();
+        return Err(_us_dims_check("us_view_factor_perpendicular_plates", "width", width, "h1", h1, "h2", h2));
+    }
+    var pi: f64 = F64_PI;
+    var w: f64 = h1 / width;
+    var h: f64 = h2 / width;
+    var w2: f64 = w * w;
+    var hh: f64 = h * h;
+    var s: f64 = hh + w2;
+    var rs: f64 = f64_sqrt(s);
+    var aw: f64 = _us_atan(1.0 / w);
+    var ah: f64 = _us_atan(1.0 / h);
+    var ar: f64 = _us_atan(1.0 / rs);
+    var atan_terms: f64 = w * aw + h * ah - rs * ar;
+    var l1: f64 = _us_cr_ln((1.0 + w2) * (1.0 + hh) / (1.0 + s));
+    var l2: f64 = _us_cr_ln(w2 * (1.0 + s) / ((1.0 + w2) * s));
+    var l3: f64 = _us_cr_ln(hh * (1.0 + s) / ((1.0 + hh) * s));
+    var log_terms: f64 = l1 + w2 * l2 + hh * l3;
+    var f12: f64 = (atan_terms + 0.25 * log_terms) / (pi * w);
+    var fc: f64 = f64_clamp(f12, 0.0, 1.0);
+    _us_span_exit();
+    return Ok(fc);
+}
+
+# View factor F₁₂ from disk 1 (radius r₁) to a coaxial parallel disk 2 (radius r₂) at distance d, as
+# 2k² / (S + √(S² − 4k²)) with S = 1 + (1 + R₂²)/R₁², R = r/d and k = r₂/r₁ (the cancellation-free form of
+# ½·(S − √(S² − 4k²))). Err(US_ERR_INVALID_PARAMETER) unless r₁, r₂ and d are positive.
+#must_use
+fn us_view_factor_coaxial_disks(r1: f64, r2: f64, distance: f64): Result {
+    if ((_us_finite_gt(r1, 0.0) & _us_finite_gt(r2, 0.0) & _us_finite_gt(distance, 0.0)) == 0) {
+        return Err(_us_dims_check("us_view_factor_coaxial_disks", "r1", r1, "r2", r2, "distance", distance));
+    }
+    var r1d: f64 = r1 / distance;
+    var r2d: f64 = r2 / distance;
+    var s: f64 = 1.0 + (1.0 + r2d * r2d) / (r1d * r1d);
+    var rr: f64 = r2 / r1;
+    var k2: f64 = rr * rr;
+    var root: f64 = f64_sqrt(s * s - 4.0 * k2);
+    var f12: f64 = 2.0 * k2 / (s + root);
+    return Ok(f12);
 }
 
 # --- state_data.cyr ---

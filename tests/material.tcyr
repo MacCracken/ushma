@@ -34,6 +34,9 @@ fn preset(i, m: *UsMaterial) {
 }
 
 # Rust's eight material tests.
+# rust src/material.rs: test_copper_diffusivity, test_water_specific_heat, test_diamond_highest_conductivity
+# rust src/material.rs: test_volumetric_heat_capacity, test_all_materials_count, test_material_serde_roundtrip
+# rust src/material.rs: test_air_low_conductivity, test_water_phase_transitions
 fn test_rust_material() {
     test_group("material (Rust 1.4.0's tests)");
     var m: UsMaterial;

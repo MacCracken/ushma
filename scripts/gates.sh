@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # ushma — the full gate run (port plan §6): oracle, three targets, bundles, hygiene.
-# Adapted from kimiya's handoff/gates/gates.sh. Steps whose tooling doesn't exist yet (the
-# oracle generator lands in M0 part 2, [lib] in M1, the parity scripts later) are reported
+# Adapted from kimiya's handoff/gates/gates.sh. A step whose tooling doesn't exist is reported
 # as SKIP, never silently passed.
 #
 #   OUT=/tmp/ushma-gates bash scripts/gates.sh > /tmp/ushma-gates/gates.log 2>&1
@@ -82,6 +81,7 @@ done
 # 4. Benchmarks, fuzzing (every reader of untrusted input), hygiene, lock, audit.
 PAT='passed|failed|ns' TAILN=18 run cyrius bench
 PAT='passed|failed|FAIL|fuzz:' run cyrius fuzz --poison --bounds
+PAT='Functions executed|failed|below' run cyrius coverage --exec --min 80
 echo "=== fmt/lint/doc per file"
 fails=0
 for f in src/*.cyr tests/*.tcyr tests/*.bcyr tests/*.fcyr tests/*.cyr; do
@@ -98,10 +98,9 @@ PAT='.' run cyrius vet src/main.cyr
 PAT='.' TAILN=2 run cyrius deps --locked
 PAT='.' TAILN=14 run cyrius audit
 
-# 5. Parity bookkeeping (from M1).
-for py in surface_parity.py rust_test_ledger.py; do
-    if [ -f "scripts/$py" ]; then PAT='parity|missing|ported|FAIL' run python3 -I -B "scripts/$py" . ; else skip "scripts/$py (from M1)"; fi
-done
+# 5. Parity bookkeeping: every Rust public item has its Cyrius name, every due Rust test is ported.
+PAT='MISSING|STALE|UNKNOWN|surface parity' run python3 -I -B scripts/surface_parity.py .
+PAT='LEDGER|STALE|rust-test ledger' run python3 -I -B scripts/rust_test_ledger.py . --check
 
 echo "=== staged (must be empty: the maintainer does all git)"
 git diff --cached --name-only
