@@ -16,6 +16,8 @@ include "src/transfer.cyr"
 include "src/state_data.cyr"
 include "src/phase_data.cyr"
 include "src/phase.cyr"
+include "src/steam_data.cyr"
+include "src/steam.cyr"
 include "src/state.cyr"
 include "src/entropy.cyr"
 
@@ -291,6 +293,71 @@ fn water_boiling_point_consistency() {
     assert(d < 0.01, "within 0.01 K");
 }
 
+# Clausius–Clapeyron from water's boiling point predicts the steam table's 120 °C pressure within 5 %.
+# rust tests/integration.rs: clausius_clapeyron_vs_steam_table
+fn clausius_clapeyron_vs_steam_table() {
+    test_group("Clausius-Clapeyron against the steam table");
+    var w: UsSubstance;
+    var tw, vw = us_substance_preset(US_SUBSTANCE_WATER_PHASE, &w);
+    var lv: f64 = w.latent_heat_vaporization;
+    var mm: f64 = w.molar_mass;
+    var bp: f64 = w.boiling_point;
+    var lm: f64 = lv * mm;
+    var t, v = us_clausius_clapeyron_pressure(US_ATM, bp, 393.15, lm);
+    var pcc: f64 = okv(t, v, "Clausius-Clapeyron is Ok");
+    var e: UsSaturated;
+    var te, ve = us_saturated_by_temperature(393.15, &e);
+    assert_eq(is_ok(te), 1, "the steam table at 120 C is Ok");
+    var ps: f64 = e.pressure;
+    var d: f64 = absdiff(pcc, ps);
+    var rel: f64 = d / ps;
+    assert(rel < 0.05, "within 5%");
+}
+
+# Quality from v, h and s of one mixture all give x = 0.6.
+# rust tests/integration.rs: quality_consistency_across_methods
+fn quality_consistency_across_methods() {
+    test_group("quality three ways");
+    var e: UsSaturated;
+    var te, ve = us_saturated_by_temperature(373.15, &e);
+    var w: UsWetSteam;
+    var tw, vw = us_wet_steam_properties(0.6, &e, &w);
+    assert_eq(is_ok(tw), 1, "the mixture is Ok");
+    var sv: f64 = w.specific_volume;
+    var sh: f64 = w.specific_enthalpy;
+    var ss: f64 = w.specific_entropy;
+    var t1, v1 = us_quality_from_volume(sv, &e);
+    var xv: f64 = okv(t1, v1, "x from v is Ok");
+    var t2, v2 = us_quality_from_enthalpy(sh, &e);
+    var xh: f64 = okv(t2, v2, "x from h is Ok");
+    var t3, v3 = us_quality_from_entropy(ss, &e);
+    var xs: f64 = okv(t3, v3, "x from s is Ok");
+    var dv: f64 = absdiff(xv, 0.6);
+    var dh: f64 = absdiff(xh, 0.6);
+    var ds: f64 = absdiff(xs, 0.6);
+    assert(dv < 0.01, "from v: 0.6");
+    assert(dh < 0.01, "from h: 0.6");
+    assert(ds < 0.01, "from s: 0.6");
+}
+
+# The phase lookup agrees with the steam table: liquid at 300 K, and liquid just above P_sat at 100 °C.
+# rust tests/integration.rs: phase_lookup_agrees_with_steam_table
+fn phase_lookup_agrees_with_steam_table() {
+    test_group("phase lookup against the steam table");
+    var w: UsSubstance;
+    var tw, vw = us_substance_preset(US_SUBSTANCE_WATER_PHASE, &w);
+    var t, v = us_substance_phase_at(&w, 300.0, US_ATM);
+    assert_eq(is_ok(t), 1, "300 K is Ok");
+    assert_eq(v, US_PHASE_LIQUID, "300 K, 1 atm: liquid");
+    var e: UsSaturated;
+    var te, ve = us_saturated_by_temperature(373.15, &e);
+    var ps: f64 = e.pressure;
+    var above: f64 = ps * 1.1;
+    var t2, v2 = us_substance_phase_at(&w, 373.15, above);
+    assert_eq(is_ok(t2), 1, "100 C above P_sat is Ok");
+    assert_eq(v2, US_PHASE_LIQUID, "100 C, 1.1 P_sat: liquid");
+}
+
 # Runs every test and returns the failure count.
 fn main() {
     alloc_init();
@@ -309,6 +376,9 @@ fn main() {
     carnot_engine_efficiency();
     entropy_increase_irreversible_heat_transfer();
     water_boiling_point_consistency();
+    clausius_clapeyron_vs_steam_table();
+    quality_consistency_across_methods();
+    phase_lookup_agrees_with_steam_table();
     return assert_summary();
 }
 

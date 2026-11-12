@@ -5,7 +5,7 @@
 > (`# rust <file>: <test>`), at its module's milestone. Nothing is deferred: a test not ported yet is one whose
 > milestone hasn't come. The golden corpus (`tests/golden/`) checks every ported function on its grid besides.
 
-**479 Rust tests:** 225 ported; 50 at M3, 64 at M4, 62 at M5, 27 at M6, 51 at M7.
+**479 Rust tests:** 260 ported; 15 at M3, 64 at M4, 62 at M5, 27 at M6, 51 at M7.
 
 | Rust file | Tests | Ported | Due, unported | Later (milestone) |
 |---|---:|---:|---:|---|
@@ -22,11 +22,11 @@
 | `src/phase.rs` | 44 | 44 | 0 | — |
 | `src/stat.rs` | 33 | 0 | 0 | 33 (M5) |
 | `src/state.rs` | 47 | 47 | 0 | — |
-| `src/steam.rs` | 46 | 0 | 0 | 46 (M3) |
+| `src/steam.rs` | 46 | 32 | 0 | 14 (M3) |
 | `src/transfer.rs` | 67 | 67 | 0 | — |
 | `src/validate.rs` | 2 | 2 | 0 | — |
-| `tests/integration.rs` | 30 | 15 | 0 | 4 (M3), 5 (M4), 6 (M5) |
-| **Total** | **479** | **225** | **0** | |
+| `tests/integration.rs` | 30 | 18 | 0 | 1 (M3), 5 (M4), 6 (M5) |
+| **Total** | **479** | **260** | **0** | |
 
 ## Where each is ported
 
@@ -173,6 +173,38 @@
 | `src/state.rs` `test_virial_ideal_at_large_vm` | `tests/state.tcyr` `test_virial` |
 | `src/state.rs` `test_virial_invalid` | `tests/state.tcyr` `test_virial` |
 | `src/state.rs` `test_zero_volume` | `tests/state.tcyr` `test_ideal_gas` |
+| `src/steam.rs` `test_critical_point_specific_volume` | `tests/steam.tcyr` `test_lookups` |
+| `src/steam.rs` `test_quality_enthalpy_roundtrip` | `tests/steam.tcyr` `test_wet_steam` |
+| `src/steam.rs` `test_quality_from_enthalpy` | `tests/steam.tcyr` `test_quality` |
+| `src/steam.rs` `test_quality_from_entropy` | `tests/steam.tcyr` `test_quality` |
+| `src/steam.rs` `test_quality_midpoint` | `tests/steam.tcyr` `test_quality` |
+| `src/steam.rs` `test_quality_of_saturated_vapor_is_one_between_entries` | `tests/steam.tcyr` `test_quality` |
+| `src/steam.rs` `test_quality_out_of_range` | `tests/steam.tcyr` `test_quality` |
+| `src/steam.rs` `test_quality_x0_is_liquid` | `tests/steam.tcyr` `test_quality` |
+| `src/steam.rs` `test_quality_x1_is_vapor` | `tests/steam.tcyr` `test_quality` |
+| `src/steam.rs` `test_saturated_by_pressure_1atm` | `tests/steam.tcyr` `test_lookups` |
+| `src/steam.rs` `test_saturated_by_pressure_out_of_range` | `tests/steam.tcyr` `test_lookups` |
+| `src/steam.rs` `test_saturated_by_pressure_roundtrip` | `tests/steam.tcyr` `test_lookups` |
+| `src/steam.rs` `test_saturated_by_pressure_triple` | `tests/steam.tcyr` `test_lookups` |
+| `src/steam.rs` `test_saturated_by_temp_boiling_point` | `tests/steam.tcyr` `test_lookups` |
+| `src/steam.rs` `test_saturated_by_temp_critical_point` | `tests/steam.tcyr` `test_lookups` |
+| `src/steam.rs` `test_saturated_by_temp_interpolation` | `tests/steam.tcyr` `test_lookups` |
+| `src/steam.rs` `test_saturated_by_temp_out_of_range` | `tests/steam.tcyr` `test_lookups` |
+| `src/steam.rs` `test_saturated_by_temp_triple_point` | `tests/steam.tcyr` `test_lookups` |
+| `src/steam.rs` `test_saturated_enthalpy_consistency` | `tests/steam.tcyr` `test_table` |
+| `src/steam.rs` `test_saturated_pressure_between_entries_matches_if97` | `tests/steam.tcyr` `test_lookups` |
+| `src/steam.rs` `test_saturated_serde_roundtrip` | `tests/steam.tcyr` `test_wet_steam` |
+| `src/steam.rs` `test_saturated_table_enthalpy_identity_exact` | `tests/steam.tcyr` `test_table` |
+| `src/steam.rs` `test_saturated_table_h_fg_decreasing` | `tests/steam.tcyr` `test_table` |
+| `src/steam.rs` `test_saturated_table_monotonic` | `tests/steam.tcyr` `test_table` |
+| `src/steam.rs` `test_saturation_line_roundtrip_and_range` | `tests/steam.tcyr` `test_region4` |
+| `src/steam.rs` `test_saturation_pressure_if97_verification_values` | `tests/steam.tcyr` `test_region4` |
+| `src/steam.rs` `test_saturation_temperature_if97_verification_values` | `tests/steam.tcyr` `test_region4` |
+| `src/steam.rs` `test_steam_lookups_reject_nan` | `tests/steam.tcyr` `test_lookups` |
+| `src/steam.rs` `test_wet_steam_properties_invalid_quality` | `tests/steam.tcyr` `test_wet_steam` |
+| `src/steam.rs` `test_wet_steam_properties_x0` | `tests/steam.tcyr` `test_wet_steam` |
+| `src/steam.rs` `test_wet_steam_properties_x1` | `tests/steam.tcyr` `test_wet_steam` |
+| `src/steam.rs` `test_wet_steam_serde_roundtrip` | `tests/steam.tcyr` `test_wet_steam` |
 | `src/transfer.rs` `test_biot_number` | `tests/transfer.tcyr` `test_storage_diffusivity_biot` |
 | `src/transfer.rs` `test_biot_number_zero_conductivity` | `tests/transfer.tcyr` `test_storage_diffusivity_biot` |
 | `src/transfer.rs` `test_boundary_layer_invalid` | `tests/transfer.tcyr` `test_boundary_layers` |
@@ -243,6 +275,7 @@
 | `src/validate.rs` `finite_ge_accepts_bound` | `tests/foundation.tcyr` `test_validate_predicates` |
 | `src/validate.rs` `finite_gt_rejects_nan_and_inf` | `tests/foundation.tcyr` `test_validate_predicates` |
 | `tests/integration.rs` `carnot_engine_efficiency` | `tests/integration.tcyr` `carnot_engine_efficiency` |
+| `tests/integration.rs` `clausius_clapeyron_vs_steam_table` | `tests/integration.tcyr` `clausius_clapeyron_vs_steam_table` |
 | `tests/integration.rs` `energy_conservation_adiabatic_process` | `tests/integration.tcyr` `energy_conservation_adiabatic_process` |
 | `tests/integration.rs` `entropy_increase_irreversible_heat_transfer` | `tests/integration.tcyr` `entropy_increase_irreversible_heat_transfer` |
 | `tests/integration.rs` `eos_comparison_co2_stp` | `tests/integration.tcyr` `eos_comparison_co2_stp` |
@@ -252,6 +285,8 @@
 | `tests/integration.rs` `material_thermal_diffusivity_matches_manual` | `tests/integration.tcyr` `material_thermal_diffusivity_matches_manual` |
 | `tests/integration.rs` `mixture_z_factor_kays_rule` | `tests/integration.tcyr` `mixture_z_factor_kays_rule` |
 | `tests/integration.rs` `nusselt_to_h_to_convection_chain` | `tests/integration.tcyr` `nusselt_to_h_to_convection_chain` |
+| `tests/integration.rs` `phase_lookup_agrees_with_steam_table` | `tests/integration.tcyr` `phase_lookup_agrees_with_steam_table` |
+| `tests/integration.rs` `quality_consistency_across_methods` | `tests/integration.tcyr` `quality_consistency_across_methods` |
 | `tests/integration.rs` `thermal_equilibrium_lumped_capacitance` | `tests/integration.tcyr` `thermal_equilibrium_lumped_capacitance` |
 | `tests/integration.rs` `van_der_waals_vs_ideal_gas` | `tests/integration.tcyr` `van_der_waals_vs_ideal_gas` |
 | `tests/integration.rs` `view_factor_reciprocity` | `tests/integration.tcyr` `view_factor_reciprocity` |

@@ -33,6 +33,7 @@ mod m_material;
 mod m_math;
 mod m_phase;
 mod m_state;
+mod m_steam;
 mod m_transfer;
 mod rustsrc;
 mod sweep;
@@ -48,7 +49,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 /// Every golden emitter, sorted by file name: the modules emitted whole (`constants`, `entropy`, `fmtf`, `math`,
-/// `transfer`) and the four the public tables seed (`chem`, `material`, `phase`, `state`; M0 part 2b), with their
+/// `steam`, `transfer`) and the four the public tables seed (`chem`, `material`, `phase`, `state`; M0 part 2b), with their
 /// function and JSON rows added (`material`, `phase`, `state`).
 fn golden_modules() -> Result<Vec<tsv::Module>, String> {
     let mut v = vec![
@@ -56,6 +57,7 @@ fn golden_modules() -> Result<Vec<tsv::Module>, String> {
         m_entropy::emit(),
         m_fmtf::emit(),
         m_math::emit(),
+        m_steam::emit(),
         m_transfer::emit(),
     ];
     let mut tables = t_tables::golden()?;

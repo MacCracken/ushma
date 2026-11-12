@@ -172,7 +172,7 @@ r4 = [rust_float(v) for v in block("R4_N").split(",") if v.strip()]
 if len(r4) != 10:
     fail(f"steam.rs R4_N: {len(r4)} coefficients")
 for k, v in enumerate(r4):
-    check(SF, {"_US_STEAM_R4_N"}, f"x = _US_STEAM_R4_N[{k}]; fmt_hex(x);", "f", f64_bits_hex(v), f"R4_N[{k}]")
+    check(SF, {f"_US_STEAM_R4_N{k + 1}"}, f"x = _US_STEAM_R4_N{k + 1}; fmt_hex(x);", "f", f64_bits_hex(v), f"R4_N[{k}]")
 for name in ("R4_T_MIN", "T_CRIT", "P_CRIT", "QUALITY_ROUNDOFF"):
     v = rust_float(re.search(rf"const {name}: f64 = ([^;]+);", steam).group(1))
     check(SF, {f"_US_STEAM_{name}"}, f"x = _US_STEAM_{name}; fmt_hex(x);", "f", f64_bits_hex(v), f"steam::{name}")

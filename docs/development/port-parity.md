@@ -513,7 +513,7 @@ accepted (ADR 4: 36)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
 
 ## 6. M3 (2026-11-12 on)
 
-After M3a the harness's summary is `9 modules, 0 failing | rows: 101696 ok, 0 failed, 0 measured, 0 pending, 51
+After M3b the harness's summary is `10 modules, 0 failing | rows: 115711 ok, 0 failed, 0 measured, 0 pending, 61
 accepted (ADR 4: 36)`.
 
 - **phase** (M3a): 27,333 rows (class A 232, B 2,389, C 24,712; 6,054 refusals).
@@ -534,3 +534,13 @@ accepted (ADR 4: 36)`.
     caller can set to −∞. The fast `_us_finite_ge` answers 1 for x = bound = −∞ where Rust's `finite_ge` answers
     false, so a data-dependent bound uses `_us_finite_ge_any`, exact for every bound.
   - **Surface parity:** phase 29 of 29, its enum members included.
+- **steam, Region 4 and the saturated table** (M3b): 14,025 rows (class B 13,880, A 145; 2,478 refusals).
+  - **Region 4:** the pressure equation over 273.15 … 647.096 K (1,500 seeded points, every table row's temperature
+    ± 1 ulp, the limits ± 2 ulps) and the backward equation at each resulting pressure ± 1 ulp, at the range's ends ± 2
+    ulps and at every row's pressure. Bit-identical: it is algebraic with √.
+  - **The lookups:** by temperature and by pressure at every table row ± 1 ulp and midway between rows, seeded points,
+    and the edges. Bit-identical, hisab's `calc_lerp` included.
+  - **Quality:** each of 74 saturated states (the critical row among them, where v_g = v_f and h_fg = 0 refuse) at
+    its liquid and vapor values, midway, past them by the 1e-9 round-off ± 2 ulps and at x = 1 + 2e-16. Wet steam at
+    x across [0, 1] and just outside. Bit-identical.
+  - **JSON:** `SaturatedEntry` and `WetSteamProperties`, 145 rows, 10 accepted under ADR 5's mapped divergences.

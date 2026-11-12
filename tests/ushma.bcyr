@@ -20,10 +20,13 @@ include "src/state.cyr"
 include "src/entropy.cyr"
 include "src/phase_data.cyr"
 include "src/phase.cyr"
+include "src/steam_data.cyr"
+include "src/steam.cyr"
 
 # Keeps results observable, so no call can be dropped.
 var _bn_sink = 0;
 var _bn_mix = 0;
+var _bn_h_mid: f64 = 0.0;
 
 # Empty benchmark body: the harness floor the real benchmarks are compared against.
 fn bench_noop(): i64 { return 0; }
@@ -293,6 +296,42 @@ fn b_phase_change(w): i64 {
     return v;
 }
 
+# saturated_by_temperature(373.15).
+fn b_sat_t(x): i64 {
+    var e: UsSaturated;
+    var t, v = us_saturated_by_temperature(373.15, &e);
+    var p: f64 = e.pressure;
+    return p;
+}
+
+# saturated_by_pressure(101325).
+fn b_sat_p(x): i64 {
+    var e: UsSaturated;
+    var t, v = us_saturated_by_pressure(101325.0, &e);
+    var tt: f64 = e.temperature;
+    return tt;
+}
+
+# quality_from_enthalpy(h_f + h_fg/2 at 100 C, its entry).
+fn b_quality_h(e): i64 {
+    var t, v = us_quality_from_enthalpy(_bn_h_mid, e);
+    return v;
+}
+
+# wet_steam_properties(0.75, the 100 C entry).
+fn b_wet(e): i64 {
+    var w: UsWetSteam;
+    var t, v = us_wet_steam_properties(0.75, e, &w);
+    var h: f64 = w.specific_enthalpy;
+    return h;
+}
+
+# saturation_pressure(450).
+fn b_sat_pressure(x): i64 {
+    var t, v = us_saturation_pressure(450.0);
+    return v;
+}
+
 # Fills the two resistance lists the benchmarks use.
 fn bn_lists() {
     _bn_series = alloc(40);
@@ -386,6 +425,16 @@ fn main(): i64 {
     bn_run("phase/heat_of_fusion", &b_fusion, &water, 1000000);
     bn_run("phase/heat_of_vaporization", &b_vaporization, &water, 1000000);
     bn_run("phase/heat_for_phase_change", &b_phase_change, &water, 1000000);
+    var se: UsSaturated;
+    var ts, vs = us_saturated_by_temperature(373.15, &se);
+    var hf: f64 = se.h_f;
+    var hfg: f64 = se.h_fg;
+    _bn_h_mid = hf + 0.5 * hfg;
+    bn_run("steam/saturated_by_temp", &b_sat_t, 0, 1000000);
+    bn_run("steam/saturated_by_pressure", &b_sat_p, 0, 1000000);
+    bn_run("steam/quality_from_enthalpy", &b_quality_h, &se, 1000000);
+    bn_run("steam/wet_steam_properties", &b_wet, &se, 1000000);
+    bn_run("steam/saturation_pressure", &b_sat_pressure, 0, 1000000);
     return 0;
 }
 

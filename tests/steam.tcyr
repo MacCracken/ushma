@@ -1,0 +1,406 @@
+# steam tests (M3b: Region 4, the saturated table, quality and wet steam).
+#
+# Rust 1.4.0's steam.rs tests for these functions, one for one (32 of its 46; the superheated ones join with M3c), each
+# also checking the refusal's code. The table tests read the generated private columns (src/steam_data.cyr), as Rust's
+# in-module tests read SATURATED_TABLE.
+
+include "src/constants.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+include "src/json.cyr"
+include "src/steam_data.cyr"
+include "src/steam.cyr"
+
+var _nan: f64 = 0.0;
+
+# |a − b| as an f64.
+fn absdiff(a: f64, b: f64): f64 {
+    var d: f64 = a - b;
+    if (d < 0.0) { d = 0.0 - d; }
+    return d;
+}
+
+# |a/b − 1| as an f64.
+fn reldiff(a: f64, b: f64): f64 {
+    var r: f64 = a / b - 1.0;
+    if (r < 0.0) { r = 0.0 - r; }
+    return r;
+}
+
+# The Ok value of a Result (asserting it is Ok).
+fn okv(t, v, name): i64 {
+    assert_eq(is_ok(t), 1, name);
+    return v;
+}
+
+# Asserts a Result is Err(code).
+fn errc(t, v, code, name) {
+    assert_eq(is_err_result(t), 1, name);
+    if (is_err_result(t) == 1) { assert_streq(us_error_name(v), us_error_name(code), name); }
+    return 0;
+}
+
+# Fills *e with saturated steam at T, asserting the lookup is Ok.
+fn sat_t(t: f64, e: *UsSaturated, name) {
+    var tr, vr = us_saturated_by_temperature(t, e);
+    assert_eq(is_ok(tr), 1, name);
+    return 0;
+}
+
+# The saturated lookups by temperature and by pressure, between rows, and their range refusals.
+# rust src/steam.rs: test_saturated_by_temp_boiling_point, test_saturated_by_temp_triple_point
+# rust src/steam.rs: test_saturated_by_temp_critical_point, test_saturated_by_temp_interpolation
+# rust src/steam.rs: test_saturated_by_temp_out_of_range, test_saturated_by_pressure_1atm
+# rust src/steam.rs: test_saturated_by_pressure_triple, test_saturated_by_pressure_out_of_range
+# rust src/steam.rs: test_saturated_pressure_between_entries_matches_if97, test_saturated_by_pressure_roundtrip
+# rust src/steam.rs: test_critical_point_specific_volume, test_steam_lookups_reject_nan
+fn test_lookups() {
+    test_group("saturated lookups");
+    var e: UsSaturated;
+    sat_t(373.15, &e, "100 C is Ok");
+    var p: f64 = e.pressure;
+    var d1: f64 = reldiff(p, 101325.0);
+    assert(d1 < 0.001, "100 C: 1 atm");
+    sat_t(273.16, &e, "the triple point is Ok");
+    var pt: f64 = e.pressure;
+    var hfg: f64 = e.h_fg;
+    var d2: f64 = absdiff(pt, 611.7);
+    assert(d2 < 1.0, "611.7 Pa at the triple point");
+    assert(hfg > 2400000.0, "h_fg above 2400 kJ/kg there");
+    sat_t(647.096, &e, "the critical point is Ok");
+    var pc: f64 = e.pressure;
+    var hc: f64 = e.h_fg;
+    var vf: f64 = e.v_f;
+    var d3: f64 = reldiff(pc, 22064000.0);
+    assert(d3 < 0.001, "22.064 MPa at the critical point");
+    var ahc: f64 = f64_abs(hc);
+    assert(ahc < 1000.0, "h_fg near 0 there");
+    var w322: f64 = 1.0 / 322.0;
+    var d4: f64 = absdiff(vf, w322);
+    assert(d4 < 0.0000001, "v_f = 1/322 at the critical point");
+    var d5: f64 = absdiff(pc, 22064000.0);
+    assert(d5 < 1.0, "exactly P_c there");
+    var e50: UsSaturated;
+    var e60: UsSaturated;
+    sat_t(328.15, &e, "55 C is Ok");
+    sat_t(323.15, &e50, "50 C is Ok");
+    sat_t(333.15, &e60, "60 C is Ok");
+    var p55: f64 = e.pressure;
+    var p50: f64 = e50.pressure;
+    var p60: f64 = e60.pressure;
+    var h55: f64 = e.h_fg;
+    var h50: f64 = e50.h_fg;
+    var h60: f64 = e60.h_fg;
+    assert(p55 > p50 && p55 < p60, "55 C: P between 50 C's and 60 C's");
+    assert(h55 < h50 && h55 > h60, "and h_fg too, decreasing with T");
+    var t1, v1 = us_saturated_by_temperature(200.0, &e);
+    errc(t1, v1, US_ERR_STEAM_TABLE_OUT_OF_RANGE, "below the triple point");
+    var t2, v2 = us_saturated_by_temperature(700.0, &e);
+    errc(t2, v2, US_ERR_STEAM_TABLE_OUT_OF_RANGE, "above the critical point");
+    var t3, v3 = us_saturated_by_pressure(101325.0, &e);
+    assert_eq(is_ok(t3), 1, "1 atm is Ok");
+    var tb: f64 = e.temperature;
+    var d6: f64 = absdiff(tb, 373.15);
+    assert(d6 < 1.0, "1 atm: about 373.15 K");
+    var t4, v4 = us_saturated_by_pressure(611.7, &e);
+    assert_eq(is_ok(t4), 1, "611.7 Pa is Ok");
+    var tt: f64 = e.temperature;
+    var d7: f64 = absdiff(tt, 273.16);
+    assert(d7 < 0.1, "611.7 Pa: the triple point");
+    var t5, v5 = us_saturated_by_pressure(100.0, &e);
+    errc(t5, v5, US_ERR_STEAM_TABLE_OUT_OF_RANGE, "below the triple-point pressure");
+    var t6, v6 = us_saturated_by_pressure(25000000.0, &e);
+    errc(t6, v6, US_ERR_STEAM_TABLE_OUT_OF_RANGE, "above the critical pressure");
+    sat_t(308.15, &e, "35 C is Ok");
+    var p35: f64 = e.pressure;
+    var d8: f64 = reldiff(p35, 5628.62);
+    assert(d8 < 0.00001, "35 C between rows: IF97's 5628.62 Pa (linear-in-T gave +3.3%)");
+    sat_t(368.15, &e, "95 C is Ok");
+    var p95: f64 = e.pressure;
+    var d9: f64 = reldiff(p95, 84608.9);
+    assert(d9 < 0.00001, "95 C: 84,608.9 Pa");
+    var k = 0;
+    var ok = 1;
+    while (k < 5) {
+        var t: f64 = 280.0;
+        if (k == 1) { t = 333.0; }
+        if (k == 2) { t = 420.0; }
+        if (k == 3) { t = 555.0; }
+        if (k == 4) { t = 640.0; }
+        sat_t(t, &e, "the round trip's T is Ok");
+        var pp: f64 = e.pressure;
+        var back: UsSaturated;
+        var tr, vr = us_saturated_by_pressure(pp, &back);
+        var bt: f64 = back.temperature;
+        var bp: f64 = back.pressure;
+        var dt: f64 = absdiff(bt, t);
+        var dp: f64 = absdiff(bp, pp);
+        var tol: f64 = 0.000000001 * pp;
+        if (is_ok(tr) != 1 || dt >= 0.000001 || dp >= tol) { ok = 0; }
+        k = k + 1;
+    }
+    assert_eq(ok, 1, "by T then by P: back within 1e-6 K");
+    var t7, v7 = us_saturated_by_temperature(_nan, &e);
+    errc(t7, v7, US_ERR_STEAM_TABLE_OUT_OF_RANGE, "NaN T");
+    var t8, v8 = us_saturated_by_pressure(_nan, &e);
+    errc(t8, v8, US_ERR_STEAM_TABLE_OUT_OF_RANGE, "NaN P");
+}
+
+# The generated table: h_g = h_f + h_fg, T and P increasing, h_fg decreasing, and Clapeyron's s_g − s_f = h_fg / T.
+# rust src/steam.rs: test_saturated_enthalpy_consistency, test_saturated_table_monotonic
+# rust src/steam.rs: test_saturated_table_h_fg_decreasing, test_saturated_table_enthalpy_identity_exact
+fn test_table() {
+    test_group("the saturated table");
+    var identity = 1;
+    var near = 1;
+    var increasing = 1;
+    var decreasing = 1;
+    var clapeyron = 1;
+    var k = 0;
+    while (k < _US_STEAM_SATURATED_COUNT) {
+        var t: f64 = _US_STEAM_SAT_TEMPERATURE[k];
+        var p: f64 = _US_STEAM_SAT_PRESSURE[k];
+        var hf: f64 = _US_STEAM_SAT_H_F[k];
+        var hfg: f64 = _US_STEAM_SAT_H_FG[k];
+        var hg: f64 = _US_STEAM_SAT_H_G[k];
+        var sf: f64 = _US_STEAM_SAT_S_F[k];
+        var sg: f64 = _US_STEAM_SAT_S_G[k];
+        var d: f64 = absdiff(hg, hf + hfg);
+        if (d >= 2000.0) { near = 0; }
+        var d2: f64 = absdiff(hg - hf, hfg);
+        if (d2 >= 0.000001) { identity = 0; }
+        if (k > 0) {
+            var t0: f64 = _US_STEAM_SAT_TEMPERATURE[k - 1];
+            var p0: f64 = _US_STEAM_SAT_PRESSURE[k - 1];
+            var h0: f64 = _US_STEAM_SAT_H_FG[k - 1];
+            if (t <= t0 || p <= p0) { increasing = 0; }
+            if (hfg > h0) { decreasing = 0; }
+        }
+        if (k < _US_STEAM_SATURATED_COUNT - 1) {
+            var lhs: f64 = sg - sf;
+            var rhs: f64 = hfg / t;
+            var dc: f64 = absdiff(lhs, rhs);
+            if (dc >= 0.5) { clapeyron = 0; }
+        }
+        k = k + 1;
+    }
+    assert_eq(near, 1, "h_g = h_f + h_fg within 2 kJ/kg");
+    assert_eq(identity, 1, "h_g - h_f - h_fg within 1e-6");
+    assert_eq(increasing, 1, "T and P strictly increasing");
+    assert_eq(decreasing, 1, "h_fg never increasing");
+    assert_eq(clapeyron, 1, "s_g - s_f = h_fg / T within 0.5 (Clapeyron)");
+}
+
+# IF97 Region 4 against its verification values, both ways, and its range.
+# rust src/steam.rs: test_saturation_pressure_if97_verification_values
+# rust src/steam.rs: test_saturation_temperature_if97_verification_values, test_saturation_line_roundtrip_and_range
+fn test_region4() {
+    test_group("IF97 Region 4");
+    var t, v = us_saturation_pressure(300.0);
+    var p300: f64 = okv(t, v, "300 K is Ok");
+    var d1: f64 = reldiff(p300, 3536.58941);
+    assert(d1 < 0.00000001, "300 K: 3.53658941 kPa (IF97 Table 35)");
+    var t2, v2 = us_saturation_pressure(500.0);
+    var p500: f64 = okv(t2, v2, "500 K is Ok");
+    var d2: f64 = reldiff(p500, 2638897.76);
+    assert(d2 < 0.00000001, "500 K: 2.63889776 MPa");
+    var t3, v3 = us_saturation_pressure(600.0);
+    var p600: f64 = okv(t3, v3, "600 K is Ok");
+    var d3: f64 = reldiff(p600, 12344314.6);
+    assert(d3 < 0.00000001, "600 K: 12.3443146 MPa");
+    var t4, v4 = us_saturation_temperature(100000.0);
+    var s1: f64 = okv(t4, v4, "0.1 MPa is Ok");
+    var d4: f64 = absdiff(s1, 372.755919);
+    assert(d4 < 0.00001, "0.1 MPa: 372.755919 K (IF97 Table 36)");
+    var t5, v5 = us_saturation_temperature(1000000.0);
+    var s2: f64 = okv(t5, v5, "1 MPa is Ok");
+    var d5: f64 = absdiff(s2, 453.035632);
+    assert(d5 < 0.00001, "1 MPa: 453.035632 K");
+    var t6, v6 = us_saturation_temperature(10000000.0);
+    var s3: f64 = okv(t6, v6, "10 MPa is Ok");
+    var d6: f64 = absdiff(s3, 584.149488);
+    assert(d6 < 0.00001, "10 MPa: 584.149488 K");
+    var ok = 1;
+    var k = 0;
+    while (k < 6) {
+        var tk: f64 = 273.16;
+        if (k == 1) { tk = 300.0; }
+        if (k == 2) { tk = 400.0; }
+        if (k == 3) { tk = 500.0; }
+        if (k == 4) { tk = 600.0; }
+        if (k == 5) { tk = 647.0; }
+        var ta, va = us_saturation_pressure(tk);
+        var pk: f64 = va;
+        var tb, vb = us_saturation_temperature(pk);
+        var back: f64 = vb;
+        var dk: f64 = absdiff(back, tk);
+        if (is_ok(ta) != 1 || is_ok(tb) != 1 || dk >= 0.000001) { ok = 0; }
+        k = k + 1;
+    }
+    assert_eq(ok, 1, "T -> P -> T within 1e-6 K");
+    var t7, v7 = us_saturation_pressure(273.0);
+    errc(t7, v7, US_ERR_STEAM_TABLE_OUT_OF_RANGE, "273 K, below Region 4");
+    var t8, v8 = us_saturation_pressure(650.0);
+    errc(t8, v8, US_ERR_STEAM_TABLE_OUT_OF_RANGE, "650 K, above Tc");
+    var t9, v9 = us_saturation_pressure(_nan);
+    errc(t9, v9, US_ERR_STEAM_TABLE_OUT_OF_RANGE, "NaN T");
+    var ta2, va2 = us_saturation_temperature(_nan);
+    errc(ta2, va2, US_ERR_STEAM_TABLE_OUT_OF_RANGE, "NaN P");
+    var tb2, vb2 = us_saturation_temperature(30000000.0);
+    errc(tb2, vb2, US_ERR_STEAM_TABLE_OUT_OF_RANGE, "30 MPa, above Pc");
+}
+
+# Quality from volume, enthalpy and entropy: 0 at the liquid, 1 at the vapor, the midpoint, the refusals, and x(h_g) = 1
+# between rows.
+# rust src/steam.rs: test_quality_x0_is_liquid, test_quality_x1_is_vapor, test_quality_midpoint
+# rust src/steam.rs: test_quality_from_enthalpy, test_quality_from_entropy, test_quality_out_of_range
+# rust src/steam.rs: test_quality_of_saturated_vapor_is_one_between_entries
+fn test_quality() {
+    test_group("quality");
+    var e: UsSaturated;
+    sat_t(373.15, &e, "100 C is Ok");
+    var vf: f64 = e.v_f;
+    var vg: f64 = e.v_g;
+    var hf: f64 = e.h_f;
+    var hg: f64 = e.h_g;
+    var sf: f64 = e.s_f;
+    var sg: f64 = e.s_g;
+    var t, v = us_quality_from_volume(vf, &e);
+    var x0: f64 = okv(t, v, "v_f is Ok");
+    var a0: f64 = f64_abs(x0);
+    assert(a0 < 0.0000000001, "x(v_f) = 0");
+    var t2, v2 = us_quality_from_volume(vg, &e);
+    var x1: f64 = okv(t2, v2, "v_g is Ok");
+    var d1: f64 = absdiff(x1, 1.0);
+    assert(d1 < 0.0000000001, "x(v_g) = 1");
+    var vm: f64 = 0.5 * (vf + vg);
+    var t3, v3 = us_quality_from_volume(vm, &e);
+    var xm: f64 = okv(t3, v3, "the midpoint is Ok");
+    var dm: f64 = absdiff(xm, 0.5);
+    assert(dm < 0.0000000001, "x = 0.5 midway");
+    var t4, v4 = us_quality_from_enthalpy(hf, &e);
+    var h0: f64 = okv(t4, v4, "h_f is Ok");
+    var ah0: f64 = f64_abs(h0);
+    assert(ah0 < 0.0000000001, "x(h_f) = 0");
+    var t5, v5 = us_quality_from_enthalpy(hg, &e);
+    var h1: f64 = okv(t5, v5, "h_g is Ok");
+    var dh1: f64 = absdiff(h1, 1.0);
+    assert(dh1 < 0.01, "x(h_g) = 1");
+    var t6, v6 = us_quality_from_entropy(sf, &e);
+    var s0: f64 = okv(t6, v6, "s_f is Ok");
+    var as0: f64 = f64_abs(s0);
+    assert(as0 < 0.0000000001, "x(s_f) = 0");
+    var t7, v7 = us_quality_from_entropy(sg, &e);
+    var s1: f64 = okv(t7, v7, "s_g is Ok");
+    var ds1: f64 = absdiff(s1, 1.0);
+    assert(ds1 < 0.0000000001, "x(s_g) = 1");
+    var t8, v8 = us_quality_from_volume(vf - 0.001, &e);
+    errc(t8, v8, US_ERR_INVALID_QUALITY, "below v_f: x < 0");
+    var t9, v9 = us_quality_from_volume(vg + 1.0, &e);
+    errc(t9, v9, US_ERR_INVALID_QUALITY, "above v_g: x > 1");
+    var ok = 1;
+    var k = 0;
+    while (k < 4) {
+        var tk: f64 = 478.0;
+        if (k == 1) { tk = 488.0; }
+        if (k == 2) { tk = 528.0; }
+        if (k == 3) { tk = 598.0; }
+        sat_t(tk, &e, "a between-rows state is Ok");
+        var hgk: f64 = e.h_g;
+        var tq, vq = us_quality_from_enthalpy(hgk, &e);
+        var xq: f64 = vq;
+        var dq: f64 = absdiff(xq, 1.0);
+        if (is_ok(tq) != 1 || dq >= 0.000000001) { ok = 0; }
+        k = k + 1;
+    }
+    assert_eq(ok, 1, "x(h_g) = 1 between rows (it was 1.0005, refused)");
+    var c: UsSaturated;
+    sat_t(647.096, &c, "the critical row is Ok");
+    var hc: f64 = c.h_f;
+    var tc, vc = us_quality_from_enthalpy(hc, &c);
+    errc(tc, vc, US_ERR_DIVISION_BY_ZERO, "h_fg = 0 at the critical point");
+}
+
+# Wet steam at x = 0 and 1, its refusals, the enthalpy round trip, and its JSON.
+# rust src/steam.rs: test_wet_steam_properties_x0, test_wet_steam_properties_x1
+# rust src/steam.rs: test_wet_steam_properties_invalid_quality, test_quality_enthalpy_roundtrip
+# rust src/steam.rs: test_saturated_serde_roundtrip, test_wet_steam_serde_roundtrip
+fn test_wet_steam() {
+    test_group("wet steam");
+    var e: UsSaturated;
+    sat_t(373.15, &e, "100 C is Ok");
+    var vf: f64 = e.v_f;
+    var vg: f64 = e.v_g;
+    var hf: f64 = e.h_f;
+    var hg: f64 = e.h_g;
+    var sf: f64 = e.s_f;
+    var sg: f64 = e.s_g;
+    var w: UsWetSteam;
+    var t, v = us_wet_steam_properties(0.0, &e, &w);
+    assert_eq(is_ok(t), 1, "x = 0 is Ok");
+    var wv: f64 = w.specific_volume;
+    var wh: f64 = w.specific_enthalpy;
+    var ws: f64 = w.specific_entropy;
+    var d1: f64 = absdiff(wv, vf);
+    var d2: f64 = absdiff(wh, hf);
+    var d3: f64 = absdiff(ws, sf);
+    assert(d1 < 0.0000000001 && d2 < 0.0000000001 && d3 < 0.0000000001, "x = 0: the liquid");
+    var t2, v2 = us_wet_steam_properties(1.0, &e, &w);
+    assert_eq(is_ok(t2), 1, "x = 1 is Ok");
+    var wv1: f64 = w.specific_volume;
+    var wh1: f64 = w.specific_enthalpy;
+    var ws1: f64 = w.specific_entropy;
+    var d4: f64 = absdiff(wv1, vg);
+    var d5: f64 = absdiff(wh1, hg);
+    var d6: f64 = absdiff(ws1, sg);
+    assert(d4 < 0.0000000001 && d5 < 0.0000000001 && d6 < 0.0000000001, "x = 1: the vapor");
+    var t3, v3 = us_wet_steam_properties(-0.1, &e, &w);
+    errc(t3, v3, US_ERR_INVALID_QUALITY, "x = -0.1");
+    var t4, v4 = us_wet_steam_properties(1.1, &e, &w);
+    errc(t4, v4, US_ERR_INVALID_QUALITY, "x = 1.1");
+    var t5, v5 = us_wet_steam_properties(0.75, &e, &w);
+    var h75: f64 = w.specific_enthalpy;
+    var t6, v6 = us_quality_from_enthalpy(h75, &e);
+    var x75: f64 = okv(t6, v6, "the 0.75 enthalpy is Ok");
+    var d7: f64 = absdiff(x75, 0.75);
+    assert(d7 < 0.01, "x back from h: 0.75");
+    var sb = str_builder_new();
+    us_saturated_to_json(sb, &e);
+    var back: UsSaturated;
+    var t7, v7 = us_saturated_from_json(load64(sb), load64(sb + 8), &back);
+    assert_eq(is_ok(t7), 1, "a saturated document reads back");
+    var bt: f64 = back.temperature;
+    var bp: f64 = back.pressure;
+    var et: f64 = e.temperature;
+    var ep: f64 = e.pressure;
+    assert(bt == et && bp == ep, "its temperature and pressure exactly");
+    var t8, v8 = us_wet_steam_properties(0.5, &e, &w);
+    var sb2 = str_builder_new();
+    us_wet_steam_to_json(sb2, &w);
+    var wb: UsWetSteam;
+    var t9, v9 = us_wet_steam_from_json(load64(sb2), load64(sb2 + 8), &wb);
+    assert_eq(is_ok(t9), 1, "a wet-steam document reads back");
+    var bq: f64 = wb.quality;
+    var dq: f64 = absdiff(bq, 0.5);
+    assert(dq < 0.0000000001, "its quality");
+}
+
+# Runs every group and returns the failure count.
+fn main() {
+    alloc_init();
+    _nan = 0.0 / 0.0;
+    test_lookups();
+    test_table();
+    test_region4();
+    test_quality();
+    test_wet_steam();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

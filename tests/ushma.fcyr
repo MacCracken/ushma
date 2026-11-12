@@ -1,10 +1,10 @@
 # ushma fuzz harness: every reader of untrusted input (port plan §6). Run with `cyrius fuzz --poison --bounds`.
 #
-# The targets so far: USHMA_LOG parsing (`us_log_parse`), and the `ThermalMaterial`, `GasData`, `SubstanceData` and
-# `Phase` decoders, which must also round-trip: what one accepts re-encodes, reads back, and re-encodes to the same
-# bytes. The other JSON decoders and the daimon response handling join as they port. Each target must accept any
-# bytes: return a defined result, never crash, never write outside its buffers (the poisoning allocator and --bounds
-# check that).
+# The targets so far: USHMA_LOG parsing (`us_log_parse`), and the `ThermalMaterial`, `GasData`, `SubstanceData`,
+# `Phase`, `SaturatedEntry` and `WetSteamProperties` decoders, which must also round-trip: what one accepts
+# re-encodes, reads back, and re-encodes to the same bytes. The other JSON decoders and the daimon response handling
+# join as they port. Each target must accept any bytes: return a defined result, never crash, never write outside its
+# buffers (the poisoning allocator and --bounds check that).
 #
 # Inputs are seeded and deterministic: mutations (flips, inserts, deletes, truncations, case changes) of the valid
 # forms, and random strings of 0 … 40 bytes.
@@ -23,6 +23,8 @@ include "src/state_data.cyr"
 include "src/state.cyr"
 include "src/phase_data.cyr"
 include "src/phase.cyr"
+include "src/steam_data.cyr"
+include "src/steam.cyr"
 
 var _fz_state = 0x2545F4914F6CDD1D;
 var _fz_bad = 0;
@@ -33,6 +35,7 @@ var _fz_read = 0;
 var _fz_gas_read = 0;
 var _fz_sub_read = 0;
 var _fz_phase_read = 0;
+var _fz_steam_read = 0;
 
 # xorshift64*: the next pseudo-random word.
 fn fz_next(): i64 {
@@ -165,6 +168,58 @@ fn fz_phase(data, len) {
     return 0;
 }
 
+# An all-f64 steam document (`kind` 1 a SaturatedEntry of 9 fields, 2 a WetSteamProperties of 4) decoded into *w:
+# Ok's tag, its code into *code.
+fn fz_steam_decode(kind, data, len, w, code): i64 {
+    if (kind == 1) {
+        var t, v = us_saturated_from_json_a(_fz_arena, data, len, w);
+        store64(code, v);
+        return is_ok(t);
+    }
+    var t2, v2 = us_wet_steam_from_json_a(_fz_arena, data, len, w);
+    store64(code, v2);
+    return is_ok(t2);
+}
+
+# The words at `w` (`n` fields) re-encoded into builder `sb`, as `kind`'s document.
+fn fz_steam_encode(kind, sb, w) {
+    store64(sb + 8, 0);
+    if (kind == 1) { us_saturated_to_json(sb, w); } else { us_wet_steam_to_json(sb, w); }
+    return 0;
+}
+
+# A steam decoder on one input: any result is fine, but an accepted document must round-trip.
+fn fz_steam(kind, data, len) {
+    var n = 9;
+    if (kind == 2) { n = 4; }
+    var w[72];
+    var w2[72];
+    var code[8];
+    reset_via(_fz_arena);
+    if (fz_steam_decode(kind, data, len, &w, &code) == 0) {
+        if (load64(&code) != US_ERR_DESERIALIZE) { _fz_bad = _fz_bad + 1; }
+        return 0;
+    }
+    _fz_steam_read = _fz_steam_read + 1;
+    fz_steam_encode(kind, _fz_sb, &w);
+    if (fz_steam_decode(kind, load64(_fz_sb), load64(_fz_sb + 8), &w2, &code) == 0) {
+        # A non-finite field writes as null, which reads back as no f64 (as fz_material).
+        var fin = 0;
+        var k = 0;
+        while (k < n) {
+            var x: f64 = load64(&w + (8 * k));
+            fin = fin + _us_is_finite(x);
+            k = k + 1;
+        }
+        if (fin == n) { _fz_bad = _fz_bad + 1; }
+        return 0;
+    }
+    fz_steam_encode(kind, _fz_sb2, &w2);
+    var n1 = load64(_fz_sb + 8);
+    if (n1 != load64(_fz_sb2 + 8) || memeq(load64(_fz_sb), load64(_fz_sb2), n1) == 0) { _fz_bad = _fz_bad + 1; }
+    return 0;
+}
+
 # Fuzz target: one input of `len` bytes at `data`, through every reader.
 fn fuzz_main(data, len) {
     var lv = us_log_parse(data, len);
@@ -173,6 +228,8 @@ fn fuzz_main(data, len) {
     fz_gas(data, len);
     fz_substance(data, len);
     fz_phase(data, len);
+    fz_steam(1, data, len);
+    fz_steam(2, data, len);
     return 0;
 }
 
@@ -229,7 +286,7 @@ fn main() {
     _fz_sb2 = str_builder_new();
     var cap = 512;
     var buf = alloc(cap + 1);
-    var seeds = alloc(8 * 22);
+    var seeds = alloc(8 * 25);
     store64(seeds, "trace");
     store64(seeds + 8, "debug");
     store64(seeds + 16, "info");
@@ -259,6 +316,11 @@ fn main() {
     store64(seeds + 152, "\"Liquid\"");
     store64(seeds + 160, "{\"SupercriticalFluid\":null}");
     store64(seeds + 168, "\"Gas\"");
+    var s1 = "{\"temperature\":373.15,\"pressure\":101418.0,\"v_f\":0.001043,\"v_g\":1.6718,\"h_f\":419100.0,";
+    store64(seeds + 176, fz_cat(s1, "\"h_fg\":2256400.0,\"h_g\":2675500.0,\"s_f\":1307.0,\"s_g\":7354.0}"));
+    store64(seeds + 184, "[273.16,611.657,0.0010002,206.0,0.0,2500900.0,2500900.0,0.0,9155.5]");
+    var q1 = "{\"quality\":0.5,\"specific_volume\":0.8,";
+    store64(seeds + 192, fz_cat(q1, "\"specific_enthalpy\":1.5e6,\"specific_entropy\":4e3}"));
     var i = 0;
     while (i < 50000) {
         var n = 0;
@@ -267,7 +329,7 @@ fn main() {
             var k = 0;
             while (k < n) { store8(buf + k, fz_below(256)); k = k + 1; }
         } else {
-            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(22)));
+            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(25)));
         }
         fuzz_main(buf, n);
         i = i + 1;
@@ -285,6 +347,8 @@ fn main() {
     fmt_int(_fz_sub_read);
     print(", phase documents read: ", 24);
     fmt_int(_fz_phase_read);
+    print(", steam documents read: ", 24);
+    fmt_int(_fz_steam_read);
     println(")");
     return 0;
 }

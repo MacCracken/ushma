@@ -47,6 +47,9 @@ TYPES = {
     "GasData": ("UsGas", "gas"),
     "SubstanceData": ("UsSubstance", "substance"),
     "Phase": ("UsPhase", "phase"),
+    "SaturatedEntry": ("UsSaturated", "saturated"),
+    "WetSteamProperties": ("UsWetSteam", "wet_steam"),
+    "SuperheatedEntry": ("UsSuperheated", "superheated"),
 }
 # Rust item -> the Cyrius names that carry it ("fn x", "const X", "enum X", "struct X"), where the rules give none.
 MAPPED = {

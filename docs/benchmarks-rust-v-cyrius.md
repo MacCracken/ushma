@@ -87,3 +87,18 @@ correctly rounded ln and pow (ADR 0004), the harness floor and the spans. Nothin
 | phase/heat_of_fusion | 1.08 | 9 | m·L_fus |
 | phase/heat_of_vaporization | 0.99 | 9 | m·L_vap |
 | phase/heat_for_phase_change | 11.79 | 49 | four checks, the crossings, the span with its substance field |
+| steam/saturated_by_temp | 18.19 | 141 | Region 4, the row search over 42 rows, 8 hisab `calc_lerp` calls (174 before M3b's review) |
+| steam/saturated_by_pressure | 43.89 | 159 | the Region 4 backward equation, then as above (189 before) |
+| steam/quality_from_enthalpy | 2.18 | 21 | the |h_fg| check, the round-off clamp |
+| steam/wet_steam_properties | 1.84 | 17 | the range check, three mixtures, the out-struct |
+| steam/saturation_pressure | 6.45 | 59 | Region 4: about 30 flops and a √ (68 before) |
+
+**M3b's review.** Probe 5 named the steam lookups M3's target. Measured on `saturated_by_temp` (174 ns): Region 4
+took 49 ns, ten indexed loads of its coefficients 15 of them; the interpolation's per-field helper calls most of the
+rest. Two changes, every row unchanged:
+- Region 4's coefficients are generated as ten scalar `const`s, which compile to immediates (49 → 36 ns per
+  evaluation; `scripts/oracle/src/t_steam.rs`, checked by `probe_tables.py` as before);
+- the interpolation reads each column pair directly, with no per-field helper call.
+
+hisab's `calc_lerp` stays (hisab-first): an inlined `a + (b − a)·t` measured only 3 ns faster, and it would not inline
+anyway (3 parameters: cyrius's open `#inline` issue).

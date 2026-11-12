@@ -1259,6 +1259,120 @@ def m_cc_slope(a, p):
     return F(fdiv(lh, temp * dv))
 
 
+# steam: the private tables, parsed from rust-old/src/steam.rs by this script (load_steam, from main), independently of
+# the generator's parser.
+STEAM = {"rows": [], "r4": []}
+SAT_FIELDS = ["temperature", "pressure", "v_f", "v_g", "h_f", "h_fg", "h_g", "s_f", "s_g"]
+R4_T_MIN, T_CRIT, P_CRIT = 273.15, 647.096, 22_064_000.0
+
+
+def load_steam(root):
+    src = (root / "rust-old/src/steam.rs").read_text()
+    r4 = re.search(r"const R4_N: \[f64; 10\] = \[(.*?)\];", src, re.S).group(1)
+    STEAM["r4"] = [rust_literal(v.strip()) for v in r4.split(",") if v.strip()]
+    table = src[src.index("const SATURATED_TABLE"):]
+    table = table[: table.index("\n];")]
+    rows = []
+    for body in re.findall(r"SaturatedEntry \{(.*?)\}", table, re.S):
+        vals = dict((k, float(rust_literal(v))) for k, v in re.findall(r"(\w+):\s*([-0-9._e]+)", body))
+        rows.append([vals[k] for k in SAT_FIELDS])
+    STEAM["rows"] = rows
+
+
+def _r4p(t):
+    n = STEAM["r4"]
+    th = t + fdiv(n[8], t - n[9])
+    a = th * th + n[0] * th + n[1]
+    b = n[2] * th * th + n[3] * th + n[4]
+    c = n[5] * th * th + n[6] * th + n[7]
+    x = fdiv(2.0 * c, -b + fsqrt(b * b - 4.0 * a * c))
+    return powidf2(x, 4) * 1e6
+
+
+def _r4t(p):
+    n = STEAM["r4"]
+    beta = fsqrt(fsqrt(p * 1e-6))
+    e = beta * beta + n[2] * beta + n[5]
+    f = n[0] * beta * beta + n[3] * beta + n[6]
+    g = n[1] * beta * beta + n[4] * beta + n[7]
+    d = fdiv(2.0 * g, -f - fsqrt(f * f - 4.0 * e * g))
+    s = n[9] + d
+    return 0.5 * (s - fsqrt(s * s - 4.0 * (n[8] + n[9] * d)))
+
+
+def m_sat_p(a, p):
+    t = a[0]
+    if not fge(t, R4_T_MIN) or t > T_CRIT:
+        return E("SteamTableOutOfRange")
+    return F(rust_min(_r4p(t), P_CRIT))
+
+
+def m_sat_t(a, p):
+    pr = a[0]
+    if not fge(pr, _r4p(R4_T_MIN)) or pr > P_CRIT:
+        return E("SteamTableOutOfRange")
+    return F(rust_clamp(_r4t(pr), R4_T_MIN, T_CRIT))
+
+
+def _lerp(a, b, t):
+    return a + (b - a) * t  # hisab 1.4.0's calc::lerp
+
+
+def _sat_interp(t, pr):
+    rows = STEAM["rows"]
+    hi = sum(1 for r in rows if r[0] <= t)
+    hi = min(max(hi, 1), len(rows) - 1)
+    a, b = rows[hi - 1], rows[hi]
+    frac = fdiv(t - a[0], b[0] - a[0])
+    za, zb = fdiv(a[3] * a[1], a[0]), fdiv(b[3] * b[1], b[0])
+    vg = fdiv(_lerp(za, zb, frac) * t, pr)
+    return [t, pr, _lerp(a[2], b[2], frac), vg] + [_lerp(a[k], b[k], frac) for k in range(4, 9)]
+
+
+def m_sat_by_t(a, p):
+    t = a[0]
+    rows = STEAM["rows"]
+    if not fge(t, rows[0][0]) or t > rows[-1][0]:
+        return E("SteamTableOutOfRange")
+    return [fbits(x) for x in _sat_interp(t, rust_min(_r4p(t), P_CRIT))]
+
+
+def m_sat_by_p(a, p):
+    pr = a[0]
+    rows = STEAM["rows"]
+    if not fge(pr, rows[0][1]) or pr > rows[-1][1]:
+        return E("SteamTableOutOfRange")
+    return [fbits(x) for x in _sat_interp(rust_clamp(_r4t(pr), rows[0][0], T_CRIT), pr)]
+
+
+def _quality(x):
+    if not (-1e-9 <= x <= 1.0 + 1e-9):
+        return E("InvalidQuality")
+    return F(rust_clamp(x, 0.0, 1.0))
+
+
+def _q_from(a, lo_k, hi_k):
+    v, e = a[0], a[1:10]
+    d = e[hi_k] - e[lo_k]
+    if not fge(abs(d), TINY):
+        return E("DivisionByZero")
+    return _quality(fdiv(v - e[lo_k], d))
+
+
+def m_q_h(a, p):
+    h, e = a[0], a[1:10]
+    if not fge(abs(e[5]), TINY):
+        return E("DivisionByZero")
+    return _quality(fdiv(h - e[4], e[5]))
+
+
+def m_wet(a, p):
+    x, e = a[0], a[1:10]
+    if not (0.0 <= x <= 1.0):
+        return E("InvalidQuality")
+    return [fbits(v) for v in (x, e[2] + x * (e[3] - e[2]), e[4] + x * e[5], e[7] + x * (e[8] - e[7]))]
+
+
 def unmodelled(fn, ins):
     """Rows of a modelled module that other checks own: the table presets (no inputs; check_tables) and the JSON
     documents (serde_json's text and verdicts, which the harness compares byte for byte; ADR 0005)."""
@@ -1266,6 +1380,16 @@ def unmodelled(fn, ins):
 
 
 MODELS = {
+    "steam": {
+        "steam::saturation_pressure": m_sat_p,
+        "steam::saturation_temperature": m_sat_t,
+        "steam::saturated_by_temperature": m_sat_by_t,
+        "steam::saturated_by_pressure": m_sat_by_p,
+        "steam::quality_from_volume": lambda a, p: _q_from(a, 2, 3),
+        "steam::quality_from_enthalpy": m_q_h,
+        "steam::quality_from_entropy": lambda a, p: _q_from(a, 7, 8),
+        "steam::wet_steam_properties": m_wet,
+    },
     "phase": {
         "phase::SubstanceData::sublimes_at_atmospheric": lambda a, p: [f"i:{int(Sub(a).sublimes())}"],
         "phase::SubstanceData::latent_heat_sublimation": lambda a, p: F(_lh_sub(Sub(a), p)),
@@ -1512,6 +1636,7 @@ def main():
     if listed != [p.name[: -len(".tsv")] for p in files]:
         rep.fail("modules.txt", f"lists {listed}, the directory has {[p.name for p in files]}")
     tables = {p.name: read_tsv(p, rep) for p in files}
+    load_steam(root)
     golden = check_constants(root, tables.get("constants.tsv", []), rep)
     check_constants_cyr(root, golden, rep)
     check_tables(root, tables, rep)

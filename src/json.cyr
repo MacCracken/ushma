@@ -168,3 +168,34 @@ fn _us_jr_str(a, v, out_p, out_n): i64 {
     store64(out_n, n);
     return 1;
 }
+
+# ── all-f64 structs ─────────────────────────────────────────────────────────────────
+
+# Appends the `n` f64 fields at `p` as one JSON object, named by `field(k)` (a fn returning field k's C-string name):
+# the document serde_json writes for a struct of f64 fields only.
+fn _us_jw_f64_struct(sb, p, n, field) {
+    str_builder_putc(sb, 123);
+    var k = 0;
+    while (k < n) {
+        _us_jw_key(sb, fncall1(field, k), k == 0);
+        var x: f64 = load64(p + (8 * k));
+        _us_jw_f64(sb, x);
+        k = k + 1;
+    }
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# Reads a struct of `n` f64 fields named by `field(k)` from the `len`-byte document at `buf` (its tree on allocator
+# `a`) into the `n` words at `w`, by serde's rules: 1, or 0 when serde would refuse it.
+fn _us_jr_f64_struct(a, buf, len, w, n, field): i64 {
+    var v = _us_jr_parse(a, buf, len);
+    var form = _us_jr_form(v, n);
+    if (form == 0) { return 0; }
+    var k = 0;
+    while (k < n) {
+        if (_us_jr_f64(_us_jr_at(v, form, k, fncall1(field, k)), w + (8 * k)) == 0) { return 0; }
+        k = k + 1;
+    }
+    return 1;
+}

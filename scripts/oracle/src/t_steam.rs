@@ -117,6 +117,29 @@ fn label_lit(v: &str) -> String {
     v.chars().filter(|&ch| ch != '_').collect()
 }
 
+/// The saturated table's rows (each entry's nine values, in `SaturatedEntry` order) from `rust-old/src/steam.rs`'s
+/// source, for the golden rows that run every row through the lookups (`m_steam.rs`).
+pub fn saturated_rows(src: &str) -> Result<Vec<Vec<f64>>, String> {
+    let items = const_items("steam", src)?;
+    let fields = [
+        "temperature",
+        "pressure",
+        "v_f",
+        "v_g",
+        "h_f",
+        "h_fg",
+        "h_g",
+        "s_f",
+        "s_g",
+    ];
+    Ok(
+        table(item(&items, "SATURATED_TABLE")?, "SaturatedEntry", &fields)?
+            .into_iter()
+            .map(|(vals, _)| vals)
+            .collect(),
+    )
+}
+
 pub fn emit(src: &str, provenance: &str) -> Result<String, String> {
     let items = const_items("steam", src)?;
     let mut out = header(
@@ -141,9 +164,13 @@ pub fn emit(src: &str, provenance: &str) -> Result<String, String> {
         return Err(format!("R4_N: {} coefficients, expected 10", r4_vals.len()));
     }
     out.push_str(&comments_before(src, "const R4_N:"));
-    out.push_str("# Rust: ushma::steam::R4_N (private)\n");
-    let labels: Vec<String> = (1..=10).map(|k| format!("n{k}")).collect();
-    out.push_str(&f64_column("_US_STEAM_R4_N", &r4_vals, &labels)?);
+    out.push_str(
+        "# Rust: ushma::steam::R4_N (private), as ten scalar consts named by IF97's n1 … n10: a const is an immediate,\n\
+         # about 13 ns a Region 4 evaluation cheaper than ten indexed loads (M3b's review).\n",
+    );
+    for (k, v) in r4_vals.iter().enumerate() {
+        let _ = writeln!(out, "const _US_STEAM_R4_N{} = {};", k + 1, f64_lit(*v)?);
+    }
     out.push('\n');
     for name in ["R4_T_MIN", "T_CRIT", "P_CRIT", "QUALITY_ROUNDOFF"] {
         let c = item(&items, name)?;

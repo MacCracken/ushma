@@ -4300,6 +4300,37 @@ fn _us_jr_str(a, v, out_p, out_n): i64 {
     return 1;
 }
 
+# ── all-f64 structs ─────────────────────────────────────────────────────────────────
+
+# Appends the `n` f64 fields at `p` as one JSON object, named by `field(k)` (a fn returning field k's C-string name):
+# the document serde_json writes for a struct of f64 fields only.
+fn _us_jw_f64_struct(sb, p, n, field) {
+    str_builder_putc(sb, 123);
+    var k = 0;
+    while (k < n) {
+        _us_jw_key(sb, fncall1(field, k), k == 0);
+        var x: f64 = load64(p + (8 * k));
+        _us_jw_f64(sb, x);
+        k = k + 1;
+    }
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# Reads a struct of `n` f64 fields named by `field(k)` from the `len`-byte document at `buf` (its tree on allocator
+# `a`) into the `n` words at `w`, by serde's rules: 1, or 0 when serde would refuse it.
+fn _us_jr_f64_struct(a, buf, len, w, n, field): i64 {
+    var v = _us_jr_parse(a, buf, len);
+    var form = _us_jr_form(v, n);
+    if (form == 0) { return 0; }
+    var k = 0;
+    while (k < n) {
+        if (_us_jr_f64(_us_jr_at(v, form, k, fncall1(field, k)), w + (8 * k)) == 0) { return 0; }
+        k = k + 1;
+    }
+    return 1;
+}
+
 # --- material_data.cyr ---
 
 # ushma — material data: 10 reference materials at ~300 K
@@ -6945,19 +6976,18 @@ var US_SPECIES_CP: f64[12] = {
 # through the API.
 
 # IAPWS-IF97 Region 4 coefficients n₁ … n₁₀.
-# Rust: ushma::steam::R4_N (private)
-var _US_STEAM_R4_N: f64[10] = {
-    1167.0521452767,  # n1
-    -724213.16598138,  # n2
-    -17.073846940092,  # n3
-    12020.82470247,  # n4
-    -3232555.0322333,  # n5
-    14.91510861353,  # n6
-    -4823.2657361591,  # n7
-    405113.40542057,  # n8
-    -0.23855557567849,  # n9
-    650.17534844798,  # n10
-};
+# Rust: ushma::steam::R4_N (private), as ten scalar consts named by IF97's n1 … n10: a const is an immediate,
+# about 13 ns a Region 4 evaluation cheaper than ten indexed loads (M3b's review).
+const _US_STEAM_R4_N1 = 1167.0521452767;
+const _US_STEAM_R4_N2 = -724213.16598138;
+const _US_STEAM_R4_N3 = -17.073846940092;
+const _US_STEAM_R4_N4 = 12020.82470247;
+const _US_STEAM_R4_N5 = -3232555.0322333;
+const _US_STEAM_R4_N6 = 14.91510861353;
+const _US_STEAM_R4_N7 = -4823.2657361591;
+const _US_STEAM_R4_N8 = 405113.40542057;
+const _US_STEAM_R4_N9 = -0.23855557567849;
+const _US_STEAM_R4_N10 = 650.17534844798;
 
 # Lower validity limit of IAPWS-IF97 Region 4 (K).
 # Rust: ushma::steam::R4_T_MIN (private)
@@ -7810,3 +7840,369 @@ var _US_STEAM_SH_SPECIFIC_ENTROPY: f64[72] = {
     7169.6,  # 10000000.0 Pa, 973.15 K
     7408.7,  # 10000000.0 Pa, 1073.15 K
 };
+
+# --- steam.cyr ---
+
+# steam.cyr — steam tables: the IAPWS-IF97 Region 4 saturation line both ways, saturated properties by temperature or
+# pressure, quality and wet steam (Rust 1.4.0 `steam`). All SI: kelvins, pascals, joules, kilograms.
+#
+# Each function computes in the order Rust 1.4.0 writes, so its arithmetic is bit-identical (class B: Region 4 is
+# algebraic with √). The saturated table, Region 4's coefficients and the limits are generated from the Rust literals
+# (src/steam_data.cyr, private). Between table rows each property is interpolated linearly in T with hisab's
+# calc_lerp (Rust's hisab::calc::lerp, a + (b − a)·t), except v_g, whose ratio P·v_g/T is interpolated instead. A
+# refusal returns Err(US_ERR_*) and reports its value at DEBUG (src/validate.cyr).
+#
+# A saturated state is a UsSaturated (Rust's SaturatedEntry), a wet-steam state a UsWetSteam (WetSteamProperties): the
+# lookups fill the caller's struct and return Ok(0) (CLAUDE.md: wide results through out-pointers). Their JSON is
+# serde_json's documents (ADR 0005; src/json.cyr has the rules).
+
+struct UsSaturated {
+    temperature: f64;
+    pressure: f64;
+    v_f: f64;
+    v_g: f64;
+    h_f: f64;
+    h_fg: f64;
+    h_g: f64;
+    s_f: f64;
+    s_g: f64;
+}
+
+struct UsWetSteam {
+    quality: f64;
+    specific_volume: f64;
+    specific_enthalpy: f64;
+    specific_entropy: f64;
+}
+
+# --- IAPWS-IF97 Region 4 ---
+
+# The Region 4 saturation-pressure equation at T (Pa), with no range check.
+fn _us_r4_pressure(t: f64): f64 {
+    var n0: f64 = _US_STEAM_R4_N1;
+    var n1: f64 = _US_STEAM_R4_N2;
+    var n2: f64 = _US_STEAM_R4_N3;
+    var n3: f64 = _US_STEAM_R4_N4;
+    var n4: f64 = _US_STEAM_R4_N5;
+    var n5: f64 = _US_STEAM_R4_N6;
+    var n6: f64 = _US_STEAM_R4_N7;
+    var n7: f64 = _US_STEAM_R4_N8;
+    var n8: f64 = _US_STEAM_R4_N9;
+    var n9: f64 = _US_STEAM_R4_N10;
+    var th: f64 = t + n8 / (t - n9);
+    var a: f64 = th * th + n0 * th + n1;
+    var b: f64 = n2 * th * th + n3 * th + n4;
+    var c: f64 = n5 * th * th + n6 * th + n7;
+    var r: f64 = f64_sqrt(b * b - 4.0 * a * c);
+    var x: f64 = 2.0 * c / ((0.0 - b) + r);
+    # Rust's x.powi(4): (x·x)·(x·x), the products __powidf2 forms.
+    var x2: f64 = x * x;
+    var x4: f64 = x2 * x2;
+    var p: f64 = x4 * 1000000.0;
+    return p;
+}
+
+# The Region 4 saturation-temperature backward equation at P (K), with no range check.
+fn _us_r4_temperature(p: f64): f64 {
+    var n0: f64 = _US_STEAM_R4_N1;
+    var n1: f64 = _US_STEAM_R4_N2;
+    var n2: f64 = _US_STEAM_R4_N3;
+    var n3: f64 = _US_STEAM_R4_N4;
+    var n4: f64 = _US_STEAM_R4_N5;
+    var n5: f64 = _US_STEAM_R4_N6;
+    var n6: f64 = _US_STEAM_R4_N7;
+    var n7: f64 = _US_STEAM_R4_N8;
+    var n8: f64 = _US_STEAM_R4_N9;
+    var n9: f64 = _US_STEAM_R4_N10;
+    var q: f64 = f64_sqrt(p * 0.000001);
+    var beta: f64 = f64_sqrt(q);
+    var e: f64 = beta * beta + n2 * beta + n5;
+    var f: f64 = n0 * beta * beta + n3 * beta + n6;
+    var g: f64 = n1 * beta * beta + n4 * beta + n7;
+    var r: f64 = f64_sqrt(f * f - 4.0 * e * g);
+    var d: f64 = 2.0 * g / ((0.0 - f) - r);
+    var s: f64 = n9 + d;
+    var r2: f64 = f64_sqrt(s * s - 4.0 * (n8 + n9 * d));
+    var t: f64 = 0.5 * (s - r2);
+    return t;
+}
+
+# The saturation pressure of water at T (Pa), by the IF97 Region 4 equation (better than 1e-8 relative to IF97's
+# verification values), capped at the critical pressure. Err(US_ERR_STEAM_TABLE_OUT_OF_RANGE) outside
+# 273.15 K … 647.096 K (or NaN).
+#must_use
+fn us_saturation_pressure(temperature: f64): Result {
+    if (_us_finite_ge(temperature, _US_STEAM_R4_T_MIN) == 0 || temperature > _US_STEAM_T_CRIT) {
+        return Err(_us_fail_f(US_ERR_STEAM_TABLE_OUT_OF_RANGE, "us_saturation_pressure", "temperature", temperature));
+    }
+    var p: f64 = _us_r4_pressure(temperature);
+    var pc: f64 = _us_min(p, _US_STEAM_P_CRIT);
+    return Ok(pc);
+}
+
+# The saturation temperature of water at P (K), by the IF97 Region 4 backward equation, the exact algebraic inverse of
+# us_saturation_pressure, clamped to 273.15 K … 647.096 K. Err(US_ERR_STEAM_TABLE_OUT_OF_RANGE) outside 611.213 Pa
+# (saturation at 273.15 K) … 22.064 MPa (or NaN).
+#must_use
+fn us_saturation_temperature(pressure: f64): Result {
+    var p_min: f64 = _us_r4_pressure(_US_STEAM_R4_T_MIN);
+    if (_us_finite_ge(pressure, p_min) == 0 || pressure > _US_STEAM_P_CRIT) {
+        return Err(_us_fail_f(US_ERR_STEAM_TABLE_OUT_OF_RANGE, "us_saturation_temperature", "pressure", pressure));
+    }
+    var t: f64 = _us_r4_temperature(pressure);
+    var tc: f64 = f64_clamp(t, _US_STEAM_R4_T_MIN, _US_STEAM_T_CRIT);
+    return Ok(tc);
+}
+
+# --- The saturated table ---
+
+# The first row whose temperature exceeds T (Rust's partition_point on `temperature <= T`), clamped to 1 … 41 so the
+# rows (k − 1, k) bracket T.
+fn _us_sat_row(t: f64): i64 {
+    var lo = 0;
+    var hi = _US_STEAM_SATURATED_COUNT;
+    while (lo < hi) {
+        var mid = (lo + hi) / 2;
+        var tm: f64 = _US_STEAM_SAT_TEMPERATURE[mid];
+        if (tm <= t) { lo = mid + 1; } else { hi = mid; }
+    }
+    if (lo < 1) { lo = 1; }
+    if (lo > _US_STEAM_SATURATED_COUNT - 1) { lo = _US_STEAM_SATURATED_COUNT - 1; }
+    return lo;
+}
+
+# Fills *out with the saturated table interpolated at T, where the saturation pressure is P (the caller has checked
+# the range).
+fn _us_sat_interpolate(t: f64, p: f64, out: *UsSaturated) {
+    var k = _us_sat_row(t);
+    var ta: f64 = _US_STEAM_SAT_TEMPERATURE[k - 1];
+    var tb: f64 = _US_STEAM_SAT_TEMPERATURE[k];
+    var pa: f64 = _US_STEAM_SAT_PRESSURE[k - 1];
+    var pb: f64 = _US_STEAM_SAT_PRESSURE[k];
+    var ga: f64 = _US_STEAM_SAT_V_G[k - 1];
+    var gb: f64 = _US_STEAM_SAT_V_G[k];
+    var frac: f64 = (t - ta) / (tb - ta);
+    # P·v_g/T is smooth (about R/M·Z), unlike v_g itself.
+    var za: f64 = ga * pa / ta;
+    var zb: f64 = gb * pb / tb;
+    var z: f64 = calc_lerp(za, zb, frac);
+    var vfa: f64 = _US_STEAM_SAT_V_F[k - 1];
+    var vfb: f64 = _US_STEAM_SAT_V_F[k];
+    var hfa: f64 = _US_STEAM_SAT_H_F[k - 1];
+    var hfb: f64 = _US_STEAM_SAT_H_F[k];
+    var hga: f64 = _US_STEAM_SAT_H_FG[k - 1];
+    var hgb: f64 = _US_STEAM_SAT_H_FG[k];
+    var hha: f64 = _US_STEAM_SAT_H_G[k - 1];
+    var hhb: f64 = _US_STEAM_SAT_H_G[k];
+    var sfa: f64 = _US_STEAM_SAT_S_F[k - 1];
+    var sfb: f64 = _US_STEAM_SAT_S_F[k];
+    var sga: f64 = _US_STEAM_SAT_S_G[k - 1];
+    var sgb: f64 = _US_STEAM_SAT_S_G[k];
+    var vf: f64 = calc_lerp(vfa, vfb, frac);
+    var vg: f64 = z * t / p;
+    var hf: f64 = calc_lerp(hfa, hfb, frac);
+    var hfg: f64 = calc_lerp(hga, hgb, frac);
+    var hg: f64 = calc_lerp(hha, hhb, frac);
+    var sf: f64 = calc_lerp(sfa, sfb, frac);
+    var sg: f64 = calc_lerp(sga, sgb, frac);
+    out.temperature = t;
+    out.pressure = p;
+    out.v_f = vf;
+    out.v_g = vg;
+    out.h_f = hf;
+    out.h_fg = hfg;
+    out.h_g = hg;
+    out.s_f = sf;
+    out.s_g = sg;
+    return 0;
+}
+
+# Fills *out with saturated water and steam at T: the Region 4 saturation pressure, the other properties interpolated
+# linearly in T between table rows (v_g through P·v_g/T). Ok(0), or Err(US_ERR_STEAM_TABLE_OUT_OF_RANGE) outside
+# 273.16 K (the triple point) … 647.096 K (the critical point), *out unchanged.
+#must_use
+fn us_saturated_by_temperature(temperature: f64, out: *UsSaturated): Result {
+    var t_min: f64 = _US_STEAM_SAT_TEMPERATURE[0];
+    var t_max: f64 = _US_STEAM_SAT_TEMPERATURE[_US_STEAM_SATURATED_COUNT - 1];
+    if (_us_finite_ge(temperature, t_min) == 0 || temperature > t_max) {
+        return Err(_us_fail_f(US_ERR_STEAM_TABLE_OUT_OF_RANGE, "us_saturated_by_temperature", "temperature",
+            temperature));
+    }
+    var p: f64 = _us_r4_pressure(temperature);
+    var pc: f64 = _us_min(p, _US_STEAM_P_CRIT);
+    _us_sat_interpolate(temperature, pc, out);
+    return Ok(0);
+}
+
+# Fills *out with saturated water and steam at P: the Region 4 saturation temperature (clamped to the table), then the
+# properties as us_saturated_by_temperature's. Ok(0), or Err(US_ERR_STEAM_TABLE_OUT_OF_RANGE) outside 611.657 Pa
+# (the triple point) … 22.064 MPa (the critical point), *out unchanged.
+#must_use
+fn us_saturated_by_pressure(pressure: f64, out: *UsSaturated): Result {
+    var p_min: f64 = _US_STEAM_SAT_PRESSURE[0];
+    var p_max: f64 = _US_STEAM_SAT_PRESSURE[_US_STEAM_SATURATED_COUNT - 1];
+    if (_us_finite_ge(pressure, p_min) == 0 || pressure > p_max) {
+        return Err(_us_fail_f(US_ERR_STEAM_TABLE_OUT_OF_RANGE, "us_saturated_by_pressure", "pressure", pressure));
+    }
+    var t_lo: f64 = _US_STEAM_SAT_TEMPERATURE[0];
+    var t: f64 = _us_r4_temperature(pressure);
+    var tc: f64 = f64_clamp(t, t_lo, _US_STEAM_T_CRIT);
+    _us_sat_interpolate(tc, pressure, out);
+    return Ok(0);
+}
+
+# --- Quality and wet steam ---
+
+# A computed quality within round-off of [0, 1] (1e-9 either side, as x(h_g) can be 1 + 2e-16), clamped to [0, 1]:
+# Ok(x), or Err(US_ERR_INVALID_QUALITY) for anything else and NaN, reported by `fname`.
+fn _us_quality_ok(x: f64, fname): Result {
+    var lo: f64 = 0.0 - _US_STEAM_QUALITY_ROUNDOFF;
+    var hi: f64 = 1.0 + _US_STEAM_QUALITY_ROUNDOFF;
+    if ((x >= lo && x <= hi) == 0) { return Err(_us_fail_f(US_ERR_INVALID_QUALITY, fname, "quality", x)); }
+    var c: f64 = f64_clamp(x, 0.0, 1.0);
+    return Ok(c);
+}
+
+# The quality (dryness fraction) at specific volume v, x = (v − v_f) / (v_g − v_f). Err(US_ERR_DIVISION_BY_ZERO) when
+# |v_g − v_f| < 1e-30 (the critical point), Err(US_ERR_INVALID_QUALITY) unless x is in [0, 1] within 1e-9.
+#must_use
+fn us_quality_from_volume(v: f64, entry: *UsSaturated): Result {
+    var vf: f64 = entry.v_f;
+    var vg: f64 = entry.v_g;
+    var dv: f64 = vg - vf;
+    var ad: f64 = f64_abs(dv);
+    if (_us_finite_ge(ad, _US_TINY) == 0) {
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_quality_from_volume", "v_g - v_f", dv));
+    }
+    var x: f64 = (v - vf) / dv;
+    return _us_quality_ok(x, "us_quality_from_volume");
+}
+
+# The quality at specific enthalpy h, x = (h − h_f) / h_fg. Err(US_ERR_DIVISION_BY_ZERO) when |h_fg| < 1e-30,
+# Err(US_ERR_INVALID_QUALITY) unless x is in [0, 1] within 1e-9.
+#must_use
+fn us_quality_from_enthalpy(h: f64, entry: *UsSaturated): Result {
+    var hf: f64 = entry.h_f;
+    var hfg: f64 = entry.h_fg;
+    var ah: f64 = f64_abs(hfg);
+    if (_us_finite_ge(ah, _US_TINY) == 0) {
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_quality_from_enthalpy", "h_fg", hfg));
+    }
+    var x: f64 = (h - hf) / hfg;
+    return _us_quality_ok(x, "us_quality_from_enthalpy");
+}
+
+# The quality at specific entropy s, x = (s − s_f) / (s_g − s_f). Err(US_ERR_DIVISION_BY_ZERO) when |s_g − s_f| < 1e-30,
+# Err(US_ERR_INVALID_QUALITY) unless x is in [0, 1] within 1e-9.
+#must_use
+fn us_quality_from_entropy(s: f64, entry: *UsSaturated): Result {
+    var sf: f64 = entry.s_f;
+    var sg: f64 = entry.s_g;
+    var ds: f64 = sg - sf;
+    var ad: f64 = f64_abs(ds);
+    if (_us_finite_ge(ad, _US_TINY) == 0) {
+        return Err(_us_fail_f(US_ERR_DIVISION_BY_ZERO, "us_quality_from_entropy", "s_g - s_f", ds));
+    }
+    var x: f64 = (s - sf) / ds;
+    return _us_quality_ok(x, "us_quality_from_entropy");
+}
+
+# Fills *out with the wet-steam mixture at quality x: each property prop_f + x·(prop_g − prop_f). Ok(0), or
+# Err(US_ERR_INVALID_QUALITY) unless 0 ≤ x ≤ 1 (NaN refused), *out unchanged.
+#must_use
+fn us_wet_steam_properties(quality: f64, entry: *UsSaturated, out: *UsWetSteam): Result {
+    if ((quality >= 0.0 && quality <= 1.0) == 0) {
+        return Err(_us_fail_f(US_ERR_INVALID_QUALITY, "us_wet_steam_properties", "quality", quality));
+    }
+    var vf: f64 = entry.v_f;
+    var vg: f64 = entry.v_g;
+    var hf: f64 = entry.h_f;
+    var hfg: f64 = entry.h_fg;
+    var sf: f64 = entry.s_f;
+    var sg: f64 = entry.s_g;
+    var v: f64 = vf + quality * (vg - vf);
+    var h: f64 = hf + quality * hfg;
+    var s: f64 = sf + quality * (sg - sf);
+    out.quality = quality;
+    out.specific_volume = v;
+    out.specific_enthalpy = h;
+    out.specific_entropy = s;
+    return Ok(0);
+}
+
+# --- JSON ---
+
+# The field names of a SaturatedEntry, in declaration order.
+fn _us_sat_field(k): cstring {
+    match k {
+        0 => { return "temperature"; }
+        1 => { return "pressure"; }
+        2 => { return "v_f"; }
+        3 => { return "v_g"; }
+        4 => { return "h_f"; }
+        5 => { return "h_fg"; }
+        6 => { return "h_g"; }
+        7 => { return "s_f"; }
+        8 => { return "s_g"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# The field names of a WetSteamProperties, in declaration order.
+fn _us_wet_field(k): cstring {
+    match k {
+        0 => { return "quality"; }
+        1 => { return "specific_volume"; }
+        2 => { return "specific_enthalpy"; }
+        3 => { return "specific_entropy"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# Appends *e as serde_json writes a `SaturatedEntry`.
+fn us_saturated_to_json(sb, e: *UsSaturated) {
+    return _us_jw_f64_struct(sb, e, 9, &_us_sat_field);
+}
+
+# Reads a `SaturatedEntry` document (`n` bytes at `buf`; its tree on allocator `a`) into *out: Ok(0), or
+# Err(US_ERR_DESERIALIZE), leaving *out unchanged.
+#must_use
+fn us_saturated_from_json_a(a, buf, n, out: *UsSaturated): Result {
+    var w[72];
+    if (_us_jr_f64_struct(a, buf, n, &w, 9, &_us_sat_field) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_saturated_from_json"));
+    }
+    memcpy(out, &w, 72);
+    return Ok(0);
+}
+
+# us_saturated_from_json_a on the global heap.
+#must_use
+fn us_saturated_from_json(buf, n, out: *UsSaturated): Result {
+    return us_saturated_from_json_a(default_alloc(), buf, n, out);
+}
+
+# Appends *s as serde_json writes a `WetSteamProperties`.
+fn us_wet_steam_to_json(sb, s: *UsWetSteam) {
+    return _us_jw_f64_struct(sb, s, 4, &_us_wet_field);
+}
+
+# Reads a `WetSteamProperties` document (`n` bytes at `buf`; its tree on allocator `a`) into *out: Ok(0), or
+# Err(US_ERR_DESERIALIZE), leaving *out unchanged.
+#must_use
+fn us_wet_steam_from_json_a(a, buf, n, out: *UsWetSteam): Result {
+    var w[32];
+    if (_us_jr_f64_struct(a, buf, n, &w, 4, &_us_wet_field) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_wet_steam_from_json"));
+    }
+    memcpy(out, &w, 32);
+    return Ok(0);
+}
+
+# us_wet_steam_from_json_a on the global heap.
+#must_use
+fn us_wet_steam_from_json(buf, n, out: *UsWetSteam): Result {
+    return us_wet_steam_from_json_a(default_alloc(), buf, n, out);
+}

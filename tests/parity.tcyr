@@ -34,6 +34,8 @@ include "src/entropy.cyr"
 include "src/phase_data.cyr"
 include "src/phase.cyr"
 include "src/chem_data.cyr"
+include "src/steam_data.cyr"
+include "src/steam.cyr"
 
 alloc_init();
 
@@ -863,6 +865,129 @@ fn _par_phase(fp, fl): i64 {
     return 0;
 }
 
+# ── steam ───────────────────────────────────────────────────────────────────────────
+
+# Copies the `n` f64 input tokens k … k + n − 1 into the words at `p` (an all-f64 struct).
+fn _par_in_words(k, n, p) {
+    var j = 0;
+    while (j < n) {
+        store64(p + (8 * j), _par_in(k + j));
+        j = j + 1;
+    }
+    return 0;
+}
+
+# Appends the `n` f64 words at `p` (an all-f64 struct's fields).
+fn _par_got_words(p, n) {
+    var j = 0;
+    while (j < n) {
+        _par_got_f(load64(p + (8 * j)));
+        j = j + 1;
+    }
+    return 0;
+}
+
+# One steam JSON row: 1 when handled, 0 for none, -1 for unusable inputs.
+fn _par_steam_json(fp, fl): i64 {
+    if (_par_mat_sb == 0) {
+        _par_mat_sb = str_builder_new();
+        _par_mat_arena = arena_allocator_growable(65536);
+    }
+    var e: UsSaturated;
+    var w: UsWetSteam;
+    var dn[8];
+    if (_par_eq(fp, fl, "steam::SaturatedEntry::to_json") == 1) {
+        if (_par_in_n != 9) { return 0 - 1; }
+        _par_in_words(0, 9, &e);
+        store64(_par_mat_sb + 8, 0);
+        us_saturated_to_json(_par_mat_sb, &e);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "steam::WetSteamProperties::to_json") == 1) {
+        if (_par_in_n != 4) { return 0 - 1; }
+        _par_in_words(0, 4, &w);
+        store64(_par_mat_sb + 8, 0);
+        us_wet_steam_to_json(_par_mat_sb, &w);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    var kind = 0;
+    if (_par_eq(fp, fl, "steam::SaturatedEntry::from_json") == 1) { kind = 1; }
+    if (_par_eq(fp, fl, "steam::WetSteamProperties::from_json") == 1) { kind = 2; }
+    if (kind == 0) { return 0; }
+    var doc = _par_in_text(0, &dn);
+    if (doc == 0) { return 0 - 1; }
+    var n = load64(&dn);
+    reset_via(_par_mat_arena);
+    var t = 0;
+    var v = 0;
+    if (kind == 1) {
+        var t1, v1 = us_saturated_from_json_a(_par_mat_arena, doc, n, &e);
+        if (is_ok(t1) == 1) { _par_got_words(&e, 9); } else { _par_got_err(v1); }
+        t = t1;
+    } else {
+        var t2, v2 = us_wet_steam_from_json_a(_par_mat_arena, doc, n, &w);
+        if (is_ok(t2) == 1) { _par_got_words(&w, 4); } else { _par_got_err(v2); }
+        t = t2;
+    }
+    if (is_err_result(t) == 1 && _par_bayan_mapped_refusal(doc, n) == 1) { _par_adr5 = 1; }
+    if (is_ok(t) == 1 && _par_has_int_neg_zero(doc, n) == 1) { _par_adr5 = 1; }
+    return 1;
+}
+
+# One steam row: 1 when handled, 0 for a function with no counterpart yet, -1 for unusable inputs.
+fn _par_steam(fp, fl): i64 {
+    var j = _par_steam_json(fp, fl);
+    if (j != 0) { return j; }
+    var x: f64 = _par_in(0);
+    var e: UsSaturated;
+    if (_par_eq(fp, fl, "steam::saturation_pressure") == 1) {
+        var t, v = us_saturation_pressure(x);
+        _par_got_res(t, v);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "steam::saturation_temperature") == 1) {
+        var t1, v1 = us_saturation_temperature(x);
+        _par_got_res(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "steam::saturated_by_temperature") == 1) {
+        var t2, v2 = us_saturated_by_temperature(x, &e);
+        if (is_ok(t2) == 1) { _par_got_words(&e, 9); } else { _par_got_err(v2); }
+        return 1;
+    }
+    if (_par_eq(fp, fl, "steam::saturated_by_pressure") == 1) {
+        var t3, v3 = us_saturated_by_pressure(x, &e);
+        if (is_ok(t3) == 1) { _par_got_words(&e, 9); } else { _par_got_err(v3); }
+        return 1;
+    }
+    if (_par_in_n != 10) { return 0; }
+    _par_in_words(1, 9, &e);
+    if (_par_eq(fp, fl, "steam::quality_from_volume") == 1) {
+        var t4, v4 = us_quality_from_volume(x, &e);
+        _par_got_res(t4, v4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "steam::quality_from_enthalpy") == 1) {
+        var t5, v5 = us_quality_from_enthalpy(x, &e);
+        _par_got_res(t5, v5);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "steam::quality_from_entropy") == 1) {
+        var t6, v6 = us_quality_from_entropy(x, &e);
+        _par_got_res(t6, v6);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "steam::wet_steam_properties") == 1) {
+        var w: UsWetSteam;
+        var t7, v7 = us_wet_steam_properties(x, &e, &w);
+        if (is_ok(t7) == 1) { _par_got_words(&w, 4); } else { _par_got_err(v7); }
+        return 1;
+    }
+    return 0;
+}
+
 # ── entropy ─────────────────────────────────────────────────────────────────────────
 
 # One entropy row: 1 when handled, 0 for a function with no counterpart yet.
@@ -1127,6 +1252,7 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "fmtf") == 1) { return _par_fmtf(fp, fl); }
     if (_par_eq(mp, ml, "transfer") == 1) { return _par_transfer(fp, fl); }
     if (_par_eq(mp, ml, "entropy") == 1) { return _par_entropy(fp, fl); }
+    if (_par_eq(mp, ml, "steam") == 1) { return _par_steam(fp, fl); }
     _par_adr5 = 0;
     if (_par_eq(mp, ml, "material") == 1 && _par_in_n != 0) { return _par_material(fp, fl); }
     if (_par_eq(mp, ml, "state") == 1 && _par_in_n != 0) { return _par_state(fp, fl); }

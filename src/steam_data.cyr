@@ -10,19 +10,18 @@
 # through the API.
 
 # IAPWS-IF97 Region 4 coefficients n₁ … n₁₀.
-# Rust: ushma::steam::R4_N (private)
-var _US_STEAM_R4_N: f64[10] = {
-    1167.0521452767,  # n1
-    -724213.16598138,  # n2
-    -17.073846940092,  # n3
-    12020.82470247,  # n4
-    -3232555.0322333,  # n5
-    14.91510861353,  # n6
-    -4823.2657361591,  # n7
-    405113.40542057,  # n8
-    -0.23855557567849,  # n9
-    650.17534844798,  # n10
-};
+# Rust: ushma::steam::R4_N (private), as ten scalar consts named by IF97's n1 … n10: a const is an immediate,
+# about 13 ns a Region 4 evaluation cheaper than ten indexed loads (M3b's review).
+const _US_STEAM_R4_N1 = 1167.0521452767;
+const _US_STEAM_R4_N2 = -724213.16598138;
+const _US_STEAM_R4_N3 = -17.073846940092;
+const _US_STEAM_R4_N4 = 12020.82470247;
+const _US_STEAM_R4_N5 = -3232555.0322333;
+const _US_STEAM_R4_N6 = 14.91510861353;
+const _US_STEAM_R4_N7 = -4823.2657361591;
+const _US_STEAM_R4_N8 = 405113.40542057;
+const _US_STEAM_R4_N9 = -0.23855557567849;
+const _US_STEAM_R4_N10 = 650.17534844798;
 
 # Lower validity limit of IAPWS-IF97 Region 4 (K).
 # Rust: ushma::steam::R4_T_MIN (private)
