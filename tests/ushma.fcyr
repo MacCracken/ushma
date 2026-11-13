@@ -4,10 +4,11 @@
 # `Phase`, `SaturatedEntry`, `WetSteamProperties`, `SuperheatedEntry`, `StatePoint`, `ProcessKind`, `CycleKind`,
 # `CycleResult`, `RefrigerationResult`, `DiagramPoint`, `CycleComparisonEntry`, `Species`, `BoundaryCondition`,
 # `Side`, `ThermalGrid1D`, `ThermalGrid2D`, `ThermalNetwork` and the six soorat decoders (`ThermalGridVisualization`,
-# `TemperatureProfile`, `CycleStatePoint`, `CycleDiagramData`, `ThermalNetworkVisualization`, `HeatFluxField`), which
-# must also round-trip: what one accepts re-encodes, reads back, and re-encodes to the same bytes; an accepted network
-# is also solved, which must give a defined result. The other JSON decoders and the daimon response
-# handling join as they port. Each target must accept any bytes: return a defined result, never crash, never write
+# `TemperatureProfile`, `CycleStatePoint`, `CycleDiagramData`, `ThermalNetworkVisualization`, `HeatFluxField`) and the
+# `DaimonConfig` and `HooshConfig` decoders, which must also round-trip: what one accepts re-encodes, reads back, and
+# re-encodes to the same bytes; an accepted network is also solved, which must give a defined result. daimon's answer
+# to a registration is read from each input as a body under every kind of status, which must give an id or the
+# refusal. Each target must accept any bytes: return a defined result, never crash, never write
 # outside its buffers (the poisoning allocator and --bounds check that).
 #
 # Inputs are seeded and deterministic: mutations (flips, inserts, deletes, truncations, case changes) of the valid
@@ -34,6 +35,7 @@ include "src/chem_data.cyr"
 include "src/chem.cyr"
 include "src/numerical.cyr"
 include "src/soorat.cyr"
+include "src/ai.cyr"
 
 var _fz_state = 0x2545F4914F6CDD1D;
 var _fz_bad = 0;
@@ -638,6 +640,63 @@ fn fz_soorat(t, data, len) {
     return 0;
 }
 
+var _fz_ai_read = 0;
+var _fz_ai_ids = 0;
+
+# The two config decoders and daimon's answer on one input: a refused config is Deserialize, an accepted one
+# round-trips; an answer is an id (only under a 2xx) or Err(US_ERR_INVALID_PARAMETER).
+fn fz_ai(data, len) {
+    var dc: UsDaimonConfig;
+    reset_via(_fz_arena);
+    var t1, v1 = us_daimon_config_from_json_a(_fz_arena, data, len, &dc);
+    if (is_ok(t1) == 1) {
+        _fz_ai_read = _fz_ai_read + 1;
+        store64(_fz_sb + 8, 0);
+        us_daimon_config_to_json(_fz_sb, &dc);
+        var d2: UsDaimonConfig;
+        var t2, v2 = us_daimon_config_from_json_a(_fz_arena, load64(_fz_sb), load64(_fz_sb + 8), &d2);
+        store64(_fz_sb2 + 8, 0);
+        us_daimon_config_to_json(_fz_sb2, &d2);
+        var n1 = load64(_fz_sb + 8);
+        if (is_ok(t2) == 0 || n1 != load64(_fz_sb2 + 8) || memeq(load64(_fz_sb), load64(_fz_sb2), n1) == 0) {
+            _fz_bad = _fz_bad + 1;
+        }
+    } elif (v1 != US_ERR_DESERIALIZE) {
+        _fz_bad = _fz_bad + 1;
+    }
+    var hc: UsHooshConfig;
+    var t3, v3 = us_hoosh_config_from_json_a(_fz_arena, data, len, &hc);
+    if (is_ok(t3) == 1) {
+        _fz_ai_read = _fz_ai_read + 1;
+        store64(_fz_sb + 8, 0);
+        us_hoosh_config_to_json(_fz_sb, &hc);
+        var h2: UsHooshConfig;
+        var t4, v4 = us_hoosh_config_from_json_a(_fz_arena, load64(_fz_sb), load64(_fz_sb + 8), &h2);
+        var same = 0;
+        if (is_ok(t4) == 1 && h2.endpoint_len == hc.endpoint_len) {
+            same = memeq(h2.endpoint, hc.endpoint, hc.endpoint_len);
+        }
+        if (same == 0) { _fz_bad = _fz_bad + 1; }
+    } elif (v3 != US_ERR_DESERIALIZE) {
+        _fz_bad = _fz_bad + 1;
+    }
+    var status = 100 + fz_below(500);
+    var t5, v5 = _us_ai_answer(_fz_arena, status, data, len);
+    if (is_ok(t5) == 1) {
+        _fz_ai_ids = _fz_ai_ids + 1;
+        if (status < 200 || status >= 300) { _fz_bad = _fz_bad + 1; }
+    } elif (v5 != US_ERR_INVALID_PARAMETER) {
+        _fz_bad = _fz_bad + 1;
+    }
+    var t6, v6 = _us_ai_answer(_fz_arena, 201, data, len);
+    if (is_ok(t6) == 1) {
+        _fz_ai_ids = _fz_ai_ids + 1;
+    } elif (v6 != US_ERR_INVALID_PARAMETER) {
+        _fz_bad = _fz_bad + 1;
+    }
+    return 0;
+}
+
 # A builder's text as a fresh C string.
 fn fz_text(sb): i64 {
     var n = load64(sb + 8);
@@ -675,6 +734,7 @@ fn fuzz_main(data, len) {
         fz_soorat(t, data, len);
         t = t + 1;
     }
+    fz_ai(data, len);
     return 0;
 }
 
@@ -731,7 +791,7 @@ fn main() {
     _fz_sb2 = str_builder_new();
     var cap = 2048;
     var buf = alloc(cap + 1);
-    var seeds = alloc(8 * 59);
+    var seeds = alloc(8 * 64);
     store64(seeds, "trace");
     store64(seeds + 8, "debug");
     store64(seeds + 16, "info");
@@ -826,6 +886,11 @@ fn main() {
     store64(seeds + 448, fz_cat(f1s, "\"spacing\":[0.1,0.1],\"max_magnitude\":100.0}"));
     store64(seeds + 456, "[[1,2],[[0,1]],[0.5]]");
     store64(seeds + 464, "[[[1,2]],[1,1],[0.1,0.1],1]");
+    store64(seeds + 472, "{\"endpoint\":\"http://localhost:8090\",\"api_key\":\"probe-key\"}");
+    store64(seeds + 480, "[\"https://custom.host:9090\",null]");
+    store64(seeds + 488, "{\"endpoint\":\"http://localhost:8088\"}");
+    store64(seeds + 496, "{\"id\":7,\"name\":\"ushma\",\"type\":\"User\",\"status\":0}");
+    store64(seeds + 504, "{\"error\":\"agent limit reached\"}");
     _fz_net_t = alloc(8 * 64);
     var i = 0;
     while (i < 50000) {
@@ -835,7 +900,7 @@ fn main() {
             var k = 0;
             while (k < n) { store8(buf + k, fz_below(256)); k = k + 1; }
         } else {
-            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(59)));
+            n = fz_mutate(buf, cap, load64(seeds + 8 * fz_below(64)));
         }
         fuzz_main(buf, n);
         i = i + 1;
@@ -867,6 +932,10 @@ fn main() {
     fmt_int(_fz_net_read);
     print(", soorat documents read: ", 25);
     fmt_int(_fz_sr_read);
+    print(", ai configs read: ", 19);
+    fmt_int(_fz_ai_read);
+    print(", daimon ids read: ", 19);
+    fmt_int(_fz_ai_ids);
     println(")");
     return 0;
 }

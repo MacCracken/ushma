@@ -34,6 +34,7 @@ Exit status 1 on any failure; the last line is `FAILURES: <n>`.
 """
 
 import importlib.util
+import json
 import math
 import pathlib
 import platform
@@ -2480,8 +2481,40 @@ def m_sr_network(ins, p):
     return out + [f"v:{len(res)}"] + [fbits(fdiv(1.0, r) if r > 0.0 else 0.0) for _, _, r in res]
 
 
+# ── ai (M7c) ──
+# A registration from its row: the request 1.4.0 sends (its path, its five headers, its body) and its outcome from the
+# stub's status and 1.4.0's body: reqwest errors on 4xx and 5xx, then serde_json must read the whole body as an object
+# with a string `agent_id`.
+
+AI_BODY = '{"capabilities":["heat_transfer","thermodynamics","entropy","thermal_materials"],"name":"ushma"}'
+
+
+def m_ai_register(ins, p):
+    ep = unpct(ins[0][2:])
+    key = None if ins[1] == "n:" else unpct(ins[1][2:])
+    status, body = int(ins[2][2:]), unpct(ins[3][2:])
+    if key is not None and any((ord(c) < 32 and c != "\t") or ord(c) == 127 for c in key):
+        return ["n:", "E:InvalidParameter"]  # reqwest's HeaderValue refuses it before connecting
+    if "REFUSED" in ep:
+        return ["n:", "E:InvalidParameter"]
+    path = ep.rstrip("/").split("STUB", 1)[1] + "/v1/agents/register"
+    auth = "n:" if key is None else "s:" + pct(("Bearer " + key).strip())
+    req = ["s:POST", "s:" + pct(path), "s:STUB", "s:application/json", f"i:{len(AI_BODY)}", auth, "s:" + pct("*/*"),
+           "v:0", "s:" + pct(AI_BODY)]
+    outcome = "E:InvalidParameter"
+    if status < 400:
+        try:
+            doc = json.loads(body)
+        except ValueError:
+            doc = None
+        if isinstance(doc, dict) and isinstance(doc.get("agent_id"), str):
+            outcome = "s:" + pct(doc["agent_id"])
+    return req + [outcome]
+
+
 # Functions whose rows hold whole cycle results or term lists: their models read the raw tokens.
 RAW_ARGS = {
+    "ai::DaimonClient::register_agent",
     "soorat::ThermalGridVisualization::from_grid_2d",
     "soorat::HeatFluxField::from_grid_2d",
     "soorat::TemperatureProfile::from_grid_1d",
@@ -2633,6 +2666,9 @@ def unmodelled(fn, ins):
 
 
 MODELS = {
+    "ai": {
+        "ai::DaimonClient::register_agent": m_ai_register,
+    },
     "soorat": {
         "soorat::ThermalGridVisualization::from_grid_2d": m_sr_heatmap,
         "soorat::HeatFluxField::from_grid_2d": m_sr_flux,

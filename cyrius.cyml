@@ -94,8 +94,7 @@ modules = [
     "src/soorat.cyr",
 ]
 
-# The physics bundle plus the daimon client (src/ai.cyr from M7, on sandhi): dist/ushma-ai.cyr. Until M7 it holds
-# the same modules as [lib].
+# The physics bundle plus the daimon client (src/ai.cyr, on sandhi): dist/ushma-ai.cyr.
 [lib.ai]
 modules = [
     "src/constants.cyr",
@@ -124,7 +123,9 @@ modules = [
     "src/numerical.cyr",
     "src/bridge.cyr",
     "src/soorat.cyr",
+    "src/ai.cyr",
 ]
 
 [test]
-stdlib = ["assert", "bench"]
+# thread and net: the loopback daimon stub the ai rows and tests/ai.tcyr run on a second thread.
+stdlib = ["assert", "bench", "thread", "net"]

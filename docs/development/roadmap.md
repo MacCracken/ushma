@@ -170,7 +170,7 @@ benchmark and example. Plan of record: [ushma-port-plan.md](ushma-port-plan.md).
 - [x] M4 — cycles (2026-11-12)
 - [x] M5 — chemical & statistical (2026-11-12)
 - [x] M6 — numerical (2026-11-12)
-- [ ] M7 — integrations: bridges, soorat-compat, ai (sandhi)
+- [x] M7 — integrations: bridges, soorat-compat, ai (sandhi) (2026-11-12)
 - [ ] M8 — release 2.0.0 (155/155 functions, 479/479 tests, 5 examples)
 
 ## Backlog (from the 1.4 audit, demand-gated)

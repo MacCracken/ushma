@@ -44,6 +44,23 @@ ADRs 0001–0005.
 - **scripts/oracle** — serde_json is built with `float_roundtrip`: its default float parse reads 35,970 of 160,320 of its own shortest texts back 1–2 ulp off (probe 11). Writing is unchanged, and the golden corpus is unaffected
 
 ### Added
+- **M7c, the daimon and hoosh client** (port plan §6): `src/ai.cyr`, in `[lib.ai]` only (`dist/ushma-ai.cyr`), on sandhi. M7 is complete, and with it every Rust module.
+  - **API:**
+    - the configs `UsDaimonConfig` and `UsHooshConfig`, with `us_daimon_config_default` / `us_hoosh_config_default`, their JSON (`_to_json`, `_from_json`, `_from_json_a`), and `us_daimon_config_to_text`, the key-redacting text;
+    - the client `UsDaimonClient`, with `us_daimon_client_new` / `_new_a`, `us_daimon_client_config` and `us_daimon_client_register_agent`.
+  - **Shape** (ADR 0002 row 18): the strings are bytes and a length, and a None key is a 0 pointer. The client keeps a copy of its config, its allocator and its two timeouts.
+  - **Registration** returns `Ok(the integer id)` daimon 2.5.6 assigns (row 6: `POST /v1/agents`, reading `id`). Every failure is `US_ERR_INVALID_PARAMETER`, as Rust's every failure is `InvalidParameter`, and a refused allocation is `US_ERR_OUT_OF_MEMORY`.
+  - **Behaviour:** one blocking sandhi POST (row 4) carrying Rust's 96 body bytes in serde's key order, `Accept: */*` and the bearer key (row 8), with `total_ms` and `read_ms` at 30 s (row 7). The DEBUG span `register_agent` carries the endpoint, never the key. An endpoint or key holding a control byte is refused before any request, and no redirect is followed.
+  - **Golden rows:** `tests/golden/ai.tsv`, 128 rows. The generator runs 1.4.0's own client against a loopback stub on a thread and records the exact request it sends, for 20 scripted answers, endpoint and key forms and a refused connection (31 registrations), plus the configs' defaults and JSON (97 rows).
+  - **Parity:** `tests/daimon_stub.cyr` runs the same stub in Cyrius, on a second thread, for each row. On every one of the 31 the port's request on the wire equals 1.4.0's: method, path (mapped per row 6), the five headers by value, sandhi's four transport headers set aside (row 8), and the body. Every outcome is the same. 6 config decodes are accepted under ADR 5's mapped divergences.
+  - **`validate.py`** models the registrations from 1.4.0's rules (reqwest's status check, serde's whole-body parse, a string `agent_id`) and reproduces all 31.
+  - **Tests:** `tests/ai.tcyr` has 59 assertions:
+    - Rust's 7 ai tests;
+    - daimon's answers read without a network;
+    - live registrations: the span carries the endpoint and not the key, a silent server is bounded by `read_ms`, and a refused connection, a CR/LF key, a newline in the endpoint and a refused allocation are each handled.
+  - **Fuzzing:** the harness reads both config documents and round-trips each one it accepts, and reads daimon's answer from every input under random statuses.
+  - **Benches:** 2 Cyrius-only rows (Rust benches no ai path): a keyed config's document, 816 ns, and its read on an arena, 2.0 µs.
+  - **Scripts:** ai is PORTED. `surface_parity.py` now also counts `pub async fn` methods (Rust's `register_agent` had been missed), `impl Default for T` (→ `us_<t>_default`) and a hand-written `Debug` (mapped): ai has 12/12. `rust_test_ledger.py` has 479 of 479, every Rust test ported.
 - **M7b, soorat's visualization data** (port plan §6): `src/soorat.cyr`, the six types soorat renders and their JSON:
   - `UsGridVisualization`, the heatmap: `us_grid_visualization_from_grid_2d`;
   - `UsTemperatureProfile`, the 1D profile: `us_temperature_profile_from_grid_1d`;

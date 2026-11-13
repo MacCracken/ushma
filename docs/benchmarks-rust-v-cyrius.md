@@ -230,6 +230,8 @@ rest of the system at 380, connectivity at 126 and the check at 81:
 | soorat/cycle_diagram_otto_50 (Cyrius only) | — | 37,223 | Otto's T-s and P-v diagrams at 50 points a process (M4c's: their correctly rounded pows) and its four state points |
 | soorat/network_graph_5 (Cyrius only) | — | 116 | the checks, 5 temperatures, 4 edges and their conductances |
 | soorat/heatmap_to_json_20x20 (Cyrius only) | — | 1,297,000 | 400 solved temperatures through fmtf's exact printer, about 3 µs each (ADR 0005) |
+| ai/daimon_config_to_json (Cyrius only) | — | 816 | `{"endpoint":…,"api_key":…}`: two strings through serde_json's escapes |
+| ai/daimon_config_from_json (Cyrius only) | — | 1,983 | bayan's tree on an arena reset per call, both strings copied onto it |
 
 **M7a.** Rust benches no bridge, so these are Cyrius-only rows, at the 1.4.0 tests' values. Each arithmetic
 conversion is the harness floor (the `noop` row, 4 ns) and a few operations. The rest is their correctly rounded
@@ -243,3 +245,7 @@ the profile from 1.5 to 0.8 µs. The flux field gained less, 19.4 to 17.7 µs, a
 divisions and square root a cell. Every row is unchanged. The diagram is M4c's two diagrams. The heatmap's document is
 fmtf's: its exact bignum printer takes about 3 µs for a full 17-digit double (900 ns for a short one,
 `material/to_json`). fmtf is impetus's code, vendored, so its speed is recorded rather than changed here (plan §8).
+
+**M7c.** Rust benches no ai path. The registration itself is a network round trip, so it has no row: its cost is the
+server's and the loopback's, not the client's. The configs' JSON is the client's only repeatable work, and is
+recorded.

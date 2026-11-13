@@ -10,6 +10,8 @@ For each Rust module whose milestone has come (`PORTED`), it lists rust-old/src/
 - `impl T { pub fn m }`                     -> `fn us_<t>_m(`, with <t> from TYPES
 - `pub struct T` / `pub enum T`             -> `struct <TYPES[T]>` / `enum <TYPES[T]>`
 - `#[derive(Serialize)]` / `Deserialize`    -> `fn us_<t>_to_json(` / `fn us_<t>_from_json(` (ADR 0005)
+- `impl Default for T`                      -> `fn us_<t>_default(`
+- a hand-written `impl Debug for T`          -> MAPPED (a derived Debug is plumbing, and is not an item)
 - `pub const X: f64` (any module)           -> `const US_X =` (src/constants.cyr, generated)
 - `pub const X: T`, T a preset type         -> `const US_<T>_X =` (`US_X` when X already starts `<T>_`) and
                                                `fn us_<t>_preset(`
@@ -28,11 +30,9 @@ from pathlib import Path
 root = Path(sys.argv[1]).resolve()
 
 # The modules whose milestone has come.
-PORTED = ["error", "validate", "logging", "material", "transfer", "state", "entropy", "phase", "steam", "cycle", "chem", "stat", "numerical", "bridge", "integration/soorat"]
+PORTED = ["error", "validate", "logging", "material", "transfer", "state", "entropy", "phase", "steam", "cycle", "chem", "stat", "numerical", "bridge", "integration/soorat", "ai"]
 # The rest, with their milestone (port plan §3.1).
-SCHEDULED = {
-    "ai": "M7",
-}
+SCHEDULED = {}
 WIRING = {
     "lib": "module declarations and re-exports: the [lib] / [lib.ai] module lists in cyrius.cyml",
     "integration/mod": "the `soorat` module declaration",
@@ -68,6 +68,9 @@ TYPES = {
     "CycleStatePoint": ("UsCycleStatePoint", "cycle_state_point"),
     "ThermalNetworkVisualization": ("UsNetworkVisualization", "network_visualization"),
     "HeatFluxField": ("UsHeatFluxField", "heat_flux_field"),
+    "DaimonConfig": ("UsDaimonConfig", "daimon_config"),
+    "HooshConfig": ("UsHooshConfig", "hoosh_config"),
+    "DaimonClient": ("UsDaimonClient", "daimon_client"),
 }
 # Rust item -> the Cyrius names that carry it ("fn x", "const X", "enum X", "struct X"), where the rules give none.
 MAPPED = {
@@ -78,6 +81,7 @@ MAPPED = {
     "numerical::enum BoundaryCondition": ["enum UsBoundary", "struct UsBoundaryCondition"],
     "error::type Result": ["fn is_ok", "fn is_err_result"],
     "error::UshmaError: Display": ["fn us_error_message", "fn us_error_name"],
+    "ai::DaimonConfig: Debug": ["fn us_daimon_config_to_text"],
 }
 
 
@@ -124,7 +128,10 @@ def rust_items(module):
             am = re.match(r"pub type (\w+)", s)
             if am:
                 items.append((f"type {am.group(1)}", "type", None, am.group(1)))
-        fm = re.match(r"pub (?:const )?fn (\w+)", s)
+        tr = re.match(r"impl(?:<[^>]*>)?\s+(?:std::fmt::)?(Default|Debug)\s+for\s+(\w+)", s)
+        if tr and depth == 0:
+            items.append((f"{tr.group(2)}: {tr.group(1)}", tr.group(1), tr.group(2), tr.group(2)))
+        fm = re.match(r"pub (?:const |async )?fn (\w+)", s)
         if fm:
             if impl and depth >= 1:
                 items.append((f"{impl}::{fm.group(1)}", "method", impl, fm.group(1)))
@@ -171,6 +178,8 @@ def counterpart(module, kind, ty, name):
         return [f"fn us_{t[1]}_to_json"]
     if kind == "Deserialize" and t:
         return [f"fn us_{t[1]}_from_json"]
+    if kind == "Default" and t:
+        return [f"fn us_{t[1]}_default"]
     if kind == "const" and ty in ("f64", "usize"):
         return [f"const US_{name}"]
     if kind == "const" and t:

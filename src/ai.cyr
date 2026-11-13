@@ -1,0 +1,305 @@
+# ai.cyr — the daimon and hoosh client (Rust 1.4.0 `ai`): the two services' configs and their JSON, and ushma's
+# registration as an agent with daimon. In `[lib.ai]` only: it is the one module on sandhi's HTTP stack (and its TLS
+# companions), as Rust's `ai` feature was the one on reqwest and tokio.
+#
+# A config holds its strings as bytes and a length (ADR 0002 row 18): `endpoint`, and the daimon config's `api_key`,
+# where a 0 pointer is Rust's None and any other pointer Some (Some("") included). A config built from JSON points into
+# the decoder's allocator; a default one, at static text. us_daimon_config_to_text is Rust's hand-written Debug: the
+# key never appears in it, only whether there is one.
+#
+# The client keeps a copy of its config and the allocator each registration allocates on (its URL, headers, options
+# and sandhi's response; a one-off call at startup, so an arena the caller resets keeps it flat). Registration is one
+# blocking sandhi POST (row 4), to `<endpoint>/v1/agents` (row 6: daimon 2.5.6 serves that, never Rust's
+# `/v1/agents/register`), with Rust's body bytes in serde's key order, its `Accept: */*` and its bearer key (row 8),
+# bounded by `total_ms` and `read_ms`, 30 s each (row 7: reqwest's `timeout(30 s)`). daimon answers 201 with the new
+# agent's integer `id`, which is the Ok value. Every failure is Err(US_ERR_INVALID_PARAMETER), as Rust's every
+# failure is `InvalidParameter`, with what failed in a DEBUG event: an endpoint or key a request cannot carry (a
+# control byte; Rust's URL and header checks), no connection, a timeout, a status outside 2xx (sandhi follows no
+# redirect: daimon serves none, and following one would carry the key elsewhere), a body that is not a JSON object,
+# or an `id` that is not an integer. A refused allocation is Err(US_ERR_OUT_OF_MEMORY). The DEBUG span
+# `register_agent` carries the endpoint, as Rust's `#[instrument]` does, and never the key.
+
+# A daimon service's config (Rust's DaimonConfig): its endpoint (`endpoint_len` bytes at `endpoint`) and its API key
+# (`api_key_len` bytes at `api_key`; `api_key` 0 when there is none).
+struct UsDaimonConfig {
+    endpoint;
+    endpoint_len;
+    api_key;
+    api_key_len;
+}
+
+# A hoosh service's config (Rust's HooshConfig): its endpoint, `endpoint_len` bytes at `endpoint`.
+struct UsHooshConfig {
+    endpoint;
+    endpoint_len;
+}
+
+# A daimon client (Rust's DaimonClient): its config (the first field, so a *UsDaimonClient is also the address of its
+# UsDaimonConfig: us_daimon_client_config), the allocator a registration allocates on, and the registration's two
+# timeouts in milliseconds (30,000 each).
+struct UsDaimonClient {
+    config: UsDaimonConfig;
+    alloc;
+    total_ms;
+    read_ms;
+}
+
+# The registration's body, in two parts (it is joined per call): Rust's `json!` object in serde_json's key order
+# ("capabilities" before "name"), 96 bytes.
+var _US_AI_BODY_A = "{\"capabilities\":[\"heat_transfer\",\"thermodynamics\",";
+var _US_AI_BODY_B = "\"entropy\",\"thermal_materials\"],\"name\":\"ushma\"}";
+const _US_AI_BODY_LEN = 96;
+
+# --- Configs ---
+
+# Makes *c Rust's default daimon config: endpoint http://localhost:8090, no API key.
+fn us_daimon_config_default(c: *UsDaimonConfig) {
+    c.endpoint = "http://localhost:8090";
+    c.endpoint_len = 21;
+    c.api_key = 0;
+    c.api_key_len = 0;
+    return 0;
+}
+
+# Makes *c Rust's default hoosh config: endpoint http://localhost:8088.
+fn us_hoosh_config_default(c: *UsHooshConfig) {
+    c.endpoint = "http://localhost:8088";
+    c.endpoint_len = 21;
+    return 0;
+}
+
+# Appends *c as text for a log or a message, its key redacted (Rust's Debug for DaimonConfig): `endpoint=<endpoint>
+# api_key=<redacted>`, or `api_key=none` when there is no key. The key's bytes are never read.
+fn us_daimon_config_to_text(sb, c: *UsDaimonConfig) {
+    str_builder_add_cstr(sb, "endpoint=");
+    var t[16];
+    store64(&t, c.endpoint);
+    store64(&t + 8, c.endpoint_len);
+    str_builder_add(sb, &t);
+    if (c.api_key == 0) {
+        str_builder_add_cstr(sb, " api_key=none");
+    } else {
+        str_builder_add_cstr(sb, " api_key=<redacted>");
+    }
+    return 0;
+}
+
+# Appends *c as serde_json writes a `DaimonConfig`: the endpoint, and the key or `null`.
+fn us_daimon_config_to_json(sb, c: *UsDaimonConfig) {
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "endpoint", 1);
+    _us_jw_str(sb, c.endpoint, c.endpoint_len);
+    _us_jw_key(sb, "api_key", 0);
+    if (c.api_key == 0) {
+        str_builder_add_cstr(sb, "null");
+    } else {
+        _us_jw_str(sb, c.api_key, c.api_key_len);
+    }
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# Reads a `DaimonConfig` document (`n` bytes at `buf`; an object, or a 2-element sequence) into *out, its strings and
+# the parse tree on allocator `a`. A missing or `null` api_key is none, as serde reads an Option (in the object form;
+# the sequence form needs both elements). Ok(0), or Err(US_ERR_DESERIALIZE), or Err(US_ERR_OUT_OF_MEMORY) for a
+# refused copy, leaving *out unchanged.
+#must_use
+fn us_daimon_config_from_json_a(a, buf, n, out: *UsDaimonConfig): Result {
+    var v = _us_jr_parse(a, buf, n);
+    var form = _us_jr_form(v, 2);
+    if (form == 0) { return Err(_us_fail(US_ERR_DESERIALIZE, "us_daimon_config_from_json")); }
+    var ev = _us_jr_at(v, form, 0, "endpoint");
+    var kv = _us_jr_at(v, form, 1, "api_key");
+    if (ev == 0 || bayan_json_v_tag(ev) != JTAG_STR) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_daimon_config_from_json"));
+    }
+    var has_key = 0;
+    if (kv != 0 && bayan_json_v_tag(kv) != JTAG_NULL) {
+        if (bayan_json_v_tag(kv) != JTAG_STR) {
+            return Err(_us_fail(US_ERR_DESERIALIZE, "us_daimon_config_from_json"));
+        }
+        has_key = 1;
+    }
+    var w[32];
+    var code = _us_ai_str_in(a, ev, &w);
+    if (code == 0 && has_key == 1) { code = _us_ai_str_in(a, kv, &w + 16); }
+    if (code != 0) { return Err(_us_fail(code, "us_daimon_config_from_json")); }
+    if (has_key == 0) {
+        store64(&w + 16, 0);
+        store64(&w + 24, 0);
+    }
+    memcpy(out, &w, 32);
+    return Ok(0);
+}
+
+# us_daimon_config_from_json_a on the global heap: for a one-off read (its tree and strings stay allocated).
+#must_use
+fn us_daimon_config_from_json(buf, n, out: *UsDaimonConfig): Result {
+    return us_daimon_config_from_json_a(default_alloc(), buf, n, out);
+}
+
+# Appends *c as serde_json writes a `HooshConfig`.
+fn us_hoosh_config_to_json(sb, c: *UsHooshConfig) {
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "endpoint", 1);
+    _us_jw_str(sb, c.endpoint, c.endpoint_len);
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# Reads a `HooshConfig` document (`n` bytes at `buf`; an object, or a 1-element sequence) into *out, its endpoint and
+# the parse tree on allocator `a`: Ok(0), or Err(US_ERR_DESERIALIZE), or Err(US_ERR_OUT_OF_MEMORY) for a refused copy,
+# leaving *out unchanged.
+#must_use
+fn us_hoosh_config_from_json_a(a, buf, n, out: *UsHooshConfig): Result {
+    var v = _us_jr_parse(a, buf, n);
+    var form = _us_jr_form(v, 1);
+    var ev = _us_jr_at(v, form, 0, "endpoint");
+    if (form == 0 || ev == 0 || bayan_json_v_tag(ev) != JTAG_STR) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_hoosh_config_from_json"));
+    }
+    var w[16];
+    var code = _us_ai_str_in(a, ev, &w);
+    if (code != 0) { return Err(_us_fail(code, "us_hoosh_config_from_json")); }
+    memcpy(out, &w, 16);
+    return Ok(0);
+}
+
+# us_hoosh_config_from_json_a on the global heap: for a one-off read (its tree and endpoint stay allocated).
+#must_use
+fn us_hoosh_config_from_json(buf, n, out: *UsHooshConfig): Result {
+    return us_hoosh_config_from_json_a(default_alloc(), buf, n, out);
+}
+
+# String node `v` copied onto allocator `a` into the two words at `w` (pointer, length): 0, US_ERR_DESERIALIZE for
+# invalid UTF-8, or US_ERR_OUT_OF_MEMORY for a refused copy.
+fn _us_ai_str_in(a, v, w): i64 {
+    if (_us_jr_str(a, v, w, w + 8) == 1) { return 0; }
+    var s = bayan_json_v_str(v);
+    if (_us_utf8_valid(str_data(s), str_len(s)) == 0) { return US_ERR_DESERIALIZE; }
+    return US_ERR_OUT_OF_MEMORY;
+}
+
+# --- The client ---
+
+# Makes *out a client of the daimon service *config describes (a copy of it), whose registrations allocate on the
+# global heap, with Rust's 30 s timeout: Ok(0). Rust's can fail building its HTTP client; nothing here can, and the
+# Result keeps Rust's shape.
+#must_use
+fn us_daimon_client_new(out: *UsDaimonClient, config: *UsDaimonConfig): Result {
+    return us_daimon_client_new_a(default_alloc(), out, config);
+}
+
+# us_daimon_client_new with the registrations allocating on allocator `a`.
+#must_use
+fn us_daimon_client_new_a(a, out: *UsDaimonClient, config: *UsDaimonConfig): Result {
+    memcpy(out, config, sizeof(UsDaimonConfig));
+    out.alloc = a;
+    out.total_ms = 30000;
+    out.read_ms = 30000;
+    return Ok(0);
+}
+
+# The address of *cl's config (`&cl.config` is no Cyrius expression; the config is the struct's first field, so it is
+# *cl's own address).
+#must_use
+fn us_daimon_client_config(cl: *UsDaimonClient): *UsDaimonConfig {
+    var c = cl;
+    return c;
+}
+
+# 1 when the `n` bytes at `p` can go into a request as they are: no NUL and no control byte (below 0x20, or 0x7F),
+# except a tab when `tab` is 1 (a header value may hold one, as Rust's HeaderValue allows; a URL may not).
+#must_use
+fn _us_ai_bytes_ok(p, n, tab): i64 {
+    var k = 0;
+    while (k < n) {
+        var b = load8(p + k);
+        if (b == 127 || (b < 32 && (b != 9 || tab == 0))) { return 0; }
+        k = k + 1;
+    }
+    return 1;
+}
+
+# Copies the `pre_n` bytes at `pre`, the `n` bytes at `p` and then the C string `tail` onto allocator `a`,
+# NUL-terminated: the copy, or 0 when the allocation was refused.
+fn _us_ai_cat(a, pre, pre_n, p, n, tail): i64 {
+    var tn = strlen(tail);
+    var d = alloc_via(a, pre_n + n + tn + 1);
+    if (d == 0) { return 0; }
+    memcpy(d, pre, pre_n);
+    memcpy(d + pre_n, p, n);
+    memcpy(d + pre_n + n, tail, tn);
+    store8(d + pre_n + n + tn, 0);
+    return d;
+}
+
+# daimon's answer to a registration, HTTP `status` with the `n`-byte body at `body` (its tree on allocator `a`):
+# Ok(the integer `id`) for a 2xx whose body is a JSON object with one, else Err(US_ERR_INVALID_PARAMETER).
+#must_use
+fn _us_ai_answer(a, status, body, n): Result {
+    var fname = "us_daimon_client_register_agent";
+    if (status < 200 || status >= 300) { return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, fname, "status", status)); }
+    var v = _us_jr_parse(a, body, n);
+    if (v == 0 || bayan_json_v_tag(v) != JTAG_OBJ) {
+        return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, fname, "body bytes", n));
+    }
+    var id = bayan_json_v_obj_get_by_cstr(v, "id");
+    if (id == 0 || bayan_json_v_tag(id) != JTAG_INT) {
+        return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, fname, "id", 0 - 1));
+    }
+    return Ok(bayan_json_v_int(id));
+}
+
+# The registration itself, inside the span.
+#must_use
+fn _us_ai_register(cl: *UsDaimonClient): Result {
+    var fname = "us_daimon_client_register_agent";
+    var a = cl.alloc;
+    var ep = cl.config.endpoint;
+    var en = cl.config.endpoint_len;
+    var key = cl.config.api_key;
+    var kn = cl.config.api_key_len;
+    if (ep == 0 || en < 0 || _us_ai_bytes_ok(ep, en, 0) == 0) {
+        return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, fname, "endpoint bytes", en));
+    }
+    if (key != 0 && (kn < 0 || _us_ai_bytes_ok(key, kn, 1) == 0)) {
+        return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, fname, "api_key bytes", kn));
+    }
+    # Rust's trim_end_matches('/'): every trailing slash.
+    while (en > 0 && load8(ep + en - 1) == 47) { en = en - 1; }
+    var url = _us_ai_cat(a, ep, en, "", 0, "/v1/agents");
+    var body = _us_ai_cat(a, _US_AI_BODY_A, strlen(_US_AI_BODY_A), "", 0, _US_AI_BODY_B);
+    var h = sandhi_headers_new_a(a);
+    var opts = sandhi_http_options_new_a(a);
+    if (url == 0 || body == 0 || h == 0 || opts == 0) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, fname)); }
+    var set = sandhi_headers_set_a(a, h, "Content-Type", "application/json");
+    if (set >= 0) { set = sandhi_headers_set_a(a, h, "Accept", "*/*"); }
+    if (set >= 0 && key != 0) {
+        var bearer = _us_ai_cat(a, "Bearer ", 7, key, kn, "");
+        if (bearer == 0) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, fname)); }
+        set = sandhi_headers_set_a(a, h, "Authorization", bearer);
+    }
+    if (set < 0) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, fname)); }
+    sandhi_http_options_total_ms(opts, cl.total_ms);
+    sandhi_http_options_read_ms(opts, cl.read_ms);
+    var r = sandhi_http_post_opts_a(a, url, h, body, _US_AI_BODY_LEN, opts);
+    var kind = sandhi_http_err_kind(r);
+    if (kind != SANDHI_OK) { return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, fname, "transport", kind)); }
+    return _us_ai_answer(a, sandhi_http_status(r), sandhi_http_body(r), sandhi_http_body_len(r));
+}
+
+# Registers ushma as an agent with the daimon service of *cl's config (Rust's DaimonClient::register_agent): one
+# blocking POST of {"capabilities":["heat_transfer","thermodynamics","entropy","thermal_materials"],"name":"ushma"} to
+# `<endpoint>/v1/agents` (the endpoint's trailing slashes trimmed), with Accept */*, the key as a bearer token when
+# there is one, and *cl's two timeouts. Ok(the id daimon assigned), or Err(US_ERR_INVALID_PARAMETER) for every failure
+# (the file's header lists them), or Err(US_ERR_OUT_OF_MEMORY) when building the request was refused. Opens a DEBUG
+# span `register_agent` carrying the endpoint.
+#must_use
+fn us_daimon_client_register_agent(cl: *UsDaimonClient): Result {
+    _us_span_enter_kv("register_agent", 14, "endpoint", cl.config.endpoint, cl.config.endpoint_len);
+    var t, v = _us_ai_register(cl);
+    _us_span_exit();
+    if (is_ok(t) == 1) { return Ok(v); }
+    return Err(v);
+}

@@ -1,0 +1,241 @@
+# daimon_stub.cyr — a loopback stub that answers as daimon 2.5.6 does, for the ai rows of tests/parity.tcyr and for
+# tests/ai.tcyr (port plan §4 step 5's request rows; probe 7's stub, in Cyrius, on a second thread).
+#
+#   _ds_serve(status, body, blen, path, plen)   serve one connection: answer `status` with the `blen` bytes at `body`
+#                                               at `path` (`plen` bytes), 404 anywhere else; status 0 holds the
+#                                               connection without answering until the client gives up
+#   _ds_finish(th)                              after the client returns: wake the stub if no client came, and join
+#   _ds_captured(), _ds_captured_len()          the request it received (0 bytes when none came)
+#   _ds_addr()                                  its address, "127.0.0.1:<port>"
+#   _ds_closed_port()                           a port nothing listens on
+#
+# One listening socket serves the whole run, on the first free port from 18800. The stub's thread allocates nothing,
+# since the client allocates on the main thread meanwhile; its buffers are made before it starts.
+
+# The listening socket, its port and address, and the job the stub's thread serves. The job's words: 0 status, 1 body,
+# 2 body length, 3 the path it answers at, 4 its length, 5 the captured request's buffer, 6 its length, 7 1 once a
+# connection was accepted, 8 1 once done.
+var _ds_lfd = 0 - 1;
+var _ds_port = 0;
+var _ds_address = 0;
+var _ds_job = 0;
+const _DS_CAP = 16384;
+
+# Opens the listening socket on the first free port from 18800: 1, or 0 when none could be had.
+fn _ds_listen(): i64 {
+    if (_ds_lfd >= 0) { return 1; }
+    var port = 18800;
+    while (port < 19000) {
+        var tf, fd = tcp_socket();
+        if (is_err_result(tf) == 1) { return 0; }
+        var ru = sock_reuse(fd);
+        var tb, vb = sock_bind(fd, INADDR_LOOPBACK(), port);
+        if (is_ok(tb) == 1) {
+            var tl, vl = sock_listen(fd, 8);
+            if (is_ok(tl) == 1) {
+                _ds_lfd = fd;
+                _ds_port = port;
+                _ds_job = alloc(8 * 9);
+                store64(_ds_job + 40, alloc(_DS_CAP));
+                var a = alloc(32);
+                memcpy(a, "127.0.0.1:", 10);
+                var n = 10 + fmt_int_buf(port, a + 10);
+                store8(a + n, 0);
+                _ds_address = a;
+                return 1;
+            }
+        }
+        sock_close(fd);
+        port = port + 1;
+    }
+    return 0;
+}
+
+# The stub's address, "127.0.0.1:<port>" (a C string), opening the socket if need be; 0 when it cannot be.
+fn _ds_addr(): i64 {
+    if (_ds_listen() == 0) { return 0; }
+    return _ds_address;
+}
+
+# A port nothing listens on: one bound for a moment past the stub's and closed again; 0 when none was found.
+fn _ds_closed_port(): i64 {
+    var port = _ds_port + 1;
+    while (port < 19100) {
+        var tf, fd = tcp_socket();
+        var ru = sock_reuse(fd);
+        var tb, vb = sock_bind(fd, INADDR_LOOPBACK(), port);
+        sock_close(fd);
+        if (is_ok(tb) == 1) { return port; }
+        port = port + 1;
+    }
+    return 0;
+}
+
+# The index just past the blank line ending the request head in the `n` bytes at `p`, or -1.
+fn _ds_head_end(p, n): i64 {
+    var k = 0;
+    while (k + 3 < n) {
+        if (load8(p + k) == 13 && load8(p + k + 1) == 10 && load8(p + k + 2) == 13 && load8(p + k + 3) == 10) {
+            return k + 4;
+        }
+        k = k + 1;
+    }
+    return 0 - 1;
+}
+
+# The value of header `name` (lowercase, C string) in the head of `n` bytes at `p`: its start into *vp and its length
+# (trimmed of spaces and tabs), or -1 when absent.
+fn _ds_header(p, n, name, vp): i64 {
+    var nl = strlen(name);
+    var k = 0;
+    while (k < n && load8(p + k) != 10) { k = k + 1; }
+    k = k + 1;
+    while (k < n) {
+        var e = k;
+        while (e < n && load8(p + e) != 13) { e = e + 1; }
+        if (e == k) { return 0 - 1; }
+        var c = k;
+        while (c < e && load8(p + c) != 58) { c = c + 1; }
+        if (c - k == nl) {
+            var same = 1;
+            var j = 0;
+            while (j < nl) {
+                var b = load8(p + k + j);
+                if (b >= 65 && b <= 90) { b = b + 32; }
+                if (b != load8(name + j)) { same = 0; }
+                j = j + 1;
+            }
+            if (same == 1) {
+                var vs = c + 1;
+                var ve = e;
+                while (vs < ve && (load8(p + vs) == 32 || load8(p + vs) == 9)) { vs = vs + 1; }
+                while (ve > vs && (load8(p + ve - 1) == 32 || load8(p + ve - 1) == 9)) { ve = ve - 1; }
+                store64(vp, p + vs);
+                return ve - vs;
+            }
+        }
+        k = e + 2;
+    }
+    return 0 - 1;
+}
+
+# The decimal value of the `n` digits at `p`.
+fn _ds_digits(p, n): i64 {
+    var v = 0;
+    var j = 0;
+    while (j < n) {
+        v = v * 10 + load8(p + j) - 48;
+        j = j + 1;
+    }
+    return v;
+}
+
+# The stub's thread: accepts one connection, reads one request into the job's buffer, answers (or, for status 0,
+# holds the connection until the client closes it), and closes.
+fn _ds_thread(job): i64 {
+    var ta, fd = sock_accept(_ds_lfd);
+    store64(job + 56, 1);
+    if (is_err_result(ta) == 1) {
+        store64(job + 64, 1);
+        return 0;
+    }
+    var buf = load64(job + 40);
+    var n = 0;
+    var want = 0 - 1;
+    while (n < _DS_CAP) {
+        var tr, got = sock_recv(fd, buf + n, _DS_CAP - n);
+        if (is_err_result(tr) == 1 || got <= 0) { break; }
+        n = n + got;
+        var he = _ds_head_end(buf, n);
+        if (he >= 0) {
+            var vp[8];
+            var cl = _ds_header(buf, he, "content-length", &vp);
+            var len = 0;
+            if (cl > 0) { len = _ds_digits(load64(&vp), cl); }
+            want = he + len;
+        }
+        if (want >= 0 && n >= want) { break; }
+    }
+    store64(job + 48, n);
+    if (n == 0) {
+        # No request (the main thread's wake-up connection, or a client that sent nothing): nothing to answer.
+        sock_close(fd);
+        store64(job + 64, 1);
+        return 0;
+    }
+    if (load64(job) == 0) {
+        # Silent: read until the client gives up and closes.
+        var sink[64];
+        while (1) {
+            var ts, gs = sock_recv(fd, &sink, 64);
+            if (is_err_result(ts) == 1 || gs <= 0) { break; }
+        }
+        sock_close(fd);
+        store64(job + 64, 1);
+        return 0;
+    }
+    var ps = 0;
+    while (ps < n && load8(buf + ps) != 32) { ps = ps + 1; }
+    ps = ps + 1;
+    var pe = ps;
+    while (pe < n && load8(buf + pe) != 32) { pe = pe + 1; }
+    var status = 404;
+    var body = "";
+    var blen = 0;
+    var wp = load64(job + 24);
+    var wl = load64(job + 32);
+    if (n > 0 && pe - ps == wl && memeq(buf + ps, wp, wl) == 1) {
+        status = load64(job);
+        body = load64(job + 8);
+        blen = load64(job + 16);
+    }
+    var head[160];
+    var hb = &head;
+    memcpy(hb, "HTTP/1.1 ", 9);
+    var hn = 9 + fmt_int_buf(status, hb + 9);
+    var h2 = " X\r\nContent-Type: application/json\r\nContent-Length: ";
+    memcpy(hb + hn, h2, strlen(h2));
+    hn = hn + strlen(h2);
+    hn = hn + fmt_int_buf(blen, hb + hn);
+    var h3 = "\r\nConnection: close\r\n\r\n";
+    memcpy(hb + hn, h3, strlen(h3));
+    hn = hn + strlen(h3);
+    var s1 = sock_send_all(fd, hb, hn);
+    if (blen > 0) { var s2 = sock_send_all(fd, body, blen); }
+    sock_close(fd);
+    store64(job + 64, 1);
+    return 0;
+}
+
+# Starts the stub's thread on one connection: answer `status` with the `blen` bytes at `body` at `path` (`plen` bytes),
+# 404 elsewhere; status 0 holds the connection unanswered. The thread's handle, or 0 when it could not start.
+fn _ds_serve(status, body, blen, path, plen): i64 {
+    if (_ds_listen() == 0) { return 0; }
+    var job = _ds_job;
+    store64(job, status);
+    store64(job + 8, body);
+    store64(job + 16, blen);
+    store64(job + 24, path);
+    store64(job + 32, plen);
+    store64(job + 48, 0);
+    store64(job + 56, 0);
+    store64(job + 64, 0);
+    return thread_create(&_ds_thread, job);
+}
+
+# After the client returns: when no connection reached the stub, wakes its accept with one of our own; then joins it.
+fn _ds_finish(th) {
+    if (th == 0) { return 0; }
+    if (load64(_ds_job + 56) == 0) {
+        var td, dfd = tcp_socket();
+        var tk, vk = sock_connect(dfd, INADDR_LOOPBACK(), _ds_port);
+        sock_close(dfd);
+    }
+    var j = thread_join(th);
+    return 0;
+}
+
+# The request the stub received: its bytes, and their number (0 when none came).
+fn _ds_captured(): i64 { return load64(_ds_job + 40); }
+
+fn _ds_captured_len(): i64 { return load64(_ds_job + 48); }

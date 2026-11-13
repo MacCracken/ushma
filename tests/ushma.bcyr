@@ -30,6 +30,7 @@ include "src/stat.cyr"
 include "src/numerical.cyr"
 include "src/bridge.cyr"
 include "src/soorat.cyr"
+include "src/ai.cyr"
 
 # Keeps results observable, so no call can be dropped.
 var _bn_sink = 0;
@@ -725,6 +726,28 @@ fn b_sr_heatmap_json(x): i64 {
     return load64(_bn_sb + 8);
 }
 
+# A daimon config with a key (its words: endpoint, length, key, length), its document, and the arena its reads reset
+# (Cyrius-only rows: Rust benches no ai path).
+var _bn_ai_cfg = 0;
+var _bn_ai_doc = 0;
+var _bn_ai_doc_n = 0;
+var _bn_ai_arena = 0;
+
+# The config's document.
+fn b_ai_to_json(x): i64 {
+    store64(_bn_sb + 8, 0);
+    us_daimon_config_to_json(_bn_sb, _bn_ai_cfg);
+    return load64(_bn_sb + 8);
+}
+
+# The config read back from its document, on an arena reset per call.
+fn b_ai_from_json(x): i64 {
+    reset_via(_bn_ai_arena);
+    var c: UsDaimonConfig;
+    var t, v = us_daimon_config_from_json_a(_bn_ai_arena, _bn_ai_doc, _bn_ai_doc_n, &c);
+    return c.endpoint_len;
+}
+
 # Benchmark entry point: runs every benchmark and reports each one.
 fn main(): i64 {
     alloc_init();
@@ -900,6 +923,18 @@ fn main(): i64 {
     var tnz, vnz = us_network_solve(&net, _bn_net_t, 5);
     bn_run("soorat/network_graph_5 (Cyrius only)", &b_sr_graph, &net, 1000000);
     bn_run("soorat/heatmap_to_json_20x20 (Cyrius only)", &b_sr_heatmap_json, 0, 10000);
+    _bn_ai_cfg = alloc(sizeof(UsDaimonConfig));
+    us_daimon_config_default(_bn_ai_cfg);
+    store64(_bn_ai_cfg + 16, "probe-key");
+    store64(_bn_ai_cfg + 24, 9);
+    store64(_bn_sb + 8, 0);
+    us_daimon_config_to_json(_bn_sb, _bn_ai_cfg);
+    _bn_ai_doc_n = load64(_bn_sb + 8);
+    _bn_ai_doc = alloc(_bn_ai_doc_n);
+    memcpy(_bn_ai_doc, load64(_bn_sb), _bn_ai_doc_n);
+    _bn_ai_arena = arena_allocator_growable(65536);
+    bn_run("ai/daimon_config_to_json (Cyrius only)", &b_ai_to_json, 0, 100000);
+    bn_run("ai/daimon_config_from_json (Cyrius only)", &b_ai_from_json, 0, 100000);
     return 0;
 }
 

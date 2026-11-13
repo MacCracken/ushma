@@ -745,8 +745,9 @@ after M6b: 146,288 ok, 138 accepted).
 
 ## 10. M7 (2026-11-12)
 
-After M7b the harness's summary is `15 modules, 0 failing | rows: 154134 ok, 0 failed, 0 measured, 0 pending, 186
-accepted (ADR 4: 68)`, identical on x86_64 ELF, `--bounds`, PE and aarch64 (after M7a: 153,459 ok, 155 accepted).
+After M7c the harness's summary is `16 modules, 0 failing | rows: 154256 ok, 0 failed, 0 measured, 0 pending, 192
+accepted (ADR 4: 68)`, identical on x86_64 ELF, `--bounds`, PE and aarch64 (after M7a: 153,459 ok, 155 accepted; after
+M7b: 154,134 ok, 186 accepted).
 
 - **bridge** (M7a): 6,439 rows (class B 3,676, C 2,763), every one at 0 ulp. The 3 rows where glibc misrounds a
   `pow` (Kleiber's m^0.75) are accepted under ADR 4, the port giving the correctly rounded value. glibc misrounds
@@ -786,3 +787,27 @@ accepted (ADR 4: 68)`, identical on x86_64 ELF, `--bounds`, PE and aarch64 (afte
     an edge of 2⁶³, which serde reads as a usize and bayan refuses.
   - **Surface parity:** soorat 23 of 23. **Tests:** all 13 of soorat's. The ledger has 472 of 479 ported, and the 7
     left are ai's (M7c).
+- **ai** (M7c): 128 rows, class A, every one ok (6 config decodes accepted under ADR 5).
+  - **The registrations** (31 rows) are probe 7 made permanent. The generator runs 1.4.0's own `DaimonClient` (reqwest
+    on a tokio runtime) against a loopback stub on a thread, and the harness runs the port's against the same stub
+    in Cyrius (`tests/daimon_stub.cyr`, on a second thread), so each side's request is the bytes it really put on the
+    wire, sandhi's included.
+    - **Answers:** 201 and 200 with an id (7, 12, 0, −3, 2⁶³ − 1, and one beside a look-alike field); 401, 404, 405,
+      409, 500 and a 302 without a Location; a truncated body, `ok`, an empty body, no id, an id of the wrong type, a
+      `null` id, an array, a float id, and trailing bytes.
+    - **Endpoints and keys:** an endpoint with one or three trailing slashes, a path prefix with and without them; no
+      key, an empty key, a key with a tab, one with é, and the two reqwest refuses before connecting (CR LF, DEL).
+      Then a refused connection.
+    - **The comparison:** every request is method, path, the five headers by value, the other headers' names and the
+      body. The port's path is mapped back to 1.4.0's (ADR 0002 row 6), and sandhi's four transport headers are set
+      aside (row 8); nothing else is. The 2⁶³ − 1 id is 1.4.0's string and the port's integer, the same decimal.
+  - **The configs** (97 rows): both defaults; five daimon and three hoosh configs written, escapes and an empty key
+    among them; 87 decodes. Those are the shared variants and documents with a missing, `null`, numeric or array key,
+    a missing or non-string endpoint, an unknown field, a lone surrogate, and both serde forms. A missing key is None,
+    as serde reads an Option, but only in the object form: the sequence form needs both elements.
+  - **What has no row:** a server that never answers (`read_ms` bounds it, row 7; 1.4.0's 30 s would cost 30 s a
+    target), an endpoint holding a control byte (reqwest strips it, the port refuses it), and refused allocations.
+    `tests/ai.tcyr` tests each.
+  - **Surface parity:** ai 12 of 12. `surface_parity.py` now counts `pub async fn` methods, which it had missed
+    (`register_agent`), and the `Default` and hand-written `Debug` impls. **Tests:** all 7 of ai's. The ledger has all
+    479 of 479 Rust tests ported.

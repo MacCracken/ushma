@@ -1,4 +1,5 @@
 # ushma golden corpus: one module per line; tests/parity.tcyr replays each
+ai
 bridge
 chem
 constants

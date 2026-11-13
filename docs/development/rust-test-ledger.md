@@ -5,11 +5,11 @@
 > (`# rust <file>: <test>`), at its module's milestone. Nothing is deferred: a test not ported yet is one whose
 > milestone hasn't come. The golden corpus (`tests/golden/`) checks every ported function on its grid besides.
 
-**479 Rust tests:** 472 ported; 7 at M7.
+**479 Rust tests:** 479 ported; none left.
 
 | Rust file | Tests | Ported | Due, unported | Later (milestone) |
 |---|---:|---:|---:|---|
-| `src/ai.rs` | 7 | 0 | 0 | 7 (M7) |
+| `src/ai.rs` | 7 | 7 | 0 | — |
 | `src/bridge.rs` | 31 | 31 | 0 | — |
 | `src/chem.rs` | 23 | 23 | 0 | — |
 | `src/cycle.rs` | 59 | 59 | 0 | — |
@@ -26,12 +26,19 @@
 | `src/transfer.rs` | 67 | 67 | 0 | — |
 | `src/validate.rs` | 2 | 2 | 0 | — |
 | `tests/integration.rs` | 30 | 30 | 0 | — |
-| **Total** | **479** | **472** | **0** | |
+| **Total** | **479** | **479** | **0** | |
 
 ## Where each is ported
 
 | Rust test | Cyrius test |
 |---|---|
+| `src/ai.rs` `test_daimon_client_new` | `tests/ai.tcyr` `test_client` |
+| `src/ai.rs` `test_daimon_config_debug_redacts_api_key` | `tests/ai.tcyr` `test_redaction` |
+| `src/ai.rs` `test_daimon_config_serde_roundtrip` | `tests/ai.tcyr` `test_roundtrip` |
+| `src/ai.rs` `test_daimon_config_with_api_key` | `tests/ai.tcyr` `test_client` |
+| `src/ai.rs` `test_default_config` | `tests/ai.tcyr` `test_defaults` |
+| `src/ai.rs` `test_hoosh_config_serde_roundtrip` | `tests/ai.tcyr` `test_roundtrip` |
+| `src/ai.rs` `test_hoosh_default` | `tests/ai.tcyr` `test_defaults` |
 | `src/bridge.rs` `altitude_temperature_1km` | `tests/bridge.tcyr` `test_badal` |
 | `src/bridge.rs` `altitude_temperature_sea_level` | `tests/bridge.tcyr` `test_badal` |
 | `src/bridge.rs` `bmr_human` | `tests/bridge.tcyr` `test_sharira` |

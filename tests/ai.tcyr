@@ -1,0 +1,283 @@
+# ai tests.
+#
+# Rust 1.4.0's 7 ai.rs tests, one for one. Then the port's own: daimon's answers read without a network, and the
+# registration end to end against the loopback stub (tests/daimon_stub.cyr): an id, the span carrying the endpoint
+# and never the key, a silent server bounded by read_ms (ADR 0002 row 7), a refused connection, the bytes a request
+# cannot carry, and a refused allocation. The golden corpus (tests/golden/ai.tsv) checks every request byte and
+# outcome against 1.4.0's.
+
+include "src/constants.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+include "src/json.cyr"
+include "src/ai.cyr"
+include "tests/daimon_stub.cyr"
+
+# Asserts a Result is Ok.
+fn okc(t, name) {
+    assert_eq(is_ok(t), 1, name);
+    return 0;
+}
+
+# Asserts a Result is Err(code).
+fn errc(t, v, code, name) {
+    assert_eq(is_err_result(t), 1, name);
+    if (is_err_result(t) == 1) { assert_streq(us_error_name(v), us_error_name(code), name); }
+    return 0;
+}
+
+# 1 when the `n` bytes at `p` hold the C string `s`.
+fn has(p, n, s): i64 {
+    var sl = strlen(s);
+    var k = 0;
+    while (k + sl <= n) {
+        if (memeq(p + k, s, sl) == 1) { return 1; }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# 1 when the endpoint bytes of *c are the C string s.
+fn ep_is(c: *UsDaimonConfig, s): i64 {
+    var n = strlen(s);
+    if (c.endpoint_len != n) { return 0; }
+    return memeq(c.endpoint, s, n);
+}
+
+# A daimon config at `endpoint` with key `key` (C strings; key 0 for none).
+fn cfg(c: *UsDaimonConfig, endpoint, key) {
+    c.endpoint = endpoint;
+    c.endpoint_len = strlen(endpoint);
+    c.api_key = key;
+    c.api_key_len = 0;
+    if (key != 0) { c.api_key_len = strlen(key); }
+    return 0;
+}
+
+# The two defaults.
+# rust src/ai.rs: test_default_config, test_hoosh_default
+fn test_defaults() {
+    test_group("defaults");
+    var c: UsDaimonConfig;
+    us_daimon_config_default(&c);
+    assert_eq(ep_is(&c, "http://localhost:8090"), 1, "daimon at http://localhost:8090");
+    assert_eq(c.api_key, 0, "no API key");
+    var h: UsHooshConfig;
+    us_hoosh_config_default(&h);
+    var he = "http://localhost:8088";
+    assert(h.endpoint_len == 21 && memeq(h.endpoint, he, 21) == 1, "hoosh at http://localhost:8088");
+}
+
+# The client and a config with a key.
+# rust src/ai.rs: test_daimon_client_new, test_daimon_config_with_api_key
+fn test_client() {
+    test_group("client");
+    var c: UsDaimonConfig;
+    us_daimon_config_default(&c);
+    var cl: UsDaimonClient;
+    okc(us_daimon_client_new(&cl, &c), "a client of the default config");
+    assert(cl.total_ms == 30000 && cl.read_ms == 30000, "30 s total and per read");
+    assert_eq(us_daimon_client_config(&cl), &cl, "its config is its first field");
+    var k: UsDaimonConfig;
+    cfg(&k, "https://custom.host:9090", "test-key");
+    assert(k.api_key_len == 8 && memeq(k.api_key, "test-key", 8) == 1, "the key test-key");
+}
+
+# Both configs through their JSON and back.
+# rust src/ai.rs: test_daimon_config_serde_roundtrip, test_hoosh_config_serde_roundtrip
+fn test_roundtrip() {
+    test_group("JSON round trips");
+    var sb = str_builder_new();
+    var c: UsDaimonConfig;
+    cfg(&c, "http://example.com", "key123");
+    us_daimon_config_to_json(sb, &c);
+    var b: UsDaimonConfig;
+    okc(us_daimon_config_from_json(load64(sb), load64(sb + 8), &b), "the daimon config reads back");
+    assert_eq(ep_is(&b, "http://example.com"), 1, "its endpoint");
+    assert(b.api_key_len == 6 && memeq(b.api_key, "key123", 6) == 1, "its key");
+    var h: UsHooshConfig;
+    us_hoosh_config_default(&h);
+    store64(sb + 8, 0);
+    us_hoosh_config_to_json(sb, &h);
+    var hb: UsHooshConfig;
+    okc(us_hoosh_config_from_json(load64(sb), load64(sb + 8), &hb), "the hoosh config reads back");
+    assert(hb.endpoint_len == 21 && memeq(hb.endpoint, "http://localhost:8088", 21) == 1, "its endpoint");
+    var none = "{\"endpoint\":\"x\"}";
+    okc(us_daimon_config_from_json(none, strlen(none), &b), "a missing api_key is none, as serde reads an Option");
+    assert_eq(b.api_key, 0, "no key");
+    var bad = "{\"endpoint\":\"x\",\"api_key\":5}";
+    var e1, f1 = us_daimon_config_from_json(bad, strlen(bad), &b);
+    errc(e1, f1, US_ERR_DESERIALIZE, "a numeric api_key refused");
+    assert(b.endpoint_len == 1 && b.api_key == 0, "the config unchanged");
+}
+
+# The config's text redacts its key, and so does a client's config.
+# rust src/ai.rs: test_daimon_config_debug_redacts_api_key
+fn test_redaction() {
+    test_group("redaction");
+    var c: UsDaimonConfig;
+    cfg(&c, "http://example.com", "super-secret");
+    var sb = str_builder_new();
+    us_daimon_config_to_text(sb, &c);
+    var p = load64(sb);
+    var n = load64(sb + 8);
+    assert_eq(has(p, n, "super-secret"), 0, "the key is not in the text");
+    assert_eq(has(p, n, "<redacted>"), 1, "<redacted> stands for it");
+    assert_eq(has(p, n, "http://example.com"), 1, "the endpoint is");
+    var cl: UsDaimonClient;
+    okc(us_daimon_client_new(&cl, &c), "a client");
+    store64(sb + 8, 0);
+    us_daimon_config_to_text(sb, us_daimon_client_config(&cl));
+    assert_eq(has(load64(sb), load64(sb + 8), "super-secret"), 0, "nor in the client's");
+    var nk: UsDaimonConfig;
+    cfg(&nk, "http://x", 0);
+    store64(sb + 8, 0);
+    us_daimon_config_to_text(sb, &nk);
+    assert_eq(has(load64(sb), load64(sb + 8), "api_key=none"), 1, "no key: api_key=none");
+}
+
+# daimon's answers, read without a network.
+fn test_answers() {
+    test_group("daimon's answers");
+    var a = arena_allocator_growable(4096);
+    var ok = "{\"id\":7,\"name\":\"ushma\",\"type\":\"User\",\"status\":0}";
+    var t1, v1 = _us_ai_answer(a, 201, ok, strlen(ok));
+    assert(is_ok(t1) == 1 && v1 == 7, "201 with daimon 2.5.6's body: id 7");
+    var t2, v2 = _us_ai_answer(a, 200, "{\"id\":0}", 8);
+    assert(is_ok(t2) == 1 && v2 == 0, "200 with id 0");
+    var e3, f3 = _us_ai_answer(a, 401, "{\"error\":\"unauthorized\"}", 24);
+    errc(e3, f3, US_ERR_INVALID_PARAMETER, "401 refused");
+    var e4, f4 = _us_ai_answer(a, 302, "", 0);
+    errc(e4, f4, US_ERR_INVALID_PARAMETER, "302: no redirect is followed");
+    var e5, f5 = _us_ai_answer(a, 201, "{\"agent_id\":\"7\"}", 16);
+    errc(e5, f5, US_ERR_INVALID_PARAMETER, "1.4.0's agent_id is no id");
+    var e6, f6 = _us_ai_answer(a, 201, "{\"id\":\"7\"}", 10);
+    errc(e6, f6, US_ERR_INVALID_PARAMETER, "a string id refused");
+    var e7, f7 = _us_ai_answer(a, 201, "{\"id\":7} x", 10);
+    errc(e7, f7, US_ERR_INVALID_PARAMETER, "trailing bytes refused");
+}
+
+# Registers against the stub answering `status` and `body` at /v1/agents, with key `key`: the Result's two words into
+# *out.
+fn reg_at(key, status, body, out) {
+    var addr = _ds_addr();
+    var url = alloc(64);
+    memcpy(url, "http://", 7);
+    memcpy(url + 7, addr, strlen(addr));
+    store8(url + 7 + strlen(addr), 0);
+    var c: UsDaimonConfig;
+    cfg(&c, url, key);
+    var cl: UsDaimonClient;
+    var tc, vc = us_daimon_client_new(&cl, &c);
+    var th = _ds_serve(status, body, strlen(body), "/v1/agents", 10);
+    var t, v = us_daimon_client_register_agent(&cl);
+    _ds_finish(th);
+    store64(out, t);
+    store64(out + 8, v);
+    return 0;
+}
+
+# The registration end to end: an id, the request on the wire, and the span carrying the endpoint, never the key.
+fn test_register() {
+    test_group("registration");
+    assert(_ds_addr() != 0, "the stub listens");
+    sakshi_output_buffer();
+    sakshi_set_level(SK_DEBUG);
+    sakshi_ring_clear();
+    var r[16];
+    reg_at("secret-xyz", 201, "{\"id\":42,\"name\":\"ushma\",\"type\":\"User\",\"status\":0}", &r);
+    sakshi_set_level(SK_INFO);
+    assert(is_ok(load64(&r)) == 1 && load64(&r + 8) == 42, "201: Ok(42)");
+    var q = _ds_captured();
+    var qn = _ds_captured_len();
+    assert_eq(has(q, qn, "POST /v1/agents HTTP/1.1"), 1, "POST /v1/agents, the path daimon serves");
+    assert_eq(has(q, qn, "Authorization: Bearer secret-xyz"), 1, "the key as a bearer token");
+    assert_eq(has(q, qn, "\"capabilities\":[\"heat_transfer\""), 1, "Rust's body");
+    var cap = 65536;
+    var buf = alloc(cap);
+    var rn = sakshi_ring_read_raw(buf, cap);
+    assert_eq(has(buf, rn, "register_agent"), 1, "the span register_agent");
+    assert_eq(has(buf, rn, _ds_addr()), 1, "carrying the endpoint");
+    assert_eq(has(buf, rn, "secret-xyz"), 0, "and never the key");
+    assert_eq(sakshi_span_depth(), 0, "the span closed");
+    reg_at(0, 401, "{\"error\":\"unauthorized\"}", &r);
+    errc(load64(&r), load64(&r + 8), US_ERR_INVALID_PARAMETER, "401 refused");
+    assert_eq(has(_ds_captured(), _ds_captured_len(), "Authorization"), 0, "no key, no Authorization header");
+}
+
+# A silent server is bounded by read_ms (row 7: total_ms alone would wait for ever), and nothing is sent where a
+# request cannot be made.
+fn test_failures() {
+    test_group("failures");
+    var addr = _ds_addr();
+    var url = alloc(64);
+    memcpy(url, "http://", 7);
+    memcpy(url + 7, addr, strlen(addr));
+    store8(url + 7 + strlen(addr), 0);
+    var c: UsDaimonConfig;
+    cfg(&c, url, "k");
+    var cl: UsDaimonClient;
+    var tc, vc = us_daimon_client_new(&cl, &c);
+    cl.total_ms = 400;
+    cl.read_ms = 400;
+    var th = _ds_serve(0, "", 0, "/v1/agents", 10);
+    var t0 = clock_now_ms();
+    var t1, v1 = us_daimon_client_register_agent(&cl);
+    var dt = clock_now_ms() - t0;
+    _ds_finish(th);
+    errc(t1, v1, US_ERR_INVALID_PARAMETER, "a server that never answers: a timeout error");
+    assert(dt < 10000, "bounded by read_ms, not left waiting");
+    var dead = alloc(64);
+    memcpy(dead, "http://127.0.0.1:", 17);
+    var dn = 17 + fmt_int_buf(_ds_closed_port(), dead + 17);
+    store8(dead + dn, 0);
+    var d: UsDaimonConfig;
+    cfg(&d, dead, "k");
+    var dc: UsDaimonClient;
+    var td, vd = us_daimon_client_new(&dc, &d);
+    var e2, f2 = us_daimon_client_register_agent(&dc);
+    errc(e2, f2, US_ERR_INVALID_PARAMETER, "a refused connection");
+    var bk: UsDaimonConfig;
+    cfg(&bk, url, "bad\r\nkey");
+    var bc: UsDaimonClient;
+    var tb, vb = us_daimon_client_new(&bc, &bk);
+    var th2 = _ds_serve(201, "{\"id\":1}", 8, "/v1/agents", 10);
+    var e3, f3 = us_daimon_client_register_agent(&bc);
+    _ds_finish(th2);
+    errc(e3, f3, US_ERR_INVALID_PARAMETER, "a key with CR LF: refused, as reqwest's header check refuses it");
+    assert_eq(_ds_captured_len(), 0, "and nothing sent");
+    var be: UsDaimonConfig;
+    cfg(&be, "http://127.0.0.1:1/a\nb", 0);
+    var ec: UsDaimonClient;
+    var te, ve = us_daimon_client_new(&ec, &be);
+    var e4, f4 = us_daimon_client_register_agent(&ec);
+    errc(e4, f4, US_ERR_INVALID_PARAMETER, "an endpoint with a newline: refused, never spliced into a request");
+    var ta = test_allocator();
+    var ac: UsDaimonClient;
+    var tz, vz = us_daimon_client_new_a(ta, &ac, &c);
+    test_allocator_fail_after(ta, 0);
+    var e5, f5 = us_daimon_client_register_agent(&ac);
+    errc(e5, f5, US_ERR_OUT_OF_MEMORY, "the request's allocation refused: out of memory, not an abort");
+    test_allocator_fail_after(ta, 0 - 1);
+}
+
+# Runs every group and returns the failure count.
+fn main() {
+    alloc_init();
+    test_defaults();
+    test_client();
+    test_roundtrip();
+    test_redaction();
+    test_answers();
+    test_register();
+    test_failures();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

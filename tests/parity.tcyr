@@ -43,10 +43,12 @@ include "src/stat.cyr"
 include "src/numerical.cyr"
 include "src/bridge.cyr"
 include "src/soorat.cyr"
+include "src/ai.cyr"
 
 alloc_init();
 
 include "tests/parity_core.cyr"
+include "tests/daimon_stub.cyr"
 
 # The Rust variant name of an error code (src/error.cyr).
 #must_use
@@ -2657,6 +2659,320 @@ fn _par_soorat(fp, fl): i64 {
     return 0;
 }
 
+# ── ai ──────────────────────────────────────────────────────────────────────────────
+
+# A copy of the C string `s` with every `from` replaced by `to` (C strings): a fresh C string.
+fn _par_ai_subst(s, from, to): i64 {
+    var sn = strlen(s);
+    var fnl = strlen(from);
+    var tn = strlen(to);
+    var out = alloc(sn * (tn + 1) + 1);
+    var o = 0;
+    var k = 0;
+    while (k < sn) {
+        if (k + fnl <= sn && memeq(s + k, from, fnl) == 1) {
+            memcpy(out + o, to, tn);
+            o = o + tn;
+            k = k + fnl;
+        } else {
+            store8(out + o, load8(s + k));
+            o = o + 1;
+            k = k + 1;
+        }
+    }
+    store8(out + o, 0);
+    return out;
+}
+
+# The C strings a then b as a fresh C string.
+fn _par_ai_cat(a, b): i64 {
+    var an = strlen(a);
+    var bn = strlen(b);
+    var out = alloc(an + bn + 1);
+    memcpy(out, a, an);
+    memcpy(out + an, b, bn);
+    store8(out + an + bn, 0);
+    return out;
+}
+
+# C strings a and b compared bytewise: negative, 0 or positive.
+fn _par_ai_cmp(a, b): i64 {
+    var k = 0;
+    while (load8(a + k) != 0 && load8(a + k) == load8(b + k)) { k = k + 1; }
+    return load8(a + k) - load8(b + k);
+}
+
+# The decimal text of n as a fresh C string.
+fn _par_ai_num(n): i64 {
+    var b = alloc(32);
+    var k = fmt_int_buf(n, b);
+    store8(b + k, 0);
+    return b;
+}
+
+# Appends a header's golden token: its value `s:`, or `n:` when absent.
+fn _par_ai_got_header(buf, he, name) {
+    var vp[8];
+    var vl = _ds_header(buf, he, name, &vp);
+    if (vl < 0) { _par_got_none(); } else { _par_got_text(load64(&vp), vl); }
+    return 0;
+}
+
+# Appends the captured request of `n` bytes at `buf` as its golden tokens: method, path (the port's /v1/agents mapped
+# back to 1.4.0's /v1/agents/register, ADR 0002 row 6), the five headers 1.4.0 sends by value (host's address as
+# STUB), the names of any others but sandhi's four transport headers (row 8), and the body.
+fn _par_ai_got_request(buf, n, addr) {
+    var he = _ds_head_end(buf, n);
+    if (he < 0) { he = n; }
+    var ms = 0;
+    while (ms < n && load8(buf + ms) != 32) { ms = ms + 1; }
+    _par_got_text(buf, ms);
+    var ps = ms + 1;
+    var pe = ps;
+    while (pe < n && load8(buf + pe) != 32) { pe = pe + 1; }
+    var tail = "/v1/agents";
+    if (pe - ps >= 10 && memeq(buf + pe - 10, tail, 10) == 1) {
+        var mapped = alloc(pe - ps + 16);
+        memcpy(mapped, buf + ps, pe - ps);
+        memcpy(mapped + pe - ps, "/register", 9);
+        _par_got_text(mapped, pe - ps + 9);
+    } else {
+        _par_got_text(buf + ps, pe - ps);
+    }
+    var vp[8];
+    var hl = _ds_header(buf, he, "host", &vp);
+    if (hl < 0) {
+        _par_got_none();
+    } else {
+        var hc = alloc(hl + 1);
+        memcpy(hc, load64(&vp), hl);
+        store8(hc + hl, 0);
+        var hs = _par_ai_subst(hc, addr, "STUB");
+        _par_got_text(hs, strlen(hs));
+    }
+    _par_ai_got_header(buf, he, "content-type");
+    var cl = _ds_header(buf, he, "content-length", &vp);
+    if (cl < 0) {
+        _par_got_none();
+    } else {
+        var len = 0;
+        var j = 0;
+        while (j < cl) {
+            len = len * 10 + load8(load64(&vp) + j) - 48;
+            j = j + 1;
+        }
+        _par_got_i(len);
+    }
+    _par_ai_got_header(buf, he, "authorization");
+    _par_ai_got_header(buf, he, "accept");
+    # Other header names, lowercase and sorted (insertion sort over at most 32).
+    var names[256];
+    var lens[256];
+    var nn = 0;
+    var k = 0;
+    while (k < he && load8(buf + k) != 10) { k = k + 1; }
+    k = k + 1;
+    while (k < he) {
+        var e = k;
+        while (e < he && load8(buf + e) != 13) { e = e + 1; }
+        if (e == k) { break; }
+        var c = k;
+        while (c < e && load8(buf + c) != 58) { c = c + 1; }
+        var low = alloc(c - k + 1);
+        var j2 = 0;
+        while (j2 < c - k) {
+            var b = load8(buf + k + j2);
+            if (b >= 65 && b <= 90) { b = b + 32; }
+            store8(low + j2, b);
+            j2 = j2 + 1;
+        }
+        store8(low + c - k, 0);
+        var skip = 0;
+        if (streq(low, "host") == 1 || streq(low, "content-type") == 1) { skip = 1; }
+        if (streq(low, "content-length") == 1) { skip = 1; }
+        if (streq(low, "authorization") == 1 || streq(low, "accept") == 1) { skip = 1; }
+        if (streq(low, "user-agent") == 1 || streq(low, "accept-encoding") == 1) { skip = 1; }
+        if (streq(low, "te") == 1 || streq(low, "connection") == 1) { skip = 1; }
+        if (skip == 0 && nn < 32) {
+            var at = nn;
+            while (at > 0 && _par_ai_cmp(load64(&names + 8 * (at - 1)), low) > 0) {
+                store64(&names + 8 * at, load64(&names + 8 * (at - 1)));
+                at = at - 1;
+            }
+            store64(&names + 8 * at, low);
+            nn = nn + 1;
+        }
+        k = e + 2;
+    }
+    _par_got_seq(nn);
+    var q = 0;
+    while (q < nn) {
+        var nm = load64(&names + 8 * q);
+        _par_got_text(nm, strlen(nm));
+        q = q + 1;
+    }
+    _par_got_text(buf + he, n - he);
+    return 0;
+}
+
+# A registration row: the stub (tests/daimon_stub.cyr) serves the row's status and port body at the port's path while
+# the client registers; the request it captured and the outcome are the row's tokens. 1, or -1 for unusable inputs.
+fn _par_ai_register(): i64 {
+    var addr = _ds_addr();
+    if (_par_in_n != 5 || addr == 0) { return 0 - 1; }
+    var en[8];
+    var ep = _par_in_text(0, &en);
+    if (ep == 0) { return 0 - 1; }
+    var refused = 0;
+    var url = 0;
+    if (strstr(ep, "REFUSED") >= 0) {
+        refused = 1;
+        url = _par_ai_subst(ep, "REFUSED", _par_ai_cat("127.0.0.1:", _par_ai_num(_ds_closed_port())));
+    } else {
+        url = _par_ai_subst(ep, "STUB", addr);
+    }
+    var cfg: UsDaimonConfig;
+    cfg.endpoint = url;
+    cfg.endpoint_len = strlen(url);
+    cfg.api_key = 0;
+    cfg.api_key_len = 0;
+    if (load64(_par_in_k + 8) == 115) {
+        var kn[8];
+        cfg.api_key = _par_in_text(1, &kn);
+        cfg.api_key_len = load64(&kn);
+    }
+    # The path the stub answers at: the endpoint after its address, its trailing slashes trimmed, then /v1/agents.
+    var ul = strlen(url);
+    while (ul > 0 && load8(url + ul - 1) == 47) { ul = ul - 1; }
+    var at = strstr(url, addr);
+    var pl = 0;
+    var pre = "";
+    if (at >= 0) {
+        pre = url + at + strlen(addr);
+        pl = url + ul - pre;
+        if (pl < 0) { pl = 0; }
+    }
+    var wp = alloc(pl + 16);
+    memcpy(wp, pre, pl);
+    memcpy(wp + pl, "/v1/agents", 10);
+    var bn[8];
+    var body = _par_in_text(4, &bn);
+    var th = 0;
+    if (refused == 0) { th = _ds_serve(_par_in(2), body, load64(&bn), wp, pl + 10); }
+    var cl: UsDaimonClient;
+    var tc, vc = us_daimon_client_new(&cl, &cfg);
+    var tr, vr = us_daimon_client_register_agent(&cl);
+    _ds_finish(th);
+    if (refused == 1 || _ds_captured_len() == 0) {
+        _par_got_none();
+    } else {
+        _par_ai_got_request(_ds_captured(), _ds_captured_len(), addr);
+    }
+    if (is_ok(tr) == 1) {
+        var idt = _par_ai_num(vr);
+        _par_got_text(idt, strlen(idt));
+    } else {
+        _par_got_err(vr);
+    }
+    return 1;
+}
+
+# A config row's inputs into *c (endpoint `s:`, key `s:` or `n:`): 1, or 0.
+fn _par_dc_in(c: *UsDaimonConfig): i64 {
+    if (_par_in_n != 2) { return 0; }
+    var en[8];
+    var ep = _par_in_text(0, &en);
+    if (ep == 0) { return 0; }
+    c.endpoint = ep;
+    c.endpoint_len = load64(&en);
+    c.api_key = 0;
+    c.api_key_len = 0;
+    if (load64(_par_in_k + 8) == 115) {
+        var kn[8];
+        c.api_key = _par_in_text(1, &kn);
+        c.api_key_len = load64(&kn);
+    }
+    return 1;
+}
+
+# Appends *c as its golden tokens.
+fn _par_got_dc(c: *UsDaimonConfig) {
+    _par_got_text(c.endpoint, c.endpoint_len);
+    if (c.api_key == 0) { _par_got_none(); } else { _par_got_text(c.api_key, c.api_key_len); }
+    return 0;
+}
+
+# Every ai row: 1 when handled, 0 for none, -1 for unusable inputs.
+fn _par_ai(fp, fl): i64 {
+    if (_par_mat_sb == 0) {
+        _par_mat_sb = str_builder_new();
+        _par_mat_arena = arena_allocator_growable(65536);
+    }
+    if (_par_eq(fp, fl, "ai::DaimonClient::register_agent") == 1) { return _par_ai_register(); }
+    if (_par_eq(fp, fl, "ai::DaimonConfig::default") == 1) {
+        var d: UsDaimonConfig;
+        us_daimon_config_default(&d);
+        _par_got_dc(&d);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "ai::HooshConfig::default") == 1) {
+        var h: UsHooshConfig;
+        us_hoosh_config_default(&h);
+        _par_got_text(h.endpoint, h.endpoint_len);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "ai::DaimonConfig::to_json") == 1) {
+        var c: UsDaimonConfig;
+        if (_par_dc_in(&c) == 0) { return 0 - 1; }
+        store64(_par_mat_sb + 8, 0);
+        us_daimon_config_to_json(_par_mat_sb, &c);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "ai::HooshConfig::to_json") == 1) {
+        if (_par_in_n != 1) { return 0 - 1; }
+        var hn[8];
+        var hc: UsHooshConfig;
+        hc.endpoint = _par_in_text(0, &hn);
+        hc.endpoint_len = load64(&hn);
+        if (hc.endpoint == 0) { return 0 - 1; }
+        store64(_par_mat_sb + 8, 0);
+        us_hoosh_config_to_json(_par_mat_sb, &hc);
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    var which = 0;
+    if (_par_eq(fp, fl, "ai::DaimonConfig::from_json") == 1) { which = 1; }
+    if (_par_eq(fp, fl, "ai::HooshConfig::from_json") == 1) { which = 2; }
+    if (which == 0) { return 0; }
+    var dn[8];
+    var doc = _par_in_text(0, &dn);
+    if (doc == 0) { return 0 - 1; }
+    var n = load64(&dn);
+    reset_via(_par_mat_arena);
+    var out: UsDaimonConfig;
+    var hout: UsHooshConfig;
+    var t = 0;
+    var v = 0;
+    if (which == 1) {
+        var t1, v1 = us_daimon_config_from_json_a(_par_mat_arena, doc, n, &out);
+        t = t1;
+        v = v1;
+    } else {
+        var t2, v2 = us_hoosh_config_from_json_a(_par_mat_arena, doc, n, &hout);
+        t = t2;
+        v = v2;
+    }
+    if (is_ok(t) == 1) {
+        if (which == 1) { _par_got_dc(&out); } else { _par_got_text(hout.endpoint, hout.endpoint_len); }
+        if (_par_has_int_neg_zero(doc, n) == 1) { _par_adr5 = 1; }
+        return 1;
+    }
+    _par_got_err(v);
+    if (_par_bayan_mapped_refusal(doc, n) == 1) { _par_adr5 = 1; }
+    return 1;
+}
+
 # ── transfer ────────────────────────────────────────────────────────────────────────
 
 # Appends a Result: the f64 payload of Ok, or `E:Variant` for Err.
@@ -2866,6 +3182,7 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "entropy") == 1) { return _par_entropy(fp, fl); }
     if (_par_eq(mp, ml, "bridge") == 1) { return _par_bridge(fp, fl); }
     if (_par_eq(mp, ml, "soorat") == 1) { return _par_soorat(fp, fl); }
+    if (_par_eq(mp, ml, "ai") == 1) { return _par_ai(fp, fl); }
     if (_par_eq(mp, ml, "steam") == 1) { return _par_steam(fp, fl); }
     if (_par_eq(mp, ml, "cycle") == 1) { return _par_cycle(fp, fl); }
     if (_par_eq(mp, ml, "stat") == 1) { return _par_stat(fp, fl); }
