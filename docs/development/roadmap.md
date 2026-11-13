@@ -19,9 +19,10 @@ Ushma does NOT own:
 
 ## How 2.x work lands
 
-- **Rust 1.4.0 stays the oracle.** It is frozen in `rust-old/` and never changes. A change that moves a result away
-  from 1.4.0's gets an [ADR 0002](../adr/0002-port-api-divergences.md) row, and the golden rows it moves are mapped
-  under it, so the corpus keeps comparing every function against 1.4.0.
+- **Rust 1.4.0 stays the oracle.** That means the tag `1.4.0`, which holds the crate at the repository root, and the
+  golden corpus committed in `tests/golden/`. `rust-old/` is a working copy of the tag, held until it is retired
+  (below). A change that moves a result away from 1.4.0's gets an [ADR 0002](../adr/0002-port-api-divergences.md) row,
+  and the golden rows it moves are mapped under it, so the corpus keeps comparing every function against 1.4.0.
 - **New physics has no oracle.** It comes with reference tests against the literature and an independent model in
   `scripts/oracle/validate.py`, as the port's own refusals did.
 - **The API only grows.** Enums and error codes are append-only, and a new form joins beside the old one rather than
@@ -29,6 +30,47 @@ Ushma does NOT own:
 - **Versions:** new capability is a minor release (2.x.0); a fix, or catch-up work that changes no result, a patch
   (2.x.y).
 - **Demand-gated:** each item waits for a consumer that needs it (kiran, joshua, soorat, or a bridge's crate).
+
+## Retiring `rust-old/`
+
+The first-party standards delete `rust-old/` once the port has parity. The Rust code survives at the tag `1.4.0`,
+which holds it at the repository root: its 26 source files (`src/`, `tests/`, `benches/`, `examples/`, `Cargo.toml`)
+and its README are identical to `rust-old/`'s. ifran did this at 2.2.1, after a written
+pre-removal audit (its `docs/audit/2026-07-05-rust-old-preremoval.md`). ushma's tooling reads `rust-old/` live, so
+removing it takes more than a delete. It is a tooling change with no library change, so a patch release.
+
+- [ ] **The pre-removal audit** (`docs/audit/<date>-rust-old-preremoval.md`). Diff `rust-old/` against the Cyrius tree
+  item by item, rather than trusting the port's ledgers: every module, public item, test, benchmark, example and
+  doc. Each item gets a disposition: carried (and where), deliberately different (its ADR row), or gone (why). The
+  ledgers are the starting point: surface parity on every item, all 479 tests, all 63 benchmarks, the 5 examples.
+- [ ] **The standards' rule.** `rust-old/` goes only once the Cyrius version has equal or better test coverage and
+  benchmarks. Coverage is met: every Rust test is ported, and all 304 public functions are executed. Every Rust
+  benchmark has its Cyrius twin recorded, but none is as fast. Over the 63, Cyrius takes 1.7× (`transfer/fin_rect_heat`)
+  to 28× (`material/volumetric_cp`: 7 ns, 4 of them the harness floor, against Rust's 0.25) Rust's time, 6.8× at the median
+  (`docs/benchmarks-rust-v-cyrius.md`). Speed is measured, not gated (CLAUDE.md), so whether that meets the rule is the
+  maintainer's call.
+- [ ] **Repoint what reads `rust-old/` to the tag.** The oracle crate (`scripts/oracle/`) depends on ushma by path. It
+  moves to `ushma = { git = "https://github.com/MacCracken/ushma.git", tag = "1.4.0" }` (or crates.io's `=1.4.0`), and
+  its readers of the Rust literals read that dependency's source: `rustsrc.rs` and the table and constant emitters,
+  with the private-data completeness proof. `--check` must still reproduce every committed file byte for byte. The
+  same source then serves the other readers:
+  - `validate.py` and `probe_tables.py`;
+  - `scripts/surface_parity.py` and `scripts/rust_test_ledger.py`;
+  - `scripts/examples.sh --rust`;
+  - the gates' `cargo test` of the oracle, and CI.
+- [ ] **Keep what lives only there.**
+  - **The benchmark baseline:** `rust-old/benchmarks.md` and `bench-history.csv` carry the M0 baseline run on the tag
+    commit, which the tag itself lacks. Its numbers are already the Rust column of
+    `docs/benchmarks-rust-v-cyrius.md`; decide whether the CSV moves to `docs/` with them.
+  - **The lockfile:** `rust-old/Cargo.lock` was never at the tag. `scripts/oracle/Cargo.lock` pins every crate the
+    oracle builds, so nothing is lost.
+  - **The README and docs** stay at the tag, so the links to `rust-old/README.md` (README, the migration guide) move
+    to the tag's.
+- [ ] **Update the docs that name `rust-old/`:**
+  - CLAUDE.md's rules on it;
+  - ADR 0001, with an amendment: the oracle moves from the directory to the tag;
+  - the port plan, `state.md`, the oracle README, CONTRIBUTING and the probes' notes.
+- [ ] **Delete it** in the release that carries the above, all gates green, its CHANGELOG entry under Removed.
 
 ## 2.x.x — planned work
 

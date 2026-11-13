@@ -14,7 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     a result change gets an ADR 0002 row);
   - the upstream blockers, each with its issue, what ushma does meanwhile, and the catch-up when the fix lands.
 
-  The plan's §9, `state.md` and CLAUDE.md's documentation map point to it.
+  - retiring `rust-old/`, the first-party standards' last porting step: the pre-removal audit, the oracle tooling
+    repointed to the `1.4.0` tag (which holds the Rust crate, file for file), and the docs that name the directory.
+
+  The plan's §9, `state.md` and CLAUDE.md's documentation map point to it. The plan's §9 and the migration guide no
+  longer say the Rust code stays in `rust-old/`: the reference is the tag and the committed corpus.
 
 ## [2.0.0] - 2026-11-12
 

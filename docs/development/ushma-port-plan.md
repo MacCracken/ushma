@@ -687,8 +687,8 @@ ports filed, and the note for kimiya.
 - The [roadmap](roadmap.md) carries both from here: its 2.x.x work (the backlog, demand-gated), and its upstream
   blockers, §8's items with the catch-up each needs when its fix lands (switching `mathx.cyr` and `fmtf.cyr` to
   upstream versions, then re-measuring, among them).
-- Rust 1.4.0 stays frozen in `rust-old/` as the parity reference. It gets no fixes and no
-  releases.
+- Rust 1.4.0 stays frozen as the parity reference: the tag `1.4.0` and the committed golden corpus. It gets no fixes
+  and no releases. `rust-old/` holds a working copy of the tag until it is retired; the roadmap has what that takes.
 
 ---
 

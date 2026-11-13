@@ -3,7 +3,7 @@
 ushma 2.0.0 is the Rust crate ported to Cyrius. Every module, function, type, test, benchmark and example of 1.4.0 has
 its counterpart, and the port is checked against 1.4.0 itself: 154,448 golden rows replayed on every target, the
 Rust tests ported one for one, and the five examples printing 1.4.0's output byte for byte. The Rust crate stays at
-1.4.0, frozen in `rust-old/`; it gets no fixes and no releases.
+1.4.0, frozen at the tag `1.4.0` (and in `rust-old/` until that is retired); it gets no fixes and no releases.
 
 This guide is for code that used the Rust crate. It covers getting the library, the naming rule, how calls and
 results look, and every place where the Cyrius API differs from Rust's on purpose, each with its record in
