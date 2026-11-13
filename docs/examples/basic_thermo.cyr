@@ -1,0 +1,105 @@
+# basic_thermo.cyr — ported from rust-old/examples/basic_thermo.rs: conduction, convection, radiation, the ideal gas
+# law, the material table and a lumped-capacitance cooling curve.
+#
+#   cyrius distlib --all && cyrius build docs/examples/basic_thermo.cyr build/basic_thermo && ./build/basic_thermo
+#
+# It includes the published bundle, as a consumer does, so it also checks the library as a consumer sees it. Its
+# output is Rust 1.4.0's example's, byte for byte (docs/examples/basic_thermo.expected; scripts/gates.sh checks it).
+
+include "dist/ushma.cyr"
+include "docs/examples/print.cyr"
+
+# A fallible call's value, or the example stops: Rust's example unwraps.
+fn ok_or_die(t, v, what): i64 {
+    if (is_ok(t) == 1) { return v; }
+    say(what);
+    say(": ");
+    line(us_error_message(v));
+    sys_exit_group(1);
+    return 0;
+}
+
+# Prints the demonstration.
+fn main(): i64 {
+    alloc_init();
+    line("=== Ushma — Thermodynamics Demo ===");
+    line("");
+
+    line("--- Heat Conduction (Fourier's Law) ---");
+    var cu: UsMaterial;
+    var tm, vm = us_material_preset(US_MATERIAL_COPPER, &cu);
+    # 1 cm² = 0.01 m², 100 °C to 20 °C, 5 cm thick
+    var tq, vq = us_conduction(cu.conductivity, 0.01, 373.15, 293.15, 0.05);
+    var q: f64 = ok_or_die(tq, vq, "conduction");
+    line(cat(cat("Copper wall (5cm, 1cm²): ", fixed(q, 1)), " W for ΔT = 80 K"));
+
+    line("");
+    line("--- Convection (Newton's Cooling) ---");
+    var q_conv: f64 = us_convection(25.0, 1.0, 353.15, 293.15);
+    line(cat(cat("Forced convection (h=25, A=1m²): ", fixed(q_conv, 1)), " W for ΔT = 60 K"));
+
+    line("");
+    line("--- Radiation (Stefan-Boltzmann) ---");
+    var tr, vr = us_radiation(0.9, 1.0, 473.15, 293.15);
+    var q_rad: f64 = ok_or_die(tr, vr, "radiation");
+    line(cat(cat("Hot surface (ε=0.9, A=1m², 200°C): ", fixed(q_rad, 1)), " W radiated"));
+
+    line("");
+    line("--- Ideal Gas Law ---");
+    var tv, vv = us_ideal_gas_volume(1.0, US_STANDARD_TEMP, US_ATM);
+    var v: f64 = ok_or_die(tv, vv, "ideal_gas_volume");
+    var vl: f64 = v * 1000.0;
+    line(cat(cat(cat(cat("1 mol at STP: V = ", fixed(v, 4)), " m³ ("), fixed(vl, 2)), " L)"));
+    var tp, vp = us_ideal_gas_pressure(2.0, 400.0, 0.05);
+    var p: f64 = ok_or_die(tp, vp, "ideal_gas_pressure");
+    var pa: f64 = p / US_ATM;
+    line(cat(cat(cat(cat("2 mol at 400K in 50L: P = ", fixed(p, 0)), " Pa ("), fixed(pa, 2)), " atm)"));
+
+    line("");
+    line("--- Material Properties (at ~300 K) ---");
+    var head = cat(left("Material", 20), cat(" ", right("k (W/m⋅K)", 10)));
+    head = cat(head, cat(" ", right("c_p (J/kg⋅K)", 12)));
+    line(cat(head, cat(" ", right("α (m²/s)", 10))));
+    line(repeat("-", 56));
+    var i = 0;
+    while (i < US_MATERIAL_COUNT) {
+        var m: UsMaterial;
+        var ti, vi = us_material_preset(i, &m);
+        var k: f64 = m.conductivity;
+        var c: f64 = m.specific_heat;
+        var a: f64 = us_material_diffusivity(&m);
+        var row = cat(left(us_material_name(i), 20), cat(" ", right(fixed(k, 3), 10)));
+        row = cat(row, cat(" ", right(fixed(c, 1), 12)));
+        line(cat(row, cat(" ", right(expo(a, 2), 10))));
+        i = i + 1;
+    }
+
+    line("");
+    line("--- Cooling Curve (lumped capacitance) ---");
+    var t0: f64 = 373.15;
+    var t_env: f64 = 293.15;
+    var tau: f64 = 120.0;
+    var times[48];
+    store64(&times, 0.0);
+    store64(&times + 8, 30.0);
+    store64(&times + 16, 60.0);
+    store64(&times + 24, 120.0);
+    store64(&times + 32, 300.0);
+    store64(&times + 40, 600.0);
+    var j = 0;
+    while (j < 6) {
+        var t: f64 = load64(&times + 8 * j);
+        var temp: f64 = us_lumped_capacitance(t0, t_env, t, tau);
+        var tc: f64 = temp - 273.15;
+        var out = cat(cat("  t = ", right(fixed(t, 0), 4)), "s → T = ");
+        line(cat(cat(cat(out, fixed(temp, 1)), " K ("), cat(fixed(tc, 1), " °C)")));
+        j = j + 1;
+    }
+
+    line("");
+    line("=== Done ===");
+    return 0;
+}
+
+var r = main();
+sys_exit_group(r);

@@ -8,14 +8,43 @@ visualization data for soorat, and a daimon/hoosh client.
 
 **Language:** [Cyrius](https://github.com/MacCracken/cyrius) (toolchain pinned in `cyrius.cyml`) · **License:** GPL-3.0-only
 
-> 🚧 **Porting to Cyrius.** The Rust crate's final release, **1.4.0**, is frozen in
-> [`rust-old/`](rust-old/) as the parity oracle. The Cyrius library ships as **2.0.0**, with
-> every module, feature, test, benchmark and example ported. Plan of record:
-> [docs/development/ushma-port-plan.md](docs/development/ushma-port-plan.md). Live progress:
-> [docs/development/state.md](docs/development/state.md).
->
-> Rust users: `ushma = "1"` on crates.io stays at 1.4.0. Its README is
-> [`rust-old/README.md`](rust-old/README.md).
+**2.0.0** is the Rust crate ported to Cyrius, whole: every module, feature, test, benchmark and example. It is checked
+against the frozen Rust 1.4.0 in [`rust-old/`](rust-old/):
+- **golden rows:** 154,448, replayed on x86_64, PE and aarch64;
+- **tests:** all 479 of Rust's, ported;
+- **examples:** the five print 1.4.0's output byte for byte.
+
+Coming from the Rust crate? Read the [migration guide](docs/guides/migration-2.0.md). Rust users can stay on
+`ushma = "1"` on crates.io, which stays at 1.4.0 ([`rust-old/README.md`](rust-old/README.md)).
+
+## Using ushma
+
+```toml
+# cyrius.cyml
+[deps.ushma]
+git = "https://github.com/MacCracken/ushma.git"
+tag = "2.0.0"
+modules = ["dist/ushma.cyr"]
+```
+
+```cyrius
+include "dist/ushma.cyr"
+
+fn main(): i64 {
+    alloc_init();
+    var cu: UsMaterial;
+    var tm, vm = us_material_preset(US_MATERIAL_COPPER, &cu);
+    var t, v = us_conduction(cu.conductivity, 0.01, 373.15, 293.15, 0.05);
+    if (is_err_result(t) == 1) { println(us_error_message(v)); return 1; }
+    var q: f64 = v;                                  # 6416 W through 5 cm of copper
+    return 0;
+}
+
+var r = main();
+sys_exit_group(r);
+```
+
+[`docs/examples/`](docs/examples/) has the five Rust examples as Cyrius programs.
 
 ## Bundles
 
@@ -49,8 +78,8 @@ A consumer includes exactly one bundle. Each Rust cargo feature maps onto one of
 
 ```
 ushma
-  ├── Cyrius stdlib: math, ganita (pow, tanh, cbrt, Gaussian elimination), sakshi + log,
-  │                  bayan (JSON), sandhi (HTTP client, [lib.ai] only), io, result, vec, alloc
+  ├── Cyrius stdlib: math, ganita (LU factorization), sakshi + log, bayan (JSON),
+  │                  sandhi (HTTP client, [lib.ai] only), io, result, vec, alloc
   └── hisab 3.4.1 (interpolation, Simpson integration)
 
 Consumers:
@@ -66,10 +95,14 @@ cyrius deps                              # vendor the stdlib leaves and hisab in
 cyrius build src/main.cyr build/ushma    # compile
 cyrius test                              # parity + reference tests
 cyrius bench                             # benchmarks
+cyrius distlib --all                     # dist/ushma.cyr and dist/ushma-ai.cyr
+bash scripts/examples.sh                 # the five examples, each against Rust 1.4.0's output
 ```
 
 ## Documentation
 
+- [Migration guide from Rust 1.4](docs/guides/migration-2.0.md)
+- [Examples](docs/examples/)
 - [Port plan](docs/development/ushma-port-plan.md) and [state](docs/development/state.md)
 - [Roadmap](docs/development/roadmap.md)
 - [Architecture decisions](docs/adr/)

@@ -1,0 +1,37 @@
+=== Ushma — Phase Change Material Storage ===
+
+--- Water as Phase Change Material ---
+  100 kg water:
+  Latent heat of fusion:       33400 kJ
+  Latent heat of vaporization: 226000 kJ
+  Sensible heat (10 K rise):   4186 kJ
+  Fusion stores 8× more than 10 K sensible
+
+--- Ice to Steam (1 kg, -20°C to 120°C) ---
+  Total energy: 2944 kJ
+
+--- Phase Diagram ---
+  Ice at -73°C: T=200 K, P=101325 Pa → Solid
+  Liquid at 27°C: T=300 K, P=101325 Pa → Liquid
+  Steam at 127°C: T=400 K, P=101325 Pa → Gas
+  Supercritical: T=700 K, P=25000000 Pa → SupercriticalFluid
+
+--- Boiling Point vs Pressure ---
+  P=101 kPa → T_boil=100.0 °C
+  P=80 kPa → T_boil=93.4 °C
+  P=60 kPa → T_boil=85.7 °C
+  P=40 kPa → T_boil=75.3 °C
+
+--- Substance Comparison ---
+Substance           T_boil(K)  T_crit(K) L_vap(kJ/kg)
+----------------------------------------------------
+Water                   373.1      647.1       2260
+Nitrogen                 77.4      126.2        199
+Oxygen                   90.2      154.6        213
+Carbon dioxide          194.7      304.1        234
+Ammonia                 239.8      405.6       1370
+Methane                 111.7      190.6        510
+Ethanol                 351.4      513.9        841
+Mercury                 629.9     1750.0        295
+
+=== Done ===

@@ -1,0 +1,121 @@
+# building_thermal.cyr — ported from rust-old/examples/building_thermal.rs: a wall's steady heat loss with and without
+# insulation, a window's losses through its films and glass, and a wall cooling in time by 1D finite differences.
+#
+#   cyrius distlib --all && cyrius build docs/examples/building_thermal.cyr build/building_thermal
+#   ./build/building_thermal
+#
+# A series of resistances is a list of f64 words and its length; the 1D grid is a UsGrid1D the caller owns, its
+# boundary conditions UsBoundaryCondition values (ADR 0002 row 15). The output is Rust 1.4.0's example's, byte for
+# byte (docs/examples/building_thermal.expected).
+
+include "dist/ushma.cyr"
+include "docs/examples/print.cyr"
+
+# A fallible call's value, or the example stops: Rust's example unwraps.
+fn ok_or_die(t, v, what): i64 {
+    if (is_ok(t) == 1) { return v; }
+    say(what);
+    say(": ");
+    line(us_error_message(v));
+    sys_exit_group(1);
+    return 0;
+}
+
+# Prints the model.
+fn main(): i64 {
+    alloc_init();
+    line("=== Ushma — Building Thermal Model ===");
+    line("");
+
+    line("--- Wall Heat Loss (steady state) ---");
+    # A concrete wall, 20 cm thick, 10 m², 20 °C inside and −5 °C outside
+    var concrete: UsMaterial;
+    var wood: UsMaterial;
+    var glass: UsMaterial;
+    var t1, v1 = us_material_preset(US_MATERIAL_CONCRETE, &concrete);
+    var t2, v2 = us_material_preset(US_MATERIAL_WOOD_OAK, &wood);
+    var t3, v3 = us_material_preset(US_MATERIAL_GLASS, &glass);
+    var thickness: f64 = 0.2;
+    var area: f64 = 10.0;
+    var t_inside: f64 = 293.15;
+    var t_outside: f64 = 268.15;
+    var kc: f64 = concrete.conductivity;
+    var tq, vq = us_conduction(kc, area, t_inside, t_outside, thickness);
+    var q_concrete: f64 = ok_or_die(tq, vq, "conduction");
+    var cm: f64 = thickness * 100.0;
+    line(cat(cat(cat(cat("Concrete wall (", fixed(cm, 0)), " cm): "), fixed(q_concrete, 0)), " W heat loss"));
+
+    # Add 5 cm of insulation (oak)
+    var tr1, vr1 = us_thermal_resistance_conduction(kc, area, thickness);
+    var r_concrete: f64 = ok_or_die(tr1, vr1, "thermal_resistance_conduction");
+    var kw: f64 = wood.conductivity;
+    var tr2, vr2 = us_thermal_resistance_conduction(kw, area, 0.05);
+    var r_wood: f64 = ok_or_die(tr2, vr2, "thermal_resistance_conduction");
+    var wall[16];
+    store64(&wall, r_concrete);
+    store64(&wall + 8, r_wood);
+    var r_total: f64 = us_thermal_resistance_series(&wall, 2);
+    var q_insulated: f64 = (t_inside - t_outside) / r_total;
+    var cut: f64 = (1.0 - q_insulated / q_concrete) * 100.0;
+    var ins = cat(cat("With 5 cm wood insulation: ", fixed(q_insulated, 0)), " W (");
+    line(cat(cat(ins, fixed(cut, 0)), "% reduction)"));
+
+    line("");
+    line("--- Window Convection ---");
+    # Natural convection inside (10 W/(m²·K)), wind outside (25), a 2 m² pane of 6 mm glass
+    var window_area: f64 = 2.0;
+    var tw1, vw1 = us_thermal_resistance_convection(10.0, window_area);
+    var r_in: f64 = ok_or_die(tw1, vw1, "thermal_resistance_convection");
+    var kg: f64 = glass.conductivity;
+    var tw2, vw2 = us_thermal_resistance_conduction(kg, window_area, 0.006);
+    var r_glass: f64 = ok_or_die(tw2, vw2, "thermal_resistance_conduction");
+    var tw3, vw3 = us_thermal_resistance_convection(25.0, window_area);
+    var r_out: f64 = ok_or_die(tw3, vw3, "thermal_resistance_convection");
+    var pane[24];
+    store64(&pane, r_in);
+    store64(&pane + 8, r_glass);
+    store64(&pane + 16, r_out);
+    var r_window: f64 = us_thermal_resistance_series(&pane, 3);
+    var q_window: f64 = (t_inside - t_outside) / r_window;
+    line(cat(cat("Single-pane window (2 m²): ", fixed(q_window, 0)), " W"));
+
+    line("");
+    line("--- Transient Wall Cooling (1D FDM) ---");
+    # The concrete wall, suddenly cold outside
+    var rho: f64 = concrete.density;
+    var cp: f64 = concrete.specific_heat;
+    var ta, va = us_thermal_diffusivity(kc, rho, cp);
+    var alpha: f64 = ok_or_die(ta, va, "thermal_diffusivity");
+    var inside: UsBoundaryCondition;
+    var outside: UsBoundaryCondition;
+    us_boundary_fixed(&inside, t_inside);
+    us_boundary_fixed(&outside, t_outside);
+    var grid: UsGrid1D;
+    var tg, vg = us_grid1d_new(&grid, 21, thickness, alpha, t_inside, &inside, &outside);
+    var zg = ok_or_die(tg, vg, "grid1d_new");
+    var dx: f64 = grid.dx;
+    var ga: f64 = grid.alpha;
+    var dt: f64 = 0.4 * dx * dx / ga;
+    var per: f64 = f64_ceil(3600.0 / dt);
+    var steps_per_hour = f64_to(per);
+    var hour = 1;
+    while (hour <= 4) {
+        var s = 0;
+        while (s < steps_per_hour) {
+            var ts, vs = us_grid1d_step_explicit(&grid, dt);
+            var zs = ok_or_die(ts, vs, "step_explicit");
+            s = s + 1;
+        }
+        var t_mid: f64 = us_grid1d_node(&grid, 10);
+        var c: f64 = t_mid - 273.15;
+        line(cat(cat(cat(cat("  After ", int(hour)), " hr: wall midpoint T = "), fixed(c, 1)), " °C"));
+        hour = hour + 1;
+    }
+
+    line("");
+    line("=== Done ===");
+    return 0;
+}
+
+var r = main();
+sys_exit_group(r);

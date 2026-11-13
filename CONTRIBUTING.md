@@ -3,9 +3,10 @@
 Thank you for considering a contribution! This document covers the development
 workflow, coding standards, and review process.
 
-ushma is being ported from Rust to Cyrius. The Rust 1.4.0 crate is frozen in `rust-old/`
-as the parity oracle and is never edited. See
-[docs/development/ushma-port-plan.md](docs/development/ushma-port-plan.md).
+ushma is a Cyrius library, ported from the Rust crate as 2.0.0. The Rust 1.4.0 crate is frozen in `rust-old/` as
+the parity oracle and is never edited: every result is checked against it (the golden corpus, `tests/parity.tcyr`).
+See [docs/development/ushma-port-plan.md](docs/development/ushma-port-plan.md) for how the port was built and
+[docs/development/state.md](docs/development/state.md) for where it stands.
 
 ## Development Setup
 

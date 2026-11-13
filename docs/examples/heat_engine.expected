@@ -1,0 +1,27 @@
+=== Ushma — Heat Engine Cycle Comparison ===
+
+--- Otto Cycle (r=8, γ=1.4) ---
+  Efficiency: 56.5%
+  Net work:   28236 J/mol
+  Heat in:    50000 J/mol
+  State 1: T=300 K, P=101325 Pa, V=0.024617 m³
+  State 2: T=689 K, P=1862270 Pa, V=0.003077 m³
+  State 3: T=3095 K, P=8361788 Pa, V=0.003077 m³
+  State 4: T=1347 K, P=454960 Pa, V=0.024617 m³
+
+--- Diesel Cycle (r=20, rc=2) ---
+  Efficiency: 64.7%
+  Net work:   18715 J/mol
+
+--- Brayton Cycle (rp=10, T3=1400 K) ---
+  Efficiency:      48.2%
+  Back-work ratio: 41.4%
+
+--- Comparison ---
+Cycle             η   η_Carnot     η_II
+----------------------------------------
+Otto          56.5%      90.3%    62.5%
+Diesel        64.7%      84.9%    76.2%
+Brayton       48.2%      78.6%    61.4%
+
+=== Done ===

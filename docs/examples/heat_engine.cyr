@@ -1,0 +1,117 @@
+# heat_engine.cyr — ported from rust-old/examples/heat_engine.rs: the Otto, Diesel and Brayton cycles, and each
+# against its Carnot limit.
+#
+#   cyrius distlib --all && cyrius build docs/examples/heat_engine.cyr build/heat_engine && ./build/heat_engine
+#
+# A cycle result is a UsCycleResult the caller owns and each analysis fills in place (ADR 0002 row 10); its state
+# points are read with us_cycle_state. The output is Rust 1.4.0's example's, byte for byte
+# (docs/examples/heat_engine.expected).
+
+include "dist/ushma.cyr"
+include "docs/examples/print.cyr"
+
+# A fallible call's value, or the example stops: Rust's example unwraps.
+fn ok_or_die(t, v, what): i64 {
+    if (is_ok(t) == 1) { return v; }
+    say(what);
+    say(": ");
+    line(us_error_message(v));
+    sys_exit_group(1);
+    return 0;
+}
+
+# The percentage x·100 with one decimal.
+fn pct(x: f64): i64 {
+    var p: f64 = x * 100.0;
+    return fixed(p, 1);
+}
+
+# One comparison row: the cycle's efficiency, its Carnot limit between its hottest and coldest states, and their ratio.
+fn compare(name, r: *UsCycleResult) {
+    var hot: UsStatePoint;
+    var cold: UsStatePoint;
+    var h1 = us_cycle_state(r, 2, &hot);
+    var h2 = us_cycle_state(r, 0, &cold);
+    var th: f64 = hot.temperature;
+    var tl: f64 = cold.temperature;
+    var tc, vc = us_carnot_efficiency(th, tl);
+    var carnot: f64 = ok_or_die(tc, vc, "carnot_efficiency");
+    var eff: f64 = r.efficiency;
+    var ratio: f64 = eff / carnot;
+    var row = cat(left(name, 10), cat(" ", right(pct(eff), 7)));
+    row = cat(cat(row, "% "), right(pct(carnot), 9));
+    line(cat(cat(cat(row, "% "), right(pct(ratio), 7)), "%"));
+    return 0;
+}
+
+# Prints the comparison.
+fn main(): i64 {
+    alloc_init();
+    line("=== Ushma — Heat Engine Cycle Comparison ===");
+    line("");
+
+    # Otto (gasoline engine): r = 8, 50 kJ in, γ = 1.4, 1 mol
+    var otto: UsCycleResult;
+    var t0, v0 = us_cycle_result_init(&otto);
+    var to, vo = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, &otto);
+    var z0 = ok_or_die(to, vo, "otto_cycle");
+    line("--- Otto Cycle (r=8, γ=1.4) ---");
+    var oe: f64 = otto.efficiency;
+    var ow: f64 = otto.net_work;
+    var oq: f64 = otto.heat_in;
+    line(cat(cat("  Efficiency: ", pct(oe)), "%"));
+    line(cat(cat("  Net work:   ", fixed(ow, 0)), " J/mol"));
+    line(cat(cat("  Heat in:    ", fixed(oq, 0)), " J/mol"));
+    var i = 0;
+    while (i < us_cycle_state_count(&otto)) {
+        var sp: UsStatePoint;
+        var h = us_cycle_state(&otto, i, &sp);
+        var t: f64 = sp.temperature;
+        var p: f64 = sp.pressure;
+        var v: f64 = sp.volume;
+        var s = cat(cat(cat("  State ", int(i + 1)), ": T="), fixed(t, 0));
+        s = cat(cat(cat(s, " K, P="), fixed(p, 0)), " Pa, V=");
+        line(cat(cat(s, fixed(v, 6)), " m³"));
+        i = i + 1;
+    }
+
+    # Diesel: r = 20, cutoff 2
+    var diesel: UsCycleResult;
+    var t1, v1 = us_cycle_result_init(&diesel);
+    var td, vd = us_diesel_cycle(300.0, 101325.0, 20.0, 2.0, 1.4, 1.0, &diesel);
+    var z1 = ok_or_die(td, vd, "diesel_cycle");
+    line("");
+    line("--- Diesel Cycle (r=20, rc=2) ---");
+    var de: f64 = diesel.efficiency;
+    var dw: f64 = diesel.net_work;
+    line(cat(cat("  Efficiency: ", pct(de)), "%"));
+    line(cat(cat("  Net work:   ", fixed(dw, 0)), " J/mol"));
+
+    # Brayton (gas turbine): pressure ratio 10, T3 = 1400 K
+    var brayton: UsCycleResult;
+    var t2, v2 = us_cycle_result_init(&brayton);
+    var tb, vb = us_brayton_cycle(300.0, 101325.0, 10.0, 1400.0, 1.4, 1.0, &brayton);
+    var z2 = ok_or_die(tb, vb, "brayton_cycle");
+    line("");
+    line("--- Brayton Cycle (rp=10, T3=1400 K) ---");
+    var be: f64 = brayton.efficiency;
+    var bw: f64 = brayton.back_work_ratio;
+    line(cat(cat("  Efficiency:      ", pct(be)), "%"));
+    line(cat(cat("  Back-work ratio: ", pct(bw)), "%"));
+
+    line("");
+    line("--- Comparison ---");
+    var head = cat(left("Cycle", 10), cat(" ", right("η", 8)));
+    line(cat(cat(head, cat(" ", right("η_Carnot", 10))), cat(" ", right("η_II", 8))));
+    line(repeat("-", 40));
+    compare("Otto", &otto);
+    compare("Diesel", &diesel);
+    compare("Brayton", &brayton);
+
+    line("");
+    line("=== Done ===");
+    return 0;
+}
+
+var r = main();
+sys_exit_group(r);

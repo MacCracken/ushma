@@ -1,0 +1,123 @@
+# phase_change.cyr — ported from rust-old/examples/phase_change.rs: water as a phase-change store, the energy from ice
+# to steam, the phase diagram, the boiling point against pressure by Clausius–Clapeyron, and the substance table.
+#
+#   cyrius distlib --all && cyrius build docs/examples/phase_change.cyr build/phase_change && ./build/phase_change
+#
+# A substance is a UsSubstance filled from the reference table (us_substance_preset), and a phase a UsPhase code
+# (us_phase_name gives Rust's variant name). The output is Rust 1.4.0's example's, byte for byte
+# (docs/examples/phase_change.expected).
+
+include "dist/ushma.cyr"
+include "docs/examples/print.cyr"
+
+# A fallible call's value, or the example stops: Rust's example unwraps.
+fn ok_or_die(t, v, what): i64 {
+    if (is_ok(t) == 1) { return v; }
+    say(what);
+    say(": ");
+    line(us_error_message(v));
+    sys_exit_group(1);
+    return 0;
+}
+
+# The phase of water at (T, P), printed with its label.
+fn phase_row(w: *UsSubstance, t: f64, p: f64, label) {
+    var tp, ph = us_substance_phase_at(w, t, p);
+    var code = ok_or_die(tp, ph, "phase_at");
+    var s = cat(cat(cat(cat("  ", label), ": T="), fixed(t, 0)), " K, P=");
+    line(cat(cat(cat(s, fixed(p, 0)), " Pa → "), us_phase_name(code)));
+    return 0;
+}
+
+# The boiling point at pressure p: Clausius–Clapeyron from 1 atm at 373.15 K, inverted by 50 bisections between 330
+# and 400 K, as Rust's example does.
+fn boiling_row(p: f64, l_molar: f64) {
+    var t_lo: f64 = 330.0;
+    var t_hi: f64 = 400.0;
+    var k = 0;
+    while (k < 50) {
+        var t_mid: f64 = 0.5 * (t_lo + t_hi);
+        var tc, vc = us_clausius_clapeyron_pressure(101325.0, 373.15, t_mid, l_molar);
+        var p_sat: f64 = ok_or_die(tc, vc, "clausius_clapeyron_pressure");
+        if (p_sat < p) { t_lo = t_mid; } else { t_hi = t_mid; }
+        k = k + 1;
+    }
+    var t_boil: f64 = 0.5 * (t_lo + t_hi);
+    var kpa: f64 = p / 1000.0;
+    var c: f64 = t_boil - 273.15;
+    line(cat(cat(cat(cat("  P=", fixed(kpa, 0)), " kPa → T_boil="), fixed(c, 1)), " °C"));
+    return 0;
+}
+
+# Prints the storage study.
+fn main(): i64 {
+    alloc_init();
+    line("=== Ushma — Phase Change Material Storage ===");
+    line("");
+
+    line("--- Water as Phase Change Material ---");
+    var water: UsSubstance;
+    var tw, vw = us_substance_preset(US_SUBSTANCE_WATER_PHASE, &water);
+    var mass: f64 = 100.0;
+    var q_fusion: f64 = us_heat_of_fusion(&water, mass);
+    var q_vap: f64 = us_heat_of_vaporization(&water, mass);
+    var kf: f64 = q_fusion / 1000.0;
+    var kv: f64 = q_vap / 1000.0;
+    line(cat(cat("  ", fixed(mass, 0)), " kg water:"));
+    line(cat(cat("  Latent heat of fusion:       ", fixed(kf, 0)), " kJ"));
+    line(cat(cat("  Latent heat of vaporization: ", fixed(kv, 0)), " kJ"));
+    # Against the sensible heat of a 10 K rise in liquid water
+    var q_sensible: f64 = us_heat_stored(mass, 4186.0, 10.0);
+    var ks: f64 = q_sensible / 1000.0;
+    var ratio: f64 = q_fusion / q_sensible;
+    line(cat(cat("  Sensible heat (10 K rise):   ", fixed(ks, 0)), " kJ"));
+    line(cat(cat("  Fusion stores ", fixed(ratio, 0)), "× more than 10 K sensible"));
+
+    line("");
+    line("--- Ice to Steam (1 kg, -20°C to 120°C) ---");
+    var tq, vq = us_heat_for_phase_change(1.0, 2500.0, 253.15, 393.15, &water);
+    var q_total: f64 = ok_or_die(tq, vq, "heat_for_phase_change");
+    var kt: f64 = q_total / 1000.0;
+    line(cat(cat("  Total energy: ", fixed(kt, 0)), " kJ"));
+
+    line("");
+    line("--- Phase Diagram ---");
+    phase_row(&water, 200.0, 101325.0, "Ice at -73°C");
+    phase_row(&water, 300.0, 101325.0, "Liquid at 27°C");
+    phase_row(&water, 400.0, 101325.0, "Steam at 127°C");
+    phase_row(&water, 700.0, 25000000.0, "Supercritical");
+
+    line("");
+    line("--- Boiling Point vs Pressure ---");
+    var lv: f64 = water.latent_heat_vaporization;
+    var mm: f64 = water.molar_mass;
+    var l_molar: f64 = lv * mm;
+    boiling_row(101325.0, l_molar);
+    boiling_row(80000.0, l_molar);
+    boiling_row(60000.0, l_molar);
+    boiling_row(40000.0, l_molar);
+
+    line("");
+    line("--- Substance Comparison ---");
+    var head = cat(left("Substance", 18), cat(" ", right("T_boil(K)", 10)));
+    line(cat(cat(head, cat(" ", right("T_crit(K)", 10))), cat(" ", right("L_vap(kJ/kg)", 10))));
+    line(repeat("-", 52));
+    var i = 0;
+    while (i < US_SUBSTANCE_COUNT) {
+        var s: UsSubstance;
+        var ts, vs = us_substance_preset(i, &s);
+        var tb: f64 = s.boiling_point;
+        var tcr: f64 = s.critical_t;
+        var lk: f64 = s.latent_heat_vaporization / 1000.0;
+        var row = cat(left(us_substance_name(i), 18), cat(" ", right(fixed(tb, 1), 10)));
+        line(cat(cat(row, cat(" ", right(fixed(tcr, 1), 10))), cat(" ", right(fixed(lk, 0), 10))));
+        i = i + 1;
+    }
+
+    line("");
+    line("=== Done ===");
+    return 0;
+}
+
+var r = main();
+sys_exit_group(r);

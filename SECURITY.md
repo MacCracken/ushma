@@ -1,5 +1,12 @@
 # Security Policy
 
+## Supported Versions
+
+| Version | Supported |
+|---|---|
+| 2.0.x (Cyrius) | ✅ |
+| 1.4.x and earlier (Rust, frozen in `rust-old/`) | ❌ no fixes, no releases: its successor is 2.0 |
+
 ## Reporting a Vulnerability
 
 If you discover a security vulnerability in ushma, please report it
@@ -23,7 +30,9 @@ responsibly through **GitHub Security Advisories**:
 
 ## Scope
 
-This policy covers the `ushma` crate and its published API. Vulnerabilities
+This policy covers the `ushma` library and its published bundles (`dist/ushma.cyr`, `dist/ushma-ai.cyr`), including
+the daimon client's network handling in `[lib.ai]` (the request it builds, the key it carries, the answers it
+reads). Vulnerabilities
 in dependencies should be reported to the respective upstream projects (and
 flagged here if they affect ushma users).
 

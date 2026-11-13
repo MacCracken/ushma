@@ -1,0 +1,24 @@
+=== Ushma — Cooling System Design ===
+
+--- Aluminum Fin Array ---
+  Fin: 50mm × 30mm × 2.0mm Al
+  Heat per fin: 4.15 W
+  Fin efficiency: 96.8%
+  Fin effectiveness: 30.2×
+  Total (10 fins): 41.5 W
+
+--- Counter-Flow Heat Exchanger ---
+  LMTD = 44.8 K
+  U = 800 W/(m²·K)
+  Required area for 5000 W: 0.139 m²
+  NTU = 0.67, ε = 0.429
+  ε-NTU verification: Q = 5000 W
+
+--- Pipe Flow Convection (air at 300 K) ---
+  Pipe D = 25 mm, v = 10 m/s
+  Re = 15625 (turbulent)
+  Pr = 0.73
+  Nu (Dittus-Boelter) = 45.9
+  h = 48.2 W/(m²·K)
+
+=== Done ===

@@ -1,0 +1,129 @@
+# print.cyr — the examples' printing helpers: Cyrius has no formatted print, so these give the few forms the examples
+# need, each a fresh C string to print with `say`. Included by every example in this directory, after the bundle.
+#
+#   say(s), line(s)         a C string, without and with a newline
+#   fixed(x, d)             x with d decimals (Rust's `{:.d}`; d = 0 prints no point)
+#   expo(x, d)              x in exponent form with d decimals (Rust's `{:.de}`: 1.16e-4, 2.20e3)
+#   int(n)                  an integer
+#   left(s, w), right(s, w) s padded to w characters (Rust's `{:<w}` / `{:>w}`), counting characters, not bytes
+#   repeat(s, n)            s n times
+
+# Writes the C string s to stdout.
+fn say(s) {
+    print(s, strlen(s));
+    return 0;
+}
+
+# Writes the C string s and a newline to stdout.
+fn line(s) {
+    say(s);
+    println("");
+    return 0;
+}
+
+# The C string a then b, fresh.
+fn cat(a, b): i64 {
+    var an = strlen(a);
+    var bn = strlen(b);
+    var out = alloc(an + bn + 1);
+    memcpy(out, a, an);
+    memcpy(out + an, b, bn);
+    store8(out + an + bn, 0);
+    return out;
+}
+
+# x with d decimals, as a fresh C string. The stdlib's fmt_float_buf rounds the fraction; with d = 0 it still writes
+# a point and a digit, so the text is cut at the point.
+fn fixed(x: f64, d): i64 {
+    var buf = alloc(64);
+    var n = fmt_float_buf(x, buf, d);
+    if (d == 0) {
+        var k = 0;
+        while (k < n && load8(buf + k) != 46) { k = k + 1; }
+        n = k;
+    }
+    store8(buf + n, 0);
+    return buf;
+}
+
+# x in Rust's lower exponent form with d decimals: the mantissa in [1, 10), `e`, the exponent with no sign for a
+# positive one and no padding.
+fn expo(x: f64, d): i64 {
+    var ax: f64 = f64_abs(x);
+    var e = 0;
+    if (ax > 0.0) {
+        var m: f64 = ax;
+        while (m >= 10.0) {
+            m = m / 10.0;
+            e = e + 1;
+        }
+        while (m < 1.0) {
+            m = m * 10.0;
+            e = e - 1;
+        }
+    }
+    # The mantissa from one rounding: x / 10^e, the power exact (|e| ≤ 22).
+    var p: f64 = 1.0;
+    var k = 0;
+    var ae = e;
+    if (ae < 0) { ae = 0 - ae; }
+    while (k < ae) {
+        p = p * 10.0;
+        k = k + 1;
+    }
+    var mant: f64 = ax / p;
+    if (e < 0) { mant = ax * p; }
+    var s = fixed(mant, d);
+    if (load8(s) == 49 && load8(s + 1) == 48) {
+        # Rounded up to 10.0…: one more power of ten.
+        e = e + 1;
+        var one: f64 = 1.0;
+        s = fixed(one, d);
+    }
+    if (x < 0.0) { s = cat("-", s); }
+    return cat(cat(s, "e"), int(e));
+}
+
+# The integer n as a fresh C string.
+fn int(n): i64 {
+    var buf = alloc(32);
+    var k = fmt_int_buf(n, buf);
+    store8(buf + k, 0);
+    return buf;
+}
+
+# The number of characters (UTF-8 scalar values) in the C string s.
+fn chars(s): i64 {
+    var n = 0;
+    var k = 0;
+    while (load8(s + k) != 0) {
+        if ((load8(s + k) & 192) != 128) { n = n + 1; }
+        k = k + 1;
+    }
+    return n;
+}
+
+# s n times, fresh.
+fn repeat(s, n): i64 {
+    var out = "";
+    var k = 0;
+    while (k < n) {
+        out = cat(out, s);
+        k = k + 1;
+    }
+    return out;
+}
+
+# s left-aligned in w characters.
+fn left(s, w): i64 {
+    var c = chars(s);
+    if (c >= w) { return s; }
+    return cat(s, repeat(" ", w - c));
+}
+
+# s right-aligned in w characters.
+fn right(s, w): i64 {
+    var c = chars(s);
+    if (c >= w) { return s; }
+    return cat(repeat(" ", w - c), s);
+}

@@ -1,0 +1,126 @@
+# cooling_system.cyr — ported from rust-old/examples/cooling_system.rs: an aluminium fin array, a counter-flow heat
+# exchanger sized by LMTD and checked by ε-NTU, and turbulent pipe-flow convection by Dittus–Boelter.
+#
+#   cyrius distlib --all && cyrius build docs/examples/cooling_system.cyr build/cooling_system && ./build/cooling_system
+#
+# The output is Rust 1.4.0's example's, byte for byte (docs/examples/cooling_system.expected).
+
+include "dist/ushma.cyr"
+include "docs/examples/print.cyr"
+
+# A fallible call's value, or the example stops: Rust's example unwraps.
+fn ok_or_die(t, v, what): i64 {
+    if (is_ok(t) == 1) { return v; }
+    say(what);
+    say(": ");
+    line(us_error_message(v));
+    sys_exit_group(1);
+    return 0;
+}
+
+# Prints the design.
+fn main(): i64 {
+    alloc_init();
+    line("=== Ushma — Cooling System Design ===");
+    line("");
+
+    line("--- Aluminum Fin Array ---");
+    var al: UsMaterial;
+    var air: UsMaterial;
+    var tm, vm = us_material_preset(US_MATERIAL_ALUMINUM, &al);
+    var ta, va = us_material_preset(US_MATERIAL_AIR, &air);
+    # Forced air, 2 × 30 × 50 mm fins, an 80 °C chip in 25 °C air
+    var h: f64 = 25.0;
+    var k: f64 = al.conductivity;
+    var fin_thickness: f64 = 0.002;
+    var fin_height: f64 = 0.03;
+    var fin_width: f64 = 0.05;
+    var perimeter: f64 = 2.0 * (fin_thickness + fin_width);
+    var cross_area: f64 = fin_thickness * fin_width;
+    var t_base: f64 = 353.15;
+    var t_air: f64 = 298.15;
+    var tq, vq = us_fin_rectangular_heat(h, perimeter, k, cross_area, fin_height, t_base, t_air);
+    var q_fin: f64 = ok_or_die(tq, vq, "fin_rectangular_heat");
+    var tp, vp = us_fin_parameter(h, perimeter, k, cross_area);
+    var m: f64 = ok_or_die(tp, vp, "fin_parameter");
+    var te, ve = us_fin_efficiency_rectangular(m, fin_height);
+    var eta: f64 = ok_or_die(te, ve, "fin_efficiency_rectangular");
+    var tf, vf = us_fin_effectiveness(q_fin, h, cross_area, t_base, t_air);
+    var effectiveness: f64 = ok_or_die(tf, vf, "fin_effectiveness");
+    var wmm: f64 = fin_width * 1000.0;
+    var hmm: f64 = fin_height * 1000.0;
+    var tmm: f64 = fin_thickness * 1000.0;
+    var fin = cat(cat(cat(cat("  Fin: ", fixed(wmm, 0)), "mm × "), fixed(hmm, 0)), "mm × ");
+    line(cat(cat(fin, fixed(tmm, 1)), "mm Al"));
+    line(cat(cat("  Heat per fin: ", fixed(q_fin, 2)), " W"));
+    var eta_pct: f64 = eta * 100.0;
+    line(cat(cat("  Fin efficiency: ", fixed(eta_pct, 1)), "%"));
+    line(cat(cat("  Fin effectiveness: ", fixed(effectiveness, 1)), "×"));
+    var num_fins = 10;
+    var nf: f64 = f64_from(num_fins);
+    var q_total: f64 = q_fin * nf;
+    line(cat(cat(cat(cat("  Total (", int(num_fins)), " fins): "), fixed(q_total, 1)), " W"));
+
+    line("");
+    line("--- Counter-Flow Heat Exchanger ---");
+    # 90 → 60 °C coolant against 20 → 40 °C water
+    var t_h_in: f64 = 363.15;
+    var t_h_out: f64 = 333.15;
+    var t_c_in: f64 = 293.15;
+    var t_c_out: f64 = 313.15;
+    var tl, vl = us_lmtd_counter(t_h_in, t_h_out, t_c_in, t_c_out);
+    var lmtd: f64 = ok_or_die(tl, vl, "lmtd_counter");
+    line(cat(cat("  LMTD = ", fixed(lmtd, 1)), " K"));
+    # 5 kW to reject at U = 800 W/(m²·K)
+    var q_target: f64 = 5000.0;
+    var u: f64 = 800.0;
+    var area_needed: f64 = q_target / (u * lmtd);
+    line(cat(cat("  U = ", fixed(u, 0)), " W/(m²·K)"));
+    line(cat(cat(cat(cat("  Required area for ", fixed(q_target, 0)), " W: "), fixed(area_needed, 3)), " m²"));
+    # Checked by ε-NTU
+    var c_h: f64 = q_target / (t_h_in - t_h_out);
+    var c_c: f64 = q_target / (t_c_out - t_c_in);
+    var c_min: f64 = c_h;
+    var c_max: f64 = c_c;
+    if (c_c < c_h) {
+        c_min = c_c;
+        c_max = c_h;
+    }
+    var tn, vn = us_ntu(u, area_needed, c_min);
+    var ntu_val: f64 = ok_or_die(tn, vn, "ntu");
+    var tx, vx = us_effectiveness_counter(ntu_val, c_min / c_max);
+    var eff: f64 = ok_or_die(tx, vx, "effectiveness_counter");
+    var q_check: f64 = us_heat_exchanger_ntu(eff, c_min, t_h_in, t_c_in);
+    line(cat(cat(cat("  NTU = ", fixed(ntu_val, 2)), ", ε = "), fixed(eff, 3)));
+    line(cat(cat("  ε-NTU verification: Q = ", fixed(q_check, 0)), " W"));
+
+    line("");
+    line("--- Pipe Flow Convection (air at 300 K) ---");
+    # Air at 10 m/s in a 25 mm pipe: ν = 1.6e-5 m²/s, α = 2.2e-5 m²/s
+    var nu_air: f64 = 0.000016;
+    var alpha_air: f64 = 0.000022;
+    var k_air: f64 = air.conductivity;
+    var velocity: f64 = 10.0;
+    var diameter: f64 = 0.025;
+    var tr, vr = us_reynolds_number(velocity, diameter, nu_air);
+    var re: f64 = ok_or_die(tr, vr, "reynolds_number");
+    var tpr, vpr = us_prandtl_number(nu_air, alpha_air);
+    var pr: f64 = ok_or_die(tpr, vpr, "prandtl_number");
+    # Dittus–Boelter: turbulent internal flow (Re > 10,000)
+    var tnu, vnu = us_nusselt_dittus_boelter(re, pr);
+    var nu: f64 = ok_or_die(tnu, vnu, "nusselt_dittus_boelter");
+    var h_calc: f64 = nu * k_air / diameter;
+    var dmm: f64 = diameter * 1000.0;
+    line(cat(cat(cat(cat("  Pipe D = ", fixed(dmm, 0)), " mm, v = "), fixed(velocity, 0)), " m/s"));
+    line(cat(cat("  Re = ", fixed(re, 0)), " (turbulent)"));
+    line(cat("  Pr = ", fixed(pr, 2)));
+    line(cat("  Nu (Dittus-Boelter) = ", fixed(nu, 1)));
+    line(cat(cat("  h = ", fixed(h_calc, 1)), " W/(m²·K)"));
+
+    line("");
+    line("=== Done ===");
+    return 0;
+}
+
+var r = main();
+sys_exit_group(r);

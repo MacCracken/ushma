@@ -7,11 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The Rust → Cyrius port has begun; it ships as **2.0.0** with every module, feature, test,
-benchmark and example ported. Plan of record: `docs/development/ushma-port-plan.md`, with
-ADRs 0001–0005.
+## [2.0.0] - 2026-11-12
+
+ushma is now a Cyrius library: the Rust crate ported whole, every module, feature, test, benchmark and example. The
+port is checked against the frozen Rust 1.4.0 itself:
+- **golden rows:** 154,448, replayed on x86_64 ELF, `--bounds`, PE and aarch64;
+- **tests:** all 479 of Rust's, ported one for one;
+- **surface:** every public item has its Cyrius name;
+- **examples:** the five print 1.4.0's output byte for byte.
+
+Plan of record: `docs/development/ushma-port-plan.md`, with ADRs 0001–0005. The Rust crate stays at 1.4.0 in
+`rust-old/` and on crates.io; it gets no fixes and no releases.
+
+### Breaking
+- **The language.** ushma 2.0 is Cyrius, consumed as a bundle: `[deps.ushma]` with `modules = ["dist/ushma.cyr"]`, or
+  `"dist/ushma-ai.cyr"` for the daimon client. Rust's cargo features become those two profiles (`[lib]`, `[lib.ai]`).
+- **The API.** Public names carry the `us_` prefix (`us_conduction`, `UsGrid1D`, `US_ERR_INVALID_TEMPERATURE`; ADR
+  0001). Results are value-form, with error codes in place of `UshmaError`'s payloads. Values that own lists are filled
+  in place by the caller (ADR 0002 rows 1–18).
+- **Two results change on purpose:**
+  - a thermal network whose numbers overflow f64 is refused, where 1.4.0 returned NaN or ±∞ temperatures (row 16);
+  - the daimon client registers at `/v1/agents` and returns daimon's integer `id` (row 6), which 1.4.0 never reached.
+- **Migration guide:** [`docs/guides/migration-2.0.md`](docs/guides/migration-2.0.md) maps every Rust call to its
+  Cyrius form, with each divergence and its ADR row.
 
 ### Changed
+- **ADR 0002 row 3** — corrected at M8. The plan had expected lookups by `&str` name, but 1.4.0 has none: its tables are `pub const` presets and `ALL_*` slices. The row now records what the port does: `US_<TABLE>_<PRESET>` indices, `us_<t>_preset(i, out)` and `us_<t>_name(i)`
+- **scripts/gates.sh, CI** — the gates run `scripts/examples.sh --rust --all-targets` and lint and document-check `docs/examples/`; CI runs the examples on x86_64
 - **project** — the Rust 1.4.0 crate (tag `1.4.0`) is frozen in `rust-old/` as the parity
   oracle. It is never edited and never re-released, and every fix lands in the Cyrius port
   (ADR 0001). Moved there with it: `Cargo.toml`, `Cargo.lock` (now tracked, so the oracle
@@ -44,6 +66,17 @@ ADRs 0001–0005.
 - **scripts/oracle** — serde_json is built with `float_roundtrip`: its default float parse reads 35,970 of 160,320 of its own shortest texts back 1–2 ulp off (probe 11). Writing is unchanged, and the golden corpus is unaffected
 
 ### Added
+- **M8, the release** (port plan §6):
+  - **Examples:** `docs/examples/`, Rust's five examples as Cyrius programs on the bundle: `basic_thermo`,
+    `heat_engine`, `building_thermal`, `cooling_system` and `phase_change`, with a shared printing helper
+    (`print.cyr`).
+  - **Their check:** each one's output is its Rust example's, byte for byte. Rust's output is committed as
+    `<name>.expected`, and `scripts/examples.sh` builds each example on `dist/ushma.cyr` as a consumer would and
+    compares. The gates run it on x86_64 ELF, PE and aarch64, rerunning the Rust examples too (`--rust`), and CI runs
+    it on ELF.
+  - **Migration guide:** `docs/guides/migration-2.0.md`, for code that used the Rust crate: the bundles, the naming
+    rule, calls and results, and every ADR 0002 row by module.
+  - **Version:** `VERSION` 2.0.0.
 - **M7c, the daimon and hoosh client** (port plan §6): `src/ai.cyr`, in `[lib.ai]` only (`dist/ushma-ai.cyr`), on sandhi. M7 is complete, and with it every Rust module.
   - **API:**
     - the configs `UsDaimonConfig` and `UsHooshConfig`, with `us_daimon_config_default` / `us_hoosh_config_default`, their JSON (`_to_json`, `_from_json`, `_from_json_a`), and `us_daimon_config_to_text`, the key-redacting text;

@@ -1,5 +1,8 @@
 # Getting started with ushma
 
+Using ushma from another project, or coming from the Rust crate? See the README's "Using ushma" and the
+[migration guide](migration-2.0.md). This page is for working on ushma itself.
+
 ## Build
 
 ```sh
@@ -11,7 +14,9 @@ cyrius test                              # run tests/*.tcyr
 ## Layout
 
 - `src/main.cyr` — smoke entry point (proves the build links). The library ships as bundles:
-  `[lib]` → `dist/ushma.cyr`, `[lib.ai]` → `dist/ushma-ai.cyr` (from M1; `cyrius distlib --all`).
+  `[lib]` → `dist/ushma.cyr`, `[lib.ai]` → `dist/ushma-ai.cyr` (`cyrius distlib --all`).
+- `docs/examples/` — the five Rust examples as Cyrius programs on the bundle (`bash scripts/examples.sh` builds and
+  checks them against Rust 1.4.0's output).
 - `src/*.cyr` — one Cyrius module per Rust module, in the `[lib]` order of `cyrius.cyml`.
 - `tests/` — `.tcyr` tests (parity + reference), `.bcyr` benchmarks, `.fcyr` fuzz targets.
 - `lib/` — vendored stdlib leaves and hisab (`cyrius deps`). Never edit.

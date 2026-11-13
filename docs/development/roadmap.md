@@ -157,7 +157,7 @@ Ushma does NOT own:
 - [x] Explicit FD stability with convective boundaries (Fo·(1+Bi) ≤ 0.5); adaptive-step round-off; 2D convective BC; network connectivity check
 - [x] Debye Cv at low T; equilibrium-constant overflow (`ln_equilibrium_constant`); Pitzer Z validity; exact R
 
-## V2.0 — Cyrius port (in progress)
+## V2.0 — Cyrius port (done, 2026-11-12)
 
 Rust 1.4.0 is the final Rust feature release and becomes the frozen parity oracle in `rust-old/`;
 the Cyrius port ships as 2.0.0 and carries **everything** — every module, feature, test,
@@ -171,7 +171,7 @@ benchmark and example. Plan of record: [ushma-port-plan.md](ushma-port-plan.md).
 - [x] M5 — chemical & statistical (2026-11-12)
 - [x] M6 — numerical (2026-11-12)
 - [x] M7 — integrations: bridges, soorat-compat, ai (sandhi) (2026-11-12)
-- [ ] M8 — release 2.0.0 (155/155 functions, 479/479 tests, 5 examples)
+- [x] M8 — release 2.0.0 (155/155 functions, 479/479 tests, 5 examples) (2026-11-12)
 
 ## Backlog (from the 1.4 audit, demand-gated)
 

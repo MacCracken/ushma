@@ -811,3 +811,18 @@ M7b: 154,134 ok, 186 accepted).
   - **Surface parity:** ai 12 of 12. `surface_parity.py` now counts `pub async fn` methods, which it had missed
     (`register_agent`), and the `Default` and hand-written `Debug` impls. **Tests:** all 7 of ai's. The ledger has all
     479 of 479 Rust tests ported.
+
+## 11. M8 (2026-11-12)
+
+The five Rust examples are Cyrius programs in `docs/examples/`, built on `dist/ushma.cyr` as a consumer builds them.
+Each one's output is its Rust example's, byte for byte, on x86_64 ELF, PE (wine) and aarch64 (qemu): 142 lines in
+all. The lines are the examples' own computations at their printed precision: conduction, convection, radiation, the
+ideal gas, every material's diffusivity, cooling curves, three cycles against Carnot, a wall's 4-hour cooling by
+explicit steps, a fin array, an exchanger checked by ε-NTU, Dittus–Boelter, latent heats, the phase diagram,
+Clausius–Clapeyron by bisection, and the substance table. `scripts/examples.sh --rust` reruns the Rust examples and
+checks the committed `.expected` files are their output.
+
+The printing is the examples' own (`docs/examples/print.cyr`), on the stdlib's `fmt_float_buf`. That routine rounds
+the fraction in f64 rather than exactly, so a value whose decimal expansion sits on a tie at the printed digit could
+print differently from Rust's `{:.N}`. None of the 142 lines does. It also writes a point and a digit at 0 decimals
+(`123.0` for `{:.0}`), which the helper cuts.

@@ -1,0 +1,16 @@
+=== Ushma — Building Thermal Model ===
+
+--- Wall Heat Loss (steady state) ---
+Concrete wall (20 cm): 2125 W heat loss
+With 5 cm wood insulation: 607 W (71% reduction)
+
+--- Window Convection ---
+Single-pane window (2 m²): 342 W
+
+--- Transient Wall Cooling (1D FDM) ---
+  After 1 hr: wall midpoint T = 15.0 °C
+  After 2 hr: wall midpoint T = 11.0 °C
+  After 3 hr: wall midpoint T = 9.2 °C
+  After 4 hr: wall midpoint T = 8.3 °C
+
+=== Done ===

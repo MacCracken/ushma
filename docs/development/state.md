@@ -5,9 +5,9 @@
 
 ## Version
 
-**1.4.0 → 2.0.0-dev.** `VERSION` stays `1.4.0` until M8 ships 2.0.0. The Rust crate's final
-release, **1.4.0** (tag `1.4.0`, commit `2688099`), is frozen at `rust-old/` as the parity oracle.
-It is never edited and never re-released.
+**2.0.0** (`VERSION`), the Cyrius port, released 2026-11-12 (the maintainer tags it). The Rust crate's final release,
+**1.4.0** (tag `1.4.0`, commit `2688099`), is frozen at `rust-old/` as the parity oracle. It is never edited and never
+re-released.
 
 ## Port progress
 
@@ -24,7 +24,7 @@ Plan of record: [`ushma-port-plan.md`](ushma-port-plan.md). Decisions P2–P8 we
 | M5 Chemical & statistical | ✅ done 2026-11-12. **M5a:** `src/chem.cyr` (7 of 7; surface 24/24), `UsSpecies` and its JSON, reaction sides as term lists (ADR 0002 row 13); 2,340 chem rows (3 glibc exp misrounds in `chem.cr.tsv`); `tests/chem.tcyr` (114; all 23 Rust tests); the 3 chem integration tests; 3 benchmarks. **M5b:** `src/stat.cyr` (14 of 14; surface 16/16), Debye on hisab's Simpson (class D: 0–2 ulp from 1.4.0), the σ shape (ADR 0002 row 14); 4,170 stat rows (11 glibc misrounds in `stat.cr.tsv`); `tests/stat.tcyr` (107; all 33 Rust tests); the 3 stat integration tests, so all 30; 4 benchmarks |
 | M6 Numerical | ✅ done 2026-11-12. **M6a:** the boundary conditions (`UsBoundary` kinds, `UsBoundaryCondition` values: ADR 0002 row 15), `UsSide`, and the 1D grid `UsGrid1D` with its explicit, Crank–Nicolson (scratch reused) and adaptive steps; 1,190 rows, every step checked from the oracle's own state; `tests/numerical.tcyr` (83; 15 of the 27 Rust tests); 3 benchmarks (review: 822 → 591 ns explicit); 3 fuzz targets. **M6b (2026-11-12):** the 2D grid `UsGrid2D` (flat row-major nodes, the JSON in rows: ADR 0002 row 2), `set_boundary`, Gauss–Seidel with convective sides; 272 rows more, 1,462 in all; 21 of the 27 Rust tests; the 2D bench; the size guards (a vec's 2²⁸ words). **M6c:** the thermal network `UsNetwork` (its lists and solve scratch kept in the network, temperatures into the caller's buffer, a system that overflows f64 refused: ADR 0002 row 16), on ganita LU with the `_lu_solve` stopgap measured bit-identical on 600 networks (ADR 0003, second amendment); 749 rows more, 2,211 in all (9 overflow rows accepted by name); `tests/numerical.tcyr` (347; all 27 Rust tests); the network bench (review: 949 → 829 ns); the network fuzz target; the 10⁵-step soak; surface 36/36 |
 | M7 Integrations | ✅ done 2026-11-12. **M7a done (2026-11-12):** `src/bridge.cyr`, the 16 conversions (bijli, kimiya, dravya, badal, pravash, sharira) with their fallbacks, in 1.4.0's order; 6,439 rows (B 3,676, C 2,763; 3 glibc pow misrounds in `bridge.cr.tsv`), every one at 0 ulp; `tests/bridge.tcyr` (60; all 31 Rust tests); 16 Cyrius-only benchmarks; the exact-constant review (ADR 0002, under the table: no miss); surface 16/16. **M7b done (2026-11-12):** `src/soorat.cyr`, the six visualization types filled in place (ADR 0002 row 17) by the five constructors, and their JSON; 706 rows (B 215, C 128, A 363; 2 glibc pow misrounds in `soorat.cr.tsv`), every one at 0 ulp; `tests/soorat.tcyr` (154; all 13 Rust tests); the six decoders fuzzed; 6 Cyrius-only benchmarks (review: heatmap 7.5 → 3.1 µs); surface 23/23. **M7c done (2026-11-12):** `src/ai.cyr` in `[lib.ai]`: the daimon and hoosh configs (their defaults, JSON and the daimon config's redacted text), the client, and `register_agent` on sandhi (ADR 0002 rows 4–8, 18); 128 rows, the 31 registrations each the request on the wire against a loopback stub on a thread, identical to 1.4.0's; `tests/ai.tcyr` (59; all 7 Rust tests); the config decoders and daimon's answer fuzzed; 2 Cyrius-only benchmarks; surface 12/12. Every Rust module is ported, and all 479 Rust tests |
-| M8 Release 2.0.0 | ☐ |
+| M8 Release 2.0.0 | ✅ done 2026-11-12: the five Rust examples as Cyrius programs on the bundle (`docs/examples/`), each printing 1.4.0's output byte for byte on x86_64 ELF, PE and aarch64 (`scripts/examples.sh`, in the gates and CI); the migration guide (`docs/guides/migration-2.0.md`); ADR 0002 row 3 corrected (1.4.0 has no name lookups); README, SECURITY (supported versions) and CONTRIBUTING for the release; `VERSION` 2.0.0 and the CHANGELOG's `[2.0.0]` |
 
 ## Golden corpus
 
@@ -164,5 +164,7 @@ crates.io for "ushma" and waits on the maintainer.
 
 ## Next
 
-M8, the 2.0.0 release: the 5 Rust examples as runnable Cyrius examples (`docs/examples/`), the migration guide for Rust
-users (`docs/guides/migration-2.0.md`, every ADR 0002 row), the release checks, and `VERSION` 2.0.0.
+The port is complete: every Rust module, function, test, benchmark and example has its Cyrius counterpart, checked
+against 1.4.0. What follows is the roadmap's demand-gated backlog, the upstream items in the port plan §8 (each
+filed only on the maintainer's word), and switching the vendored `mathx.cyr` and `fmtf.cyr` to upstream versions
+when those land (plan §9).

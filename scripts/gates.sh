@@ -60,6 +60,8 @@ if grep -q '^\[lib\]' cyrius.cyml; then
 else
     skip "cyrius distlib (no [lib] until M1)"
 fi
+# The five examples on the bundle, on every target; each one's output must be Rust 1.4.0's example's.
+PAT='FAIL|examples:' TAILN=8 run bash scripts/examples.sh --rust --all-targets
 
 # 3. Tests on every target: ELF, ELF --bounds, PE (wine), aarch64 (qemu).
 for t in '' --bounds --win --aarch64; do
@@ -84,12 +86,12 @@ PAT='passed|failed|FAIL|fuzz:' run cyrius fuzz --poison --bounds
 PAT='Functions executed|failed|below' run cyrius coverage --exec --min 80
 echo "=== fmt/lint/doc per file"
 fails=0
-for f in src/*.cyr tests/*.tcyr tests/*.bcyr tests/*.fcyr tests/*.cyr; do
+for f in src/*.cyr tests/*.tcyr tests/*.bcyr tests/*.fcyr tests/*.cyr docs/examples/*.cyr; do
     [ -f "$f" ] || continue
     cyrius fmt --check "$f" > /dev/null 2>&1 || { echo "fmt FAIL $f"; fails=$((fails + 1)); }
     cyrius lint "$f" 2>&1 | grep -E '^[1-9][0-9]* warnings?$|: warning' && { echo "  ^ lint $f"; fails=$((fails + 1)); }
 done
-for f in src/*.cyr; do
+for f in src/*.cyr docs/examples/*.cyr; do
     cyrius doc --check "$f" 2>&1 | grep -E '[1-9][0-9]* undocumented' && { echo "  ^ doc $f"; fails=$((fails + 1)); }
 done
 echo "--- fmt/lint/doc failures $fails"

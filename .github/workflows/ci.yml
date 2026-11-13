@@ -73,5 +73,9 @@ jobs:
       - name: Rust-test ledger
         run: python3 -I -B scripts/rust_test_ledger.py . --check
 
+      - name: Examples (on the bundle; each one's output is Rust 1.4.0's example's)
+        run: bash scripts/examples.sh
+
       # The golden corpus is generated locally from rust-old/, so CI has no Rust job; the PE (wine)
-      # and aarch64 (qemu) runs are local release gates (scripts/gates.sh).
+      # and aarch64 (qemu) runs, and the Rust side of the examples (examples.sh --rust), are local
+      # release gates (scripts/gates.sh).

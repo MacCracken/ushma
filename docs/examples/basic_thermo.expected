@@ -1,0 +1,38 @@
+=== Ushma — Thermodynamics Demo ===
+
+--- Heat Conduction (Fourier's Law) ---
+Copper wall (5cm, 1cm²): 6416.0 W for ΔT = 80 K
+
+--- Convection (Newton's Cooling) ---
+Forced convection (h=25, A=1m²): 1500.0 W for ΔT = 60 K
+
+--- Radiation (Stefan-Boltzmann) ---
+Hot surface (ε=0.9, A=1m², 200°C): 2180.8 W radiated
+
+--- Ideal Gas Law ---
+1 mol at STP: V = 0.0224 m³ (22.41 L)
+2 mol at 400K in 50L: P = 133031 Pa (1.31 atm)
+
+--- Material Properties (at ~300 K) ---
+Material              k (W/m⋅K) c_p (J/kg⋅K)   α (m²/s)
+--------------------------------------------------------
+Copper                  401.000        385.0    1.16e-4
+Aluminum                237.000        897.0    9.79e-5
+Iron                     80.200        449.0    2.27e-5
+Steel (1% carbon)        43.000        490.0    1.12e-5
+Glass (soda-lime)         1.000        840.0    4.76e-7
+Water                     0.606       4186.0    1.45e-7
+Air                       0.026       1007.0    2.25e-5
+Wood (oak)                0.170       2380.0    1.19e-7
+Concrete                  1.700        880.0    8.40e-7
+Diamond                2200.000        509.0    1.23e-3
+
+--- Cooling Curve (lumped capacitance) ---
+  t =    0s → T = 373.1 K (100.0 °C)
+  t =   30s → T = 355.5 K (82.3 °C)
+  t =   60s → T = 341.7 K (68.5 °C)
+  t =  120s → T = 322.6 K (49.4 °C)
+  t =  300s → T = 299.7 K (26.6 °C)
+  t =  600s → T = 293.7 K (20.5 °C)
+
+=== Done ===
