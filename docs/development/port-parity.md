@@ -745,8 +745,8 @@ after M6b: 146,288 ok, 138 accepted).
 
 ## 10. M7 (2026-11-12)
 
-After M7a the harness's summary is `14 modules, 0 failing | rows: 153459 ok, 0 failed, 0 measured, 0 pending, 155
-accepted (ADR 4: 66)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
+After M7b the harness's summary is `15 modules, 0 failing | rows: 154134 ok, 0 failed, 0 measured, 0 pending, 186
+accepted (ADR 4: 68)`, identical on x86_64 ELF, `--bounds`, PE and aarch64 (after M7a: 153,459 ok, 155 accepted).
 
 - **bridge** (M7a): 6,439 rows (class B 3,676, C 2,763), every one at 0 ulp. The 3 rows where glibc misrounds a
   `pow` (Kleiber's m^0.75) are accepted under ADR 4, the port giving the correctly rounded value. glibc misrounds
@@ -761,3 +761,28 @@ accepted (ADR 4: 66)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
     turbulent pipe flow, human physiology), then each argument of its base cases at every edge value.
   - **Surface parity:** bridge 16 of 16. **Tests:** all 31 of bridge's. The ledger has 459 of 479 ported, and the 20
     left are soorat's 13 and ai's 7 (M7b, M7c).
+- **soorat** (M7b): 706 rows (class B 215, C 128, A 363), every one at 0 ulp. The 2 cycle-diagram rows where glibc
+  misrounds a `pow` are accepted under ADR 4, as M4c's diagram rows are, and 29 decoder rows under ADR 5.
+  - **The heatmap and flux field** (141 rows) run on 39 2D grids: M6b's seven setups before and after their solves,
+    and the edits a deserialized grid can hold. Those are a missing last row and two missing rows, a short last row, an
+    extra row, all rows gone, ny past, short of or at 0, one-cell-wide x and y axes, the 1 × 1 and empty grids, a NaN
+    and a ±∞ node, an all-NaN field, and two signed-zero fields, whose bounds must land on Rust's −0 or +0. The flux
+    also runs with Δx at 0, NaN and −0.5, Δy at +∞ and −0, and the conductivity at every edge. `validate.py` reads
+    each grid as Rust's rows, so the port's flat cut by nx is checked against Rust's layout, not its own.
+  - **The profile** (37 rows): M6a's setups, each also after 5 explicit steps, its 13 malformed grids, and all-NaN,
+    signed-zero and ±∞ fields, laid out on three frames (one of NaN, ±∞ and −0 components).
+  - **The cycle diagram** (128 rows): M4c's 19 sample results, edited ones among them, and Rust's own Otto test, at 0,
+    1, 2, 3, 5 and 20 points a process (and 50 for the first 8).
+  - **The network graph** (37 rows): Rust's two test networks, a solved chain, the empty network, resistances with no
+    nodes and indices past num_nodes, and every R edge (0, −0, NaN, ±∞, a subnormal, 2.2e-308 whose 1/R overflows,
+    f64::MAX). Each runs with its temperature list short, exact, long and empty, with a NaN and ±0 list, and with its
+    own solve where it solves.
+  - **JSON:** 22 `to_json` and 341 `from_json` rows. The decodes are each type's documents, the shared variants of
+    one of them (`json_cases.rs`: malformed, duplicate, unknown and missing fields, number, string and shape forms),
+    and documents with arrays of the wrong length for a `[usize; 2]` or `[f64; 3]`, a float or negative
+    dimension, a `null` where serde wants an f64 (a NaN bound's own document), a kind needing escapes (a tab, quotes,
+    a backslash, U+0001, é, U+1D11E), a lone surrogate, a non-string kind, and both serde forms. The network graph
+    has no scalar field for the integer variants to mutate, so its ADR 5 rows are 4: the three structural ones and
+    an edge of 2⁶³, which serde reads as a usize and bayan refuses.
+  - **Surface parity:** soorat 23 of 23. **Tests:** all 13 of soorat's. The ledger has 472 of 479 ported, and the 7
+    left are ai's (M7c).

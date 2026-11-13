@@ -29,6 +29,7 @@ include "src/chem.cyr"
 include "src/stat.cyr"
 include "src/numerical.cyr"
 include "src/bridge.cyr"
+include "src/soorat.cyr"
 
 # Keeps results observable, so no call can be dropped.
 var _bn_sink = 0;
@@ -679,6 +680,51 @@ fn b_br_evaporative(x): i64 {
     return r;
 }
 
+# The soorat values the constructor benchmarks refill (Cyrius-only rows: Rust benches none), and their sources.
+var _bn_sr_gv = 0;
+var _bn_sr_tp = 0;
+var _bn_sr_cd = 0;
+var _bn_sr_nv = 0;
+var _bn_sr_hf = 0;
+var _bn_sr_o = 0;
+
+# The heatmap of the solved 20×20 grid *g.
+fn b_sr_heatmap(g: *UsGrid2D): i64 {
+    var t, v = us_grid_visualization_from_grid_2d(_bn_sr_gv, g);
+    return v;
+}
+
+# The flux field of the solved 20×20 grid *g, k = 1.
+fn b_sr_flux(g: *UsGrid2D): i64 {
+    var t, v = us_heat_flux_field_from_grid_2d(_bn_sr_hf, g, 1.0);
+    return v;
+}
+
+# The profile of the 100-node grid *g.
+fn b_sr_profile(g: *UsGrid1D): i64 {
+    var t, v = us_temperature_profile_from_grid_1d(_bn_sr_tp, g, _bn_sr_o, _bn_sr_o + 24);
+    return v;
+}
+
+# The diagram data of Otto result *r at 50 points a process.
+fn b_sr_diagram(r: *UsCycleResult): i64 {
+    var t, v = us_cycle_diagram_data_from_cycle_result(_bn_sr_cd, r, 50);
+    return v;
+}
+
+# The graph of the 5-node chain *net and its solved temperatures.
+fn b_sr_graph(net: *UsNetwork): i64 {
+    var t, v = us_network_visualization_from_network(_bn_sr_nv, net, _bn_net_t, 5);
+    return v;
+}
+
+# The heatmap's document.
+fn b_sr_heatmap_json(x): i64 {
+    store64(_bn_sb + 8, 0);
+    us_grid_visualization_to_json(_bn_sb, _bn_sr_gv);
+    return load64(_bn_sb + 8);
+}
+
 # Benchmark entry point: runs every benchmark and reports each one.
 fn main(): i64 {
     alloc_init();
@@ -831,6 +877,29 @@ fn main(): i64 {
     bn_run("bridge/skin_radiation_loss", &b_br_skin, 0, 1000000);
     bn_run("bridge/muscle_activation_heat", &b_br_activation, 0, 1000000);
     bn_run("bridge/evaporative_cooling", &b_br_evaporative, 0, 1000000);
+    _bn_sr_gv = alloc(sizeof(UsGridVisualization));
+    var tsr1, vsr1 = us_grid_visualization_init(_bn_sr_gv);
+    _bn_sr_tp = alloc(sizeof(UsTemperatureProfile));
+    var tsr2, vsr2 = us_temperature_profile_init(_bn_sr_tp);
+    _bn_sr_cd = alloc(sizeof(UsCycleDiagramData));
+    var tsr3, vsr3 = us_cycle_diagram_data_init(_bn_sr_cd);
+    _bn_sr_nv = alloc(sizeof(UsNetworkVisualization));
+    var tsr4, vsr4 = us_network_visualization_init(_bn_sr_nv);
+    _bn_sr_hf = alloc(sizeof(UsHeatFluxField));
+    var tsr5, vsr5 = us_heat_flux_field_init(_bn_sr_hf);
+    _bn_sr_o = alloc(48);
+    store64(_bn_sr_o + 24, 1.0);
+    var tso, vso = us_grid2d_solve_steady_state(&gw, 0.0001, 100000);
+    bn_run("soorat/heatmap_20x20 (Cyrius only)", &b_sr_heatmap, &gw, 100000);
+    bn_run("soorat/heat_flux_20x20 (Cyrius only)", &b_sr_flux, &gw, 100000);
+    bn_run("soorat/profile_100 (Cyrius only)", &b_sr_profile, &g1, 100000);
+    var otr: UsCycleResult;
+    var tot, vot = us_cycle_result_init(&otr);
+    var tou, vou = us_otto_cycle(300.0, 101325.0, 8.0, 50000.0, 1.4, 1.0, &otr);
+    bn_run("soorat/cycle_diagram_otto_50 (Cyrius only)", &b_sr_diagram, &otr, 10000);
+    var tnz, vnz = us_network_solve(&net, _bn_net_t, 5);
+    bn_run("soorat/network_graph_5 (Cyrius only)", &b_sr_graph, &net, 1000000);
+    bn_run("soorat/heatmap_to_json_20x20 (Cyrius only)", &b_sr_heatmap_json, 0, 10000);
     return 0;
 }
 

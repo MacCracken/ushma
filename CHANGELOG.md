@@ -44,6 +44,32 @@ ADRs 0001–0005.
 - **scripts/oracle** — serde_json is built with `float_roundtrip`: its default float parse reads 35,970 of 160,320 of its own shortest texts back 1–2 ulp off (probe 11). Writing is unchanged, and the golden corpus is unaffected
 
 ### Added
+- **M7b, soorat's visualization data** (port plan §6): `src/soorat.cyr`, the six types soorat renders and their JSON:
+  - `UsGridVisualization`, the heatmap: `us_grid_visualization_from_grid_2d`;
+  - `UsTemperatureProfile`, the 1D profile: `us_temperature_profile_from_grid_1d`;
+  - `UsCycleDiagramData` and `UsCycleStatePoint`, the T-s and P-v diagrams with their state points:
+    `us_cycle_diagram_data_from_cycle_result`;
+  - `UsNetworkVisualization`, the node-link graph: `us_network_visualization_from_network`;
+  - `UsHeatFluxField`, Fourier's law over a 2D grid: `us_heat_flux_field_from_grid_2d`;
+  - with `us_<t>_init` / `_init_a` for each, and `us_<t>_to_json` / `_from_json` / `_from_json_a`. soorat joins
+    `[lib]` and `[lib.ai]` after bridge.
+  - **Shape** (ADR 0002 row 17): the caller owns each value, and each constructor fills it in place, so a value reused across calls allocates nothing after its first (5,000 calls, 0 heap bytes). Rust's `Vec`s are stdlib vecs on the value's allocator, flat (a point or flux vector two words, an edge two, a state point four), its fixed arrays scalar fields (`nx`, `ny`, `origin_x` …), and the kind the `kind_len` bytes at `kind`. A 2D grid is read as its flat nodes cut by nx (row 2): a cell past them is NaN, as 1.4.0's missing cells are.
+  - **Behaviour:** 1.4.0's in 1.4.0's order: the bounds fold `f64::min` / `f64::max` over the finite values (NaN for both when there are none), the flux is −k·∇T by central differences inside and one-sided at the edges, and the diagrams are M4c's. Where 1.4.0 would abort, or holds no such value, the port refuses: `US_ERR_OUT_OF_MEMORY` for a refused allocation or a size past a vec's 2²⁸ words, and `US_ERR_INVALID_PARAMETER` for a dimension, count or index below 0, a resistance list that is not whole entries, or a cycle kind that is no `UsCycle` code.
+  - **Golden rows:** `tests/golden/soorat.tsv`, 706 rows (B 215, C 128, A 363), from M6's grids and networks and M4's cycle results:
+    - the 2D grids are M6b's setups before and after their solves, then missing, short and extra rows, ny past or short of the rows, one-cell-wide axes, the empty grid, NaN, ±∞, all-NaN and signed-zero fields, and Δx, Δy at their edges;
+    - the 1D grids are M6a's setups, stepped and not, with its malformed grids;
+    - the cycles are M4c's sample results at 0 to 50 points a process;
+    - the networks are Rust's test networks and every R edge, with temperature lists short, exact and long;
+    - the JSON covers the six types' documents and 341 decodes, malformed ones among them.
+  - **Results:** every row passes at 0 ulp. The cycle diagram's 2 glibc `pow` misrounds are in `soorat.cr.tsv`, and 29 decoder rows are accepted under ADR 5's mapped divergences.
+  - **`validate.py`** models the five constructors from their raw tokens, reading a 2D grid as Rust's rows, and reproduces all 343 rows.
+  - **Tests:** `tests/soorat.tcyr` has 154 assertions:
+    - Rust's 13 soorat tests (all 13);
+    - the refusals, reuse and refused allocations;
+    - the JSON round trips, with `null` for NaN and the kind's escapes.
+  - **Fuzzing:** the harness reads the six documents and round-trips each one it accepts (1,749 of 50,000 inputs).
+  - **Benches:** 6 Cyrius-only rows (Rust benches no soorat path): the 20 × 20 heatmap 3.1 µs, its flux field 17.7 µs, a 100-node profile 0.82 µs, Otto's diagrams at 50 points a process 37 µs, the 5-node graph 116 ns, and the heatmap's document 1.3 ms.
+  - **Scripts:** soorat is PORTED in `surface_parity.py` (23/23) and `rust_test_ledger.py` (472 of 479; the 7 left are ai's).
 - **M7a, the bridges** (port plan §6): `src/bridge.cyr`, all 16 of Rust's conversions under their Rust names (`us_joule_heating_to_temperature_rate`, `us_em_absorption_to_heat_source`, `us_reaction_heat_rate`, `us_equilibrium_temperature`, `us_temperature_to_thermal_strain`, `us_thermal_gradient_to_stress`, `us_altitude_to_temperature`, `us_humidity_to_wet_bulb`, `us_velocity_to_convection_coefficient`, `us_tke_to_eddy_thermal_diffusivity`, `us_muscle_work_to_heat`, `us_basal_metabolic_rate`, `us_body_surface_area`, `us_skin_radiation_loss`, `us_muscle_activation_heat`, `us_evaporative_cooling`). bridge joins `[lib]` and `[lib.ai]` after numerical.
   - **Shape:** as Rust's: f64s in, one f64 out, and no failure. An input outside a function's domain gives its fallback, which each comment states: 0 for most, a clamp, or a NaN let through where 1.4.0 lets it through. The constants are the generated private ones (`_US_BRIDGE_*`), and the 1e-15 threshold is written positionally and checked to be the nearest double.
   - **Behaviour:** 1.4.0's operations in 1.4.0's order: the unary minus as a sign flip, Rust's NaN-ignoring `max` and its `clamp`, T⁴ as two squarings (`powi(4)`), and ln, pow and atan correctly rounded (ADR 0004; atan as `_us_cr_atan2(x, 1)`). The exponents are the doubles Rust wrote (ADR 0002 row 9; the review is noted under the table).
@@ -280,6 +306,7 @@ ADRs 0001–0005.
 - **tests/foundation.tcyr** — the predicates' "−0" cases tested +0 (`0.0 - 0.0`), and now use −0.0. `_us_neg` (new: Rust's unary minus as a sign flip, which `0.0 - x` is not at +0.0) is tested beside it
 
 ### Performance
+- **soorat** (M7b's review) — the heatmap and flux field read their cells inline rather than through a helper call per cell, and the bounds compare inline rather than through `_us_min` / `_us_max`: `soorat/heatmap_20x20` 7.47 → 3.11 µs, `soorat/profile_100` 1.50 → 0.82 µs, `soorat/heat_flux_20x20` 19.4 → 17.7 µs (Cyrius-only rows; Rust benches no soorat path). Every row is unchanged
 - **numerical** (M6c's review) — `numerical/thermal_network_5` went from 949 ns to 829 (Rust 194.17). The system's entries are updated inline rather than through a helper call per entry. The check tests finiteness on the bits. Three pre-scans for non-finite values became tests in the back substitution, with the same refusals. The three scratch vecs are resized only when the free-node count changes. `ganita_mat_lu` is 290 ns of the rest. All 476 solve rows and the 600-network comparison are unchanged
 - **steam** (M4b's review) — `superheated_by_entropy` probes the entropy alone during its bisection: the ln-P weight is computed once per inversion, and the volume's ln, ln and exp are skipped until the final lookup. Every bit is unchanged. Between tiers the inversion went from 4.6 to 2.2 µs, and `cycle/refrigeration` from 5.1 to 2.6 µs (Rust 890 ns). On a tier, `steam/superheated_by_entropy` went from 1,498 ns to 1,005 (Rust 342.05). All 6,037 inversion rows and every steam-cycle row are unchanged
 - **steam** (M3b's review) — Region 4's coefficients are generated as scalar consts (immediates) instead of an indexed array, and the saturated interpolation reads its columns directly: `saturated_by_temp` 174 → 141 ns (Rust 18.19), `saturated_by_pressure` 189 → 159 (43.89), `saturation_pressure` 68 → 59 (6.45). Every golden row is unchanged; hisab's `calc_lerp` stays (an inlined lerp measured 3 ns faster)

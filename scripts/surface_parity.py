@@ -28,10 +28,10 @@ from pathlib import Path
 root = Path(sys.argv[1]).resolve()
 
 # The modules whose milestone has come.
-PORTED = ["error", "validate", "logging", "material", "transfer", "state", "entropy", "phase", "steam", "cycle", "chem", "stat", "numerical", "bridge"]
+PORTED = ["error", "validate", "logging", "material", "transfer", "state", "entropy", "phase", "steam", "cycle", "chem", "stat", "numerical", "bridge", "integration/soorat"]
 # The rest, with their milestone (port plan §3.1).
 SCHEDULED = {
-    "integration/soorat": "M7", "ai": "M7",
+    "ai": "M7",
 }
 WIRING = {
     "lib": "module declarations and re-exports: the [lib] / [lib.ai] module lists in cyrius.cyml",
@@ -62,6 +62,12 @@ TYPES = {
     "ThermalGrid1D": ("UsGrid1D", "grid1d"),
     "ThermalGrid2D": ("UsGrid2D", "grid2d"),
     "ThermalNetwork": ("UsNetwork", "network"),
+    "ThermalGridVisualization": ("UsGridVisualization", "grid_visualization"),
+    "TemperatureProfile": ("UsTemperatureProfile", "temperature_profile"),
+    "CycleDiagramData": ("UsCycleDiagramData", "cycle_diagram_data"),
+    "CycleStatePoint": ("UsCycleStatePoint", "cycle_state_point"),
+    "ThermalNetworkVisualization": ("UsNetworkVisualization", "network_visualization"),
+    "HeatFluxField": ("UsHeatFluxField", "heat_flux_field"),
 }
 # Rust item -> the Cyrius names that carry it ("fn x", "const X", "enum X", "struct X"), where the rules give none.
 MAPPED = {

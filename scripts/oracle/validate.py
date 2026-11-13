@@ -2396,8 +2396,97 @@ def m_br_skin(a, p):
     return F(0.98 * 5.670374419e-8 * ar * (powidf2(ts, 4) - powidf2(te, 4)))
 
 
+# ── soorat (M7b) ──
+# Each constructor from its source's raw tokens: the 2D grid as Rust's rows (`grid_value` reads row y, column x, NaN
+# where the rows don't reach), so the port's flat cut by nx is checked against Rust's own layout.
+
+
+def _sr_bounds(xs):
+    """Rust's finite_bounds: the min and max of the finite values by f64::min / f64::max, or (NaN, NaN)."""
+    lo, hi = math.inf, -math.inf
+    for t in xs:
+        if math.isfinite(t):
+            lo, hi = rust_min(lo, t), rust_max(hi, t)
+    return (lo, hi) if lo <= hi else (math.nan, math.nan)
+
+
+def _sr_cell(rows, ix, iy):
+    if iy < len(rows) and ix < len(rows[iy]):
+        return rows[iy][ix]
+    return math.nan
+
+
+def m_sr_heatmap(ins, p):
+    g, _ = _g2(ins, 0)
+    rows, nx, ny, dx, dy = g[0], g[1], g[2], g[3], g[4]
+    vals = [_sr_cell(rows, ix, iy) for iy in range(ny) for ix in range(nx)]
+    lo, hi = _sr_bounds(vals)
+    return ([f"v:{len(vals)}"] + [fbits(x) for x in vals] + [f"i:{nx}", f"i:{ny}"]
+            + [fbits(x) for x in (0.0, 0.0, dx, dy, lo, hi)])
+
+
+def _sr_grad(t, i, n, step):
+    """One axis of the flux's gradient at index i of n: central inside, one-sided at the ends, 0 when n is 1."""
+    if i > 0 and i + 1 < n:
+        return fdiv(t(i + 1) - t(i - 1), 2.0 * step)
+    if i == 0 and n > 1:
+        return fdiv(t(i + 1) - t(i), step)
+    if i + 1 == n and n > 1:
+        return fdiv(t(i) - t(i - 1), step)
+    return 0.0
+
+
+def m_sr_flux(ins, p):
+    g, at = _g2(ins, 0)
+    k = tok_f(ins[at])
+    rows, nx, ny, dx, dy = g[0], g[1], g[2], g[3], g[4]
+    out, mx = [], 0.0
+    for iy in range(ny):
+        for ix in range(nx):
+            gx = _sr_grad(lambda j: _sr_cell(rows, j, iy), ix, nx, dx)
+            gy = _sr_grad(lambda j: _sr_cell(rows, ix, j), iy, ny, dy)
+            qx, qy = -k * gx, -k * gy
+            mag = rust_sqrt(qx * qx + qy * qy)
+            if mag > mx:
+                mx = mag
+            out += [qx, qy]
+    return [f"v:{nx * ny}"] + [fbits(x) for x in out] + [f"i:{nx}", f"i:{ny}", fbits(dx), fbits(dy), fbits(mx)]
+
+
+def m_sr_profile(ins, p):
+    g, at = _g1(ins, 0)
+    frame = [tok_f(t) for t in ins[at : at + 6]]
+    lo, hi = _sr_bounds(g[0])
+    return [f"v:{len(g[0])}"] + [fbits(x) for x in g[0] + [g[1]] + frame + [lo, hi]]
+
+
+def m_sr_diagram(ins, p):
+    _, st, _, nums, _ = _parse_cycle(ins, 0)
+    out = _diagram(ins, p, _ts_point) + _diagram(ins, p, _pv_point) + [f"v:{len(st)}"]
+    for sp in st:
+        out += [fbits(x) for x in sp[:4]]
+    return out + [f"s:{ins[0][len('e:CycleKind.'):]}", fbits(nums[3])]
+
+
+def m_sr_network(ins, p):
+    x, at = _net(ins, 0)
+    n = int(ins[at][2:])
+    temps = [tok_f(t) for t in ins[at + 1 : at + 1 + n]]
+    nn, res = x[0], x[1]
+    node = temps[:nn] + [math.nan] * max(nn - len(temps), 0)
+    out = [f"v:{nn}"] + [fbits(t) for t in node] + [f"v:{len(res)}"]
+    for a, b, _ in res:
+        out += [f"i:{a}", f"i:{b}"]
+    return out + [f"v:{len(res)}"] + [fbits(fdiv(1.0, r) if r > 0.0 else 0.0) for _, _, r in res]
+
+
 # Functions whose rows hold whole cycle results or term lists: their models read the raw tokens.
 RAW_ARGS = {
+    "soorat::ThermalGridVisualization::from_grid_2d",
+    "soorat::HeatFluxField::from_grid_2d",
+    "soorat::TemperatureProfile::from_grid_1d",
+    "soorat::CycleDiagramData::from_cycle_result",
+    "soorat::ThermalNetworkVisualization::from_network",
     "numerical::ThermalGrid1D::new",
     "numerical::ThermalGrid1D::fourier_number",
     "numerical::ThermalGrid1D::max_stable_dt",
@@ -2544,6 +2633,13 @@ def unmodelled(fn, ins):
 
 
 MODELS = {
+    "soorat": {
+        "soorat::ThermalGridVisualization::from_grid_2d": m_sr_heatmap,
+        "soorat::HeatFluxField::from_grid_2d": m_sr_flux,
+        "soorat::TemperatureProfile::from_grid_1d": m_sr_profile,
+        "soorat::CycleDiagramData::from_cycle_result": m_sr_diagram,
+        "soorat::ThermalNetworkVisualization::from_network": m_sr_network,
+    },
     "bridge": {
         "bridge::joule_heating_to_temperature_rate": m_br_joule,
         "bridge::em_absorption_to_heat_source": lambda a, p: F(rust_max(a[0], 0.0)),

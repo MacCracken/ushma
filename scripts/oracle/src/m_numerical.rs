@@ -30,7 +30,7 @@ use crate::json_cases::variants;
 use crate::sweep::{around, edges};
 use crate::tsv::{Class, Module, Tok, err, f, i, s};
 
-fn bc_toks(b: &Bc) -> Vec<Tok> {
+pub(crate) fn bc_toks(b: &Bc) -> Vec<Tok> {
     match *b {
         Bc::Fixed(t) => vec![Tok::E("BoundaryCondition", "Fixed".into()), f(t)],
         Bc::Insulated => vec![Tok::E("BoundaryCondition", "Insulated".into())],
@@ -44,7 +44,7 @@ fn bc_toks(b: &Bc) -> Vec<Tok> {
     }
 }
 
-fn g1_toks(g: &ThermalGrid1D) -> Vec<Tok> {
+pub(crate) fn g1_toks(g: &ThermalGrid1D) -> Vec<Tok> {
     let mut v = vec![Tok::V(g.nodes.len())];
     v.extend(g.nodes.iter().map(|&x| f(x)));
     v.extend([f(g.dx), f(g.alpha)]);
@@ -53,7 +53,7 @@ fn g1_toks(g: &ThermalGrid1D) -> Vec<Tok> {
     v
 }
 
-fn conv(h: f64, t_fluid: f64, k: f64) -> Bc {
+pub(crate) fn conv(h: f64, t_fluid: f64, k: f64) -> Bc {
     Bc::Convective { h, t_fluid, k }
 }
 
@@ -72,7 +72,7 @@ fn first_true(lo: f64, hi: f64, up: &dyn Fn(f64) -> bool) -> f64 {
 }
 
 /// The seven step setups: (nodes, length, α, T₀, left, right), and a profile to start from (None: uniform).
-fn setups() -> Vec<ThermalGrid1D> {
+pub(crate) fn setups() -> Vec<ThermalGrid1D> {
     let mut v = Vec::new();
     let mk = |n: usize, l: f64, a: f64, t: f64, bl: Bc, br: Bc| {
         ThermalGrid1D::new(n, l, a, t, bl, br).expect("setup")
@@ -120,7 +120,7 @@ fn setups() -> Vec<ThermalGrid1D> {
 }
 
 /// Grids the constructor would refuse, built from Rust's public fields (as a deserialized or edited grid can be).
-fn malformed() -> Vec<ThermalGrid1D> {
+pub(crate) fn malformed() -> Vec<ThermalGrid1D> {
     let base = setups().remove(0);
     let edit = |f: &dyn Fn(&mut ThermalGrid1D)| {
         let mut g = base.clone();
@@ -308,14 +308,14 @@ fn step_rows(m: &mut Module) {
 
 /// A usize as an `i:` token, or, past i64 (only a document's 2^63 variant reaches that; bayan refuses it, ADR 5), its
 /// exact decimal as an `s:` token.
-fn usize_tok(n: usize) -> Tok {
+pub(crate) fn usize_tok(n: usize) -> Tok {
     match i64::try_from(n) {
         Ok(x) => i(x),
         Err(_) => s(n.to_string()),
     }
 }
 
-fn g2_toks(g: &ThermalGrid2D) -> Vec<Tok> {
+pub(crate) fn g2_toks(g: &ThermalGrid2D) -> Vec<Tok> {
     let mut v = vec![Tok::V(g.nodes.len())];
     for row in &g.nodes {
         v.push(Tok::V(row.len()));
@@ -333,7 +333,7 @@ fn side_tok(sd: Side) -> Tok {
 }
 
 /// The seven solve setups.
-fn setups2() -> Vec<ThermalGrid2D> {
+pub(crate) fn setups2() -> Vec<ThermalGrid2D> {
     let mk = |nx: usize, ny: usize, lx: f64, ly: f64, t: f64, bcs: &[(Side, Bc)]| {
         let mut g = ThermalGrid2D::new(nx, ny, lx, ly, t).expect("setup");
         for &(sd, b) in bcs {
@@ -542,7 +542,7 @@ fn grid2d_rows(m: &mut Module) {
     }
 }
 
-fn net_toks(x: &ThermalNetwork) -> Vec<Tok> {
+pub(crate) fn net_toks(x: &ThermalNetwork) -> Vec<Tok> {
     let mut v = vec![usize_tok(x.num_nodes), Tok::V(x.resistances.len())];
     for &(a, b, r) in &x.resistances {
         v.extend([usize_tok(a), usize_tok(b), f(r)]);
@@ -555,7 +555,7 @@ fn net_toks(x: &ThermalNetwork) -> Vec<Tok> {
 }
 
 /// A network with these lists as they stand, unchecked (Rust's fields are public).
-fn net(n: usize, res: &[(usize, usize, f64)], fixed: &[(usize, f64)]) -> ThermalNetwork {
+pub(crate) fn net(n: usize, res: &[(usize, usize, f64)], fixed: &[(usize, f64)]) -> ThermalNetwork {
     let mut x = ThermalNetwork::new(n);
     x.resistances.extend_from_slice(res);
     x.fixed.extend_from_slice(fixed);

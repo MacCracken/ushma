@@ -42,6 +42,7 @@ include "src/chem.cyr"
 include "src/stat.cyr"
 include "src/numerical.cyr"
 include "src/bridge.cyr"
+include "src/soorat.cyr"
 
 alloc_init();
 
@@ -2304,6 +2305,358 @@ fn _par_bridge(fp, fl): i64 {
     return 1;
 }
 
+# ── soorat ──────────────────────────────────────────────────────────────────────────
+
+var _par_sr_gv = 0;
+var _par_sr_tp = 0;
+var _par_sr_cd = 0;
+var _par_sr_nv = 0;
+var _par_sr_hf = 0;
+var _par_sr_csp = 0;
+var _par_sr_g1 = 0;
+var _par_sr_g2 = 0;
+var _par_sr_net = 0;
+var _par_sr_cyc = 0;
+var _par_sr_t = 0;
+
+# Appends vec `v` of f64 words as `v:n` and its words.
+fn _par_got_f64s(v) {
+    var n = vec_len(v);
+    _par_got_seq(n);
+    var k = 0;
+    while (k < n) {
+        _par_got_f(vec_get(v, k));
+        k = k + 1;
+    }
+    return 0;
+}
+
+# Appends vec `v` of word pairs as `v:n` (the pairs) and each pair's two f64 words.
+fn _par_got_pairs(v) {
+    var n = vec_len(v) / 2;
+    _par_got_seq(n);
+    var k = 0;
+    while (k < 2 * n) {
+        _par_got_f(vec_get(v, k));
+        k = k + 1;
+    }
+    return 0;
+}
+
+# Appends *v as its golden tokens.
+fn _par_got_gv(v: *UsGridVisualization) {
+    _par_got_f64s(v.values);
+    _par_got_i(v.nx);
+    _par_got_i(v.ny);
+    var base = v;
+    _par_got_words(base + 32, 6);
+    return 0;
+}
+
+# Appends *p as its golden tokens.
+fn _par_got_tp(p: *UsTemperatureProfile) {
+    _par_got_f64s(p.temperatures);
+    var base = p;
+    _par_got_words(base + 16, 9);
+    return 0;
+}
+
+# Appends *d as its golden tokens.
+fn _par_got_cd(d: *UsCycleDiagramData) {
+    _par_got_pairs(d.ts_points);
+    _par_got_pairs(d.pv_points);
+    var n = vec_len(d.state_points) / 4;
+    _par_got_seq(n);
+    var k = 0;
+    while (k < 4 * n) {
+        _par_got_f(vec_get(d.state_points, k));
+        k = k + 1;
+    }
+    _par_got_text(d.kind, d.kind_len);
+    var e: f64 = d.efficiency;
+    _par_got_f(e);
+    return 0;
+}
+
+# Appends *v as its golden tokens.
+fn _par_got_nv(v: *UsNetworkVisualization) {
+    _par_got_f64s(v.node_temperatures);
+    var m = vec_len(v.edges) / 2;
+    _par_got_seq(m);
+    var k = 0;
+    while (k < 2 * m) {
+        _par_got_i(vec_get(v.edges, k));
+        k = k + 1;
+    }
+    _par_got_f64s(v.conductances);
+    return 0;
+}
+
+# Appends *f as its golden tokens.
+fn _par_got_hf(f: *UsHeatFluxField) {
+    _par_got_pairs(f.fluxes);
+    _par_got_i(f.nx);
+    _par_got_i(f.ny);
+    var base = f;
+    _par_got_words(base + 32, 3);
+    return 0;
+}
+
+# The scratch values and sources, made once.
+fn _par_sr_scratch() {
+    if (_par_sr_gv != 0) { return 0; }
+    _par_sr_gv = alloc(sizeof(UsGridVisualization));
+    var t1, v1 = us_grid_visualization_init(_par_sr_gv);
+    _par_sr_tp = alloc(sizeof(UsTemperatureProfile));
+    var t2, v2 = us_temperature_profile_init(_par_sr_tp);
+    _par_sr_cd = alloc(sizeof(UsCycleDiagramData));
+    var t3, v3 = us_cycle_diagram_data_init(_par_sr_cd);
+    _par_sr_nv = alloc(sizeof(UsNetworkVisualization));
+    var t4, v4 = us_network_visualization_init(_par_sr_nv);
+    _par_sr_hf = alloc(sizeof(UsHeatFluxField));
+    var t5, v5 = us_heat_flux_field_init(_par_sr_hf);
+    _par_sr_csp = alloc(sizeof(UsCycleStatePoint));
+    _par_sr_g1 = alloc(sizeof(UsGrid1D));
+    var b: UsBoundaryCondition;
+    us_boundary_insulated(&b);
+    var t6, v6 = us_grid1d_new(_par_sr_g1, 3, 1.0, 1.0, 0.0, &b, &b);
+    _par_sr_g2 = alloc(sizeof(UsGrid2D));
+    var t7, v7 = us_grid2d_new(_par_sr_g2, 3, 3, 1.0, 1.0, 0.0);
+    _par_sr_net = alloc(sizeof(UsNetwork));
+    var t8, v8 = us_network_new(_par_sr_net, 0);
+    _par_sr_cyc = alloc(sizeof(UsCycleResult));
+    var t9, v9 = us_cycle_result_init(_par_sr_cyc);
+    _par_sr_t = alloc(8 * 4096);
+    if (_par_mat_sb == 0) {
+        _par_mat_sb = str_builder_new();
+        _par_mat_arena = arena_allocator_growable(65536);
+    }
+    return 0;
+}
+
+# Replaces vec `w` with the `v:n` sequence at input token `at`, `per` words an element: the index after it, or -1.
+fn _par_in_vec(at, w, per): i64 {
+    if (at < 0 || at >= _par_in_n || load64(_par_in_k + at * 8) != 118) { return 0 - 1; }
+    var n = _par_in(at) * per;
+    if (at + 1 + n > _par_in_n) { return 0 - 1; }
+    vec_truncate(w, 0);
+    var k = 0;
+    while (k < n) {
+        vec_push(w, _par_in(at + 1 + k));
+        k = k + 1;
+    }
+    return at + 1 + n;
+}
+
+# soorat type `t`'s scratch value: 1 heatmap, 2 profile, 3 state point, 4 diagram, 5 network graph, 6 flux field.
+fn _par_sr_val(t): i64 {
+    match t {
+        1 => { return _par_sr_gv; }
+        2 => { return _par_sr_tp; }
+        3 => { return _par_sr_csp; }
+        4 => { return _par_sr_cd; }
+        5 => { return _par_sr_nv; }
+        6 => { return _par_sr_hf; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# A heatmap from the row's input tokens into *gv: the index after them, or -1.
+fn _par_gv_in(gv: *UsGridVisualization): i64 {
+    var at = _par_in_vec(0, gv.values, 1);
+    if (at < 0) { return 0 - 1; }
+    gv.nx = _par_in(at);
+    gv.ny = _par_in(at + 1);
+    var base = gv;
+    _par_in_words(at + 2, 6, base + 32);
+    return at + 8;
+}
+
+# A profile from the row's input tokens into *tp: the index after them, or -1.
+fn _par_tp_in(tp: *UsTemperatureProfile): i64 {
+    var at = _par_in_vec(0, tp.temperatures, 1);
+    if (at < 0) { return 0 - 1; }
+    var base = tp;
+    _par_in_words(at, 9, base + 16);
+    return at + 9;
+}
+
+# Diagram data from the row's input tokens into *cd: the index after them, or -1.
+fn _par_cd_in(cd: *UsCycleDiagramData): i64 {
+    var at = _par_in_vec(0, cd.ts_points, 2);
+    at = _par_in_vec(at, cd.pv_points, 2);
+    at = _par_in_vec(at, cd.state_points, 4);
+    if (at < 0) { return 0 - 1; }
+    var kl[8];
+    var kp = _par_in_text(at, &kl);
+    if (kp == 0) { return 0 - 1; }
+    cd.kind = kp;
+    cd.kind_len = load64(&kl);
+    var e: f64 = _par_in(at + 1);
+    cd.efficiency = e;
+    return at + 2;
+}
+
+# A network graph from the row's input tokens into *nv: the index after them, or -1.
+fn _par_nv_in(nv: *UsNetworkVisualization): i64 {
+    var at = _par_in_vec(0, nv.node_temperatures, 1);
+    at = _par_in_vec(at, nv.edges, 2);
+    return _par_in_vec(at, nv.conductances, 1);
+}
+
+# A flux field from the row's input tokens into *hf: the index after them, or -1.
+fn _par_hf_in(hf: *UsHeatFluxField): i64 {
+    var at = _par_in_vec(0, hf.fluxes, 2);
+    if (at < 0) { return 0 - 1; }
+    hf.nx = _par_in(at);
+    hf.ny = _par_in(at + 1);
+    var base = hf;
+    _par_in_words(at + 2, 3, base + 32);
+    return at + 5;
+}
+
+# A type-`t` value from the row's input tokens into its scratch: 1, or 0 for unusable inputs.
+fn _par_sr_in(t): i64 {
+    var at = 0 - 1;
+    if (t == 1) { at = _par_gv_in(_par_sr_gv); }
+    if (t == 2) { at = _par_tp_in(_par_sr_tp); }
+    if (t == 3) {
+        _par_in_words(0, 4, _par_sr_csp);
+        at = 4;
+    }
+    if (t == 4) { at = _par_cd_in(_par_sr_cd); }
+    if (t == 5) { at = _par_nv_in(_par_sr_nv); }
+    if (t == 6) { at = _par_hf_in(_par_sr_hf); }
+    if (at != _par_in_n) { return 0; }
+    return 1;
+}
+
+# Appends type-`t` value *x as its golden tokens.
+fn _par_sr_got(t, x) {
+    if (t == 1) { _par_got_gv(x); }
+    if (t == 2) { _par_got_tp(x); }
+    if (t == 3) { _par_got_words(x, 4); }
+    if (t == 4) { _par_got_cd(x); }
+    if (t == 5) { _par_got_nv(x); }
+    if (t == 6) { _par_got_hf(x); }
+    return 0;
+}
+
+# Appends type-`t` value *x's document to sb.
+fn _par_sr_write(t, sb, x) {
+    if (t == 1) { us_grid_visualization_to_json(sb, x); }
+    if (t == 2) { us_temperature_profile_to_json(sb, x); }
+    if (t == 3) { us_cycle_state_point_to_json(sb, x); }
+    if (t == 4) { us_cycle_diagram_data_to_json(sb, x); }
+    if (t == 5) { us_network_visualization_to_json(sb, x); }
+    if (t == 6) { us_heat_flux_field_to_json(sb, x); }
+    return 0;
+}
+
+# Decodes a type-`t` document into the `out` value's words (at least 80 bytes) on allocator `a`.
+#must_use
+fn _par_sr_read(t, a, doc, n, out): Result {
+    if (t == 1) { return us_grid_visualization_from_json_a(a, doc, n, out); }
+    if (t == 2) { return us_temperature_profile_from_json_a(a, doc, n, out); }
+    if (t == 3) { return us_cycle_state_point_from_json_a(a, doc, n, out); }
+    if (t == 4) { return us_cycle_diagram_data_from_json_a(a, doc, n, out); }
+    if (t == 5) { return us_network_visualization_from_json_a(a, doc, n, out); }
+    return us_heat_flux_field_from_json_a(a, doc, n, out);
+}
+
+# The soorat type a JSON row's Rust type name (at fp + 8, `n` bytes before its `::to_json` or `::from_json`) names,
+# or 0.
+fn _par_sr_type(p, n): i64 {
+    if (_par_eq(p, n, "ThermalGridVisualization") == 1) { return 1; }
+    if (_par_eq(p, n, "TemperatureProfile") == 1) { return 2; }
+    if (_par_eq(p, n, "CycleStatePoint") == 1) { return 3; }
+    if (_par_eq(p, n, "CycleDiagramData") == 1) { return 4; }
+    if (_par_eq(p, n, "ThermalNetworkVisualization") == 1) { return 5; }
+    if (_par_eq(p, n, "HeatFluxField") == 1) { return 6; }
+    return 0;
+}
+
+# A soorat JSON row: 1 when handled, 0 for none, -1 for unusable inputs.
+fn _par_soorat_json(fp, fl): i64 {
+    var op = 0;
+    var tail = 0;
+    if (fl > 17 && _par_eq(fp + fl - 9, 9, "::to_json") == 1) { op = 1; tail = 9; }
+    if (fl > 19 && _par_eq(fp + fl - 11, 11, "::from_json") == 1) { op = 2; tail = 11; }
+    if (op == 0) { return 0; }
+    var t = _par_sr_type(fp + 8, fl - 8 - tail);
+    if (t == 0) { return 0; }
+    if (op == 1) {
+        if (_par_sr_in(t) == 0) { return 0 - 1; }
+        store64(_par_mat_sb + 8, 0);
+        _par_sr_write(t, _par_mat_sb, _par_sr_val(t));
+        _par_got_text(load64(_par_mat_sb), load64(_par_mat_sb + 8));
+        return 1;
+    }
+    var dn[8];
+    var doc = _par_in_text(0, &dn);
+    if (doc == 0) { return 0 - 1; }
+    var n = load64(&dn);
+    reset_via(_par_mat_arena);
+    var out[96];
+    var tr, vr = _par_sr_read(t, _par_mat_arena, doc, n, &out);
+    if (is_ok(tr) == 1) {
+        _par_sr_got(t, &out);
+        if (_par_has_int_neg_zero(doc, n) == 1) { _par_adr5 = 1; }
+        return 1;
+    }
+    _par_got_err(vr);
+    if (_par_bayan_mapped_refusal(doc, n) == 1) { _par_adr5 = 1; }
+    return 1;
+}
+
+# Every soorat row: 1 when handled, 0 for none, -1 for unusable inputs.
+fn _par_soorat(fp, fl): i64 {
+    _par_sr_scratch();
+    var j = _par_soorat_json(fp, fl);
+    if (j != 0) { return j; }
+    if (_par_eq(fp, fl, "soorat::ThermalGridVisualization::from_grid_2d") == 1) {
+        if (_par_g2_in(_par_sr_g2, 0) != _par_in_n) { return 0 - 1; }
+        var t, v = us_grid_visualization_from_grid_2d(_par_sr_gv, _par_sr_g2);
+        if (is_ok(t) == 1) { _par_got_gv(_par_sr_gv); } else { _par_got_err(v); }
+        return 1;
+    }
+    if (_par_eq(fp, fl, "soorat::HeatFluxField::from_grid_2d") == 1) {
+        var at = _par_g2_in(_par_sr_g2, 0);
+        if (at < 0 || at + 1 != _par_in_n) { return 0 - 1; }
+        var k: f64 = _par_in(at);
+        var th, vh = us_heat_flux_field_from_grid_2d(_par_sr_hf, _par_sr_g2, k);
+        if (is_ok(th) == 1) { _par_got_hf(_par_sr_hf); } else { _par_got_err(vh); }
+        return 1;
+    }
+    if (_par_eq(fp, fl, "soorat::TemperatureProfile::from_grid_1d") == 1) {
+        var a1 = _par_g1_in(_par_sr_g1, 0);
+        if (a1 < 0 || a1 + 6 != _par_in_n) { return 0 - 1; }
+        var od[48];
+        _par_in_words(a1, 6, &od);
+        var tp, vp = us_temperature_profile_from_grid_1d(_par_sr_tp, _par_sr_g1, &od, &od + 24);
+        if (is_ok(tp) == 1) { _par_got_tp(_par_sr_tp); } else { _par_got_err(vp); }
+        return 1;
+    }
+    if (_par_eq(fp, fl, "soorat::CycleDiagramData::from_cycle_result") == 1) {
+        var a2 = _par_cycle_in(_par_sr_cyc);
+        if (a2 == 0 || a2 + 1 != _par_in_n) { return 0 - 1; }
+        var tc, vc = us_cycle_diagram_data_from_cycle_result(_par_sr_cd, _par_sr_cyc, _par_in(a2));
+        if (is_ok(tc) == 1) { _par_got_cd(_par_sr_cd); } else { _par_got_err(vc); }
+        return 1;
+    }
+    if (_par_eq(fp, fl, "soorat::ThermalNetworkVisualization::from_network") == 1) {
+        var a3 = _par_net_in(_par_sr_net, 0);
+        if (a3 < 0 || a3 >= _par_in_n || load64(_par_in_k + a3 * 8) != 118) { return 0 - 1; }
+        var nt = _par_in_f64s(a3, _par_sr_t);
+        if (a3 + 1 + nt != _par_in_n) { return 0 - 1; }
+        var tn, vn = us_network_visualization_from_network(_par_sr_nv, _par_sr_net, _par_sr_t, nt);
+        if (is_ok(tn) == 1) { _par_got_nv(_par_sr_nv); } else { _par_got_err(vn); }
+        return 1;
+    }
+    return 0;
+}
+
 # ── transfer ────────────────────────────────────────────────────────────────────────
 
 # Appends a Result: the f64 payload of Ok, or `E:Variant` for Err.
@@ -2512,6 +2865,7 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "transfer") == 1) { return _par_transfer(fp, fl); }
     if (_par_eq(mp, ml, "entropy") == 1) { return _par_entropy(fp, fl); }
     if (_par_eq(mp, ml, "bridge") == 1) { return _par_bridge(fp, fl); }
+    if (_par_eq(mp, ml, "soorat") == 1) { return _par_soorat(fp, fl); }
     if (_par_eq(mp, ml, "steam") == 1) { return _par_steam(fp, fl); }
     if (_par_eq(mp, ml, "cycle") == 1) { return _par_cycle(fp, fl); }
     if (_par_eq(mp, ml, "stat") == 1) { return _par_stat(fp, fl); }
@@ -2638,6 +2992,7 @@ fn _par_c_bound(fp, fl): i64 {
     if (fl > 6 && _par_eq(fp, 6, "stat::") == 1) { return 0; }
     if (fl > 11 && _par_eq(fp, 11, "numerical::") == 1) { return 0; }
     if (fl > 8 && _par_eq(fp, 8, "bridge::") == 1) { return 0; }
+    if (fl > 8 && _par_eq(fp, 8, "soorat::") == 1) { return 0; }
     return 0 - 1;
 }
 

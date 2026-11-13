@@ -1,0 +1,573 @@
+# soorat tests.
+#
+# Rust 1.4.0's 13 integration/soorat.rs tests, one for one. Rust's malformed grid drops a cell from its first row,
+# which the port's flat grid cannot hold (ADR 0002 row 2); its port drops the same number of cells from the end, and
+# every assertion stands. Then the port's own: the refusals Rust has no value for, the reuse that allocates nothing
+# after the first call, refused allocations, and the JSON (round trips, `null` for NaN, the kind's escapes). The
+# golden corpus (tests/golden/soorat.tsv) checks every value bit for bit.
+
+include "src/constants.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+include "src/json.cyr"
+include "src/material_data.cyr"
+include "src/material.cyr"
+include "src/transfer.cyr"
+include "src/state_data.cyr"
+include "src/state.cyr"
+include "src/entropy.cyr"
+include "src/phase_data.cyr"
+include "src/phase.cyr"
+include "src/steam_data.cyr"
+include "src/steam.cyr"
+include "src/cycle.cyr"
+include "src/numerical.cyr"
+include "src/soorat.cyr"
+
+var _nan: f64 = 0.0;
+
+# |a − b| as an f64.
+fn absdiff(a: f64, b: f64): f64 {
+    var d: f64 = a - b;
+    if (d < 0.0) { d = 0.0 - d; }
+    return d;
+}
+
+# Asserts a Result is Ok.
+fn okc(t, name) {
+    assert_eq(is_ok(t), 1, name);
+    return 0;
+}
+
+# Asserts a Result is Err(code).
+fn errc(t, v, code, name) {
+    assert_eq(is_err_result(t), 1, name);
+    if (is_err_result(t) == 1) { assert_streq(us_error_name(v), us_error_name(code), name); }
+    return 0;
+}
+
+# f64 word k of vec v.
+fn fat(v, k): f64 {
+    var x: f64 = vec_get(v, k);
+    return x;
+}
+
+# 1 when str_builder sb holds exactly the C string s.
+fn sb_is(sb, s): i64 {
+    var n = strlen(s);
+    if (load64(sb + 8) != n) { return 0; }
+    return memeq(load64(sb), s, n);
+}
+
+# 1 when str_builder sb holds exactly the C string a followed by the C string b.
+fn sb_is2(sb, a, b): i64 {
+    var na = strlen(a);
+    var nb = strlen(b);
+    if (load64(sb + 8) != na + nb) { return 0; }
+    return memeq(load64(sb), a, na) & memeq(load64(sb) + na, b, nb);
+}
+
+# Pushes f64 x onto vec v (on the global heap).
+fn pushf(v, x: f64) {
+    vec_push(v, x);
+    return 0;
+}
+
+# A 2D grid nx × ny at T₀, its sides insulated.
+fn grid2(g: *UsGrid2D, nx, ny, t0: f64) {
+    var t, v = us_grid2d_new(g, nx, ny, 1.0, 1.0, t0);
+    return 0;
+}
+
+# A by-hand heatmap, profile, diagram, graph and flux field serialize as Rust's tests build them.
+# rust src/integration/soorat.rs: thermal_grid_viz_serializes, temperature_profile_serializes, cycle_diagram_serializes
+# rust src/integration/soorat.rs: thermal_network_viz_manual, heat_flux_field_manual
+fn test_manual() {
+    test_group("built by hand");
+    var sb = str_builder_new();
+    var gv: UsGridVisualization;
+    okc(us_grid_visualization_init(&gv), "heatmap init");
+    var k = 0;
+    while (k < 4) {
+        pushf(gv.values, 300.0);
+        k = k + 1;
+    }
+    gv.nx = 2;
+    gv.ny = 2;
+    gv.dx = 1.0;
+    gv.dy = 1.0;
+    gv.min_temp = 300.0;
+    gv.max_temp = 300.0;
+    us_grid_visualization_to_json(sb, &gv);
+    var want = "{\"values\":[300.0,300.0,300.0,300.0],\"dimensions\":[2,2],\"origin\":[0.0,0.0],\"spacing\":[1.0,1.0],";
+    assert_eq(sb_is2(sb, want, "\"min_temp\":300.0,\"max_temp\":300.0}"), 1, "as serde_json writes it, byte for byte");
+    var tp: UsTemperatureProfile;
+    okc(us_temperature_profile_init(&tp), "profile init");
+    pushf(tp.temperatures, 300.0);
+    pushf(tp.temperatures, 310.0);
+    pushf(tp.temperatures, 320.0);
+    tp.dx = 0.1;
+    tp.direction_x = 1.0;
+    tp.min_temp = 300.0;
+    tp.max_temp = 320.0;
+    store64(sb + 8, 0);
+    us_temperature_profile_to_json(sb, &tp);
+    assert(load64(sb + 8) > 0 && load8(load64(sb)) == 123, "the profile serializes");
+    var cd: UsCycleDiagramData;
+    okc(us_cycle_diagram_data_init(&cd), "diagram init");
+    pushf(cd.ts_points, 0.0);
+    pushf(cd.ts_points, 300.0);
+    pushf(cd.ts_points, 100.0);
+    pushf(cd.ts_points, 600.0);
+    cd.kind = "Otto";
+    cd.kind_len = 4;
+    cd.efficiency = 0.56;
+    assert_eq(vec_len(cd.ts_points) / 2, 2, "two T-s points");
+    var nv: UsNetworkVisualization;
+    okc(us_network_visualization_init(&nv), "graph init");
+    vec_push(nv.edges, 0);
+    vec_push(nv.edges, 1);
+    vec_push(nv.edges, 1);
+    vec_push(nv.edges, 2);
+    pushf(nv.conductances, 10.0);
+    pushf(nv.conductances, 5.0);
+    assert(vec_len(nv.edges) / 2 == 2 && vec_len(nv.conductances) == 2, "two edges, two conductances");
+    var hf: UsHeatFluxField;
+    okc(us_heat_flux_field_init(&hf), "flux init");
+    pushf(hf.fluxes, 100.0);
+    pushf(hf.fluxes, 0.0);
+    pushf(hf.fluxes, 0.0 - 50.0);
+    pushf(hf.fluxes, 50.0);
+    assert_eq(vec_len(hf.fluxes) / 2, 2, "two flux vectors");
+}
+
+# The heatmap of a 4×4 grid with a hot corner, and a 1D profile.
+# rust src/integration/soorat.rs: thermal_grid_from_grid_2d, temperature_profile_from_grid_1d
+fn test_from_grids() {
+    test_group("from grids");
+    var g: UsGrid2D;
+    grid2(&g, 4, 4, 300.0);
+    var s = us_grid2d_set_node(&g, 0, 0, 400.0);
+    var gv: UsGridVisualization;
+    okc(us_grid_visualization_init(&gv), "init");
+    okc(us_grid_visualization_from_grid_2d(&gv, &g), "from the 4x4 grid");
+    assert(gv.nx == 4 && gv.ny == 4, "dimensions [4, 4]");
+    assert_eq(vec_len(gv.values), 16, "16 values");
+    var lo: f64 = gv.min_temp;
+    var hi: f64 = gv.max_temp;
+    var dl: f64 = absdiff(lo, 300.0);
+    var dh: f64 = absdiff(hi, 400.0);
+    assert(dl < 0.01 && dh < 0.01, "min 300 K, max 400 K");
+    var b1: UsBoundaryCondition;
+    var b2: UsBoundaryCondition;
+    us_boundary_fixed(&b1, 400.0);
+    us_boundary_fixed(&b2, 300.0);
+    var g1: UsGrid1D;
+    var t1, v1 = us_grid1d_new(&g1, 5, 1.0, 0.00001, 350.0, &b1, &b2);
+    var o[24];
+    var d[24];
+    store64(&o, 0.0);
+    store64(&o + 8, 0.0);
+    store64(&o + 16, 0.0);
+    store64(&d, 1.0);
+    store64(&d + 8, 0.0);
+    store64(&d + 16, 0.0);
+    var tp: UsTemperatureProfile;
+    okc(us_temperature_profile_init(&tp), "init");
+    okc(us_temperature_profile_from_grid_1d(&tp, &g1, &o, &d), "from the 5-node grid");
+    assert_eq(vec_len(tp.temperatures), 5, "5 temperatures");
+    var dx: f64 = tp.dx;
+    var ddx: f64 = absdiff(dx, 0.25);
+    assert(ddx < 0.01, "dx = 0.25 m");
+    var ux: f64 = tp.direction_x;
+    assert(ux == 1.0, "laid out along x");
+}
+
+# The flux of a 5×5 grid with a gradient in x, and the network graph's conductances and missing temperatures.
+# rust src/integration/soorat.rs: heat_flux_from_grid_2d, thermal_network_from_network
+# rust src/integration/soorat.rs: network_missing_temperatures_are_nan
+fn test_flux_and_network() {
+    test_group("flux and network");
+    var g: UsGrid2D;
+    grid2(&g, 5, 5, 300.0);
+    var j = 0;
+    while (j < 5) {
+        var i = 0;
+        while (i < 5) {
+            var fi: f64 = f64_from(i);
+            var s = us_grid2d_set_node(&g, i, j, 300.0 + fi * 25.0);
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    var hf: UsHeatFluxField;
+    okc(us_heat_flux_field_init(&hf), "init");
+    okc(us_heat_flux_field_from_grid_2d(&hf, &g, 1.0), "the flux of the gradient");
+    assert_eq(vec_len(hf.fluxes) / 2, 25, "25 vectors");
+    var mm: f64 = hf.max_magnitude;
+    assert(mm > 0.0, "a positive largest magnitude");
+    var qx: f64 = fat(hf.fluxes, 2 * (2 * 5 + 2));
+    assert(qx < 0.0, "inside, qx < 0: heat flows from hot to cold, -k dT/dx");
+    var net: UsNetwork;
+    var tn, vn = us_network_new(&net, 3);
+    var r1, s1 = us_network_add_resistance(&net, 0, 1, 10.0);
+    var r2, s2 = us_network_add_resistance(&net, 1, 2, 20.0);
+    var temps[24];
+    store64(&temps, 300.0);
+    store64(&temps + 8, 350.0);
+    store64(&temps + 16, 400.0);
+    var nv: UsNetworkVisualization;
+    okc(us_network_visualization_init(&nv), "init");
+    okc(us_network_visualization_from_network(&nv, &net, &temps, 3), "from the network");
+    assert_eq(vec_len(nv.node_temperatures), 3, "3 node temperatures");
+    assert_eq(vec_len(nv.edges) / 2, 2, "2 edges");
+    var c0: f64 = fat(nv.conductances, 0);
+    var c1: f64 = fat(nv.conductances, 1);
+    var d0: f64 = absdiff(c0, 0.1);
+    var d1: f64 = absdiff(c1, 0.05);
+    assert(d0 < 0.001 && d1 < 0.001, "conductances 1/10 and 1/20 W/K");
+    var nm: UsNetwork;
+    var tm, vm = us_network_new(&nm, 3);
+    var r3, s3 = us_network_add_resistance(&nm, 0, 1, 2.0);
+    okc(us_network_visualization_from_network(&nv, &nm, &temps, 1), "one temperature for three nodes");
+    assert_eq(vec_len(nv.node_temperatures), 3, "still one per node");
+    var t1: f64 = fat(nv.node_temperatures, 1);
+    assert_eq(_us_is_nan(t1), 1, "a node without a temperature is NaN");
+}
+
+# The diagram data of an Otto cycle.
+# rust src/integration/soorat.rs: cycle_diagram_from_otto
+fn test_diagram() {
+    test_group("cycle diagram");
+    var r: UsCycleResult;
+    okc(us_cycle_result_init(&r), "result init");
+    okc(us_otto_cycle(300.0, 101325.0, 8.0, 2000.0, 1.4, 1.0, &r), "Otto");
+    var cd: UsCycleDiagramData;
+    okc(us_cycle_diagram_data_init(&cd), "init");
+    okc(us_cycle_diagram_data_from_cycle_result(&cd, &r, 20), "from the result, 20 points a process");
+    assert(vec_len(cd.ts_points) > 0 && vec_len(cd.pv_points) > 0, "T-s and P-v points");
+    assert_eq(vec_len(cd.state_points) / 4, us_cycle_state_count(&r), "one state point per state");
+    var e: f64 = cd.efficiency;
+    assert(e > 0.0 && e < 1.0, "an efficiency in (0, 1)");
+    assert(cd.kind_len == 4 && memeq(cd.kind, "Otto", 4) == 1, "kind \"Otto\"");
+}
+
+# A malformed grid gives NaN cells, never a fault; empty and all-NaN fields have NaN bounds.
+# rust src/integration/soorat.rs: malformed_grid_does_not_panic, empty_or_nan_field_bounds_are_nan
+fn test_malformed() {
+    test_group("malformed and empty");
+    var g: UsGrid2D;
+    grid2(&g, 3, 3, 300.0);
+    # Rust drops the last row and a cell of the first: 5 of 9 cells left. The flat grid drops 4 from the end.
+    vec_truncate(g.nodes, 5);
+    var hf: UsHeatFluxField;
+    okc(us_heat_flux_field_init(&hf), "init");
+    okc(us_heat_flux_field_from_grid_2d(&hf, &g, 1.0), "the flux of the short grid");
+    assert_eq(vec_len(hf.fluxes) / 2, 9, "still 9 vectors");
+    var gv: UsGridVisualization;
+    okc(us_grid_visualization_init(&gv), "init");
+    okc(us_grid_visualization_from_grid_2d(&gv, &g), "the heatmap of the short grid");
+    assert_eq(vec_len(gv.values), gv.nx * gv.ny, "nx·ny values");
+    var v8: f64 = fat(gv.values, 8);
+    assert_eq(_us_is_nan(v8), 1, "a missing cell is NaN");
+    var lo: f64 = gv.min_temp;
+    assert(lo == 300.0, "the bounds cover the cells there");
+    var bc: UsBoundaryCondition;
+    us_boundary_insulated(&bc);
+    var g1: UsGrid1D;
+    var t1, v1 = us_grid1d_new(&g1, 3, 1.0, 0.00001, 300.0, &bc, &bc);
+    var k = 0;
+    while (k < 3) {
+        var s = us_grid1d_set_node(&g1, k, _nan);
+        k = k + 1;
+    }
+    var o[24];
+    var d[24];
+    store64(&o, 0.0);
+    store64(&o + 8, 0.0);
+    store64(&o + 16, 0.0);
+    store64(&d, 1.0);
+    store64(&d + 8, 0.0);
+    store64(&d + 16, 0.0);
+    var tp: UsTemperatureProfile;
+    okc(us_temperature_profile_init(&tp), "init");
+    okc(us_temperature_profile_from_grid_1d(&tp, &g1, &o, &d), "an all-NaN profile");
+    var a: f64 = tp.min_temp;
+    var b: f64 = tp.max_temp;
+    assert(_us_is_nan(a) == 1 && _us_is_nan(b) == 1, "all NaN: NaN bounds");
+    vec_truncate(g1.nodes, 0);
+    okc(us_temperature_profile_from_grid_1d(&tp, &g1, &o, &d), "an empty profile");
+    var a2: f64 = tp.min_temp;
+    var b2: f64 = tp.max_temp;
+    assert(_us_is_nan(a2) == 1 && _us_is_nan(b2) == 1, "empty: NaN bounds");
+    assert_eq(vec_len(tp.temperatures), 0, "and no temperatures");
+}
+
+# Where Rust would abort or holds no such value, the port refuses, the value left as it was.
+fn test_refusals() {
+    test_group("refusals");
+    var g: UsGrid2D;
+    grid2(&g, 3, 3, 300.0);
+    var gv: UsGridVisualization;
+    okc(us_grid_visualization_init(&gv), "init");
+    okc(us_grid_visualization_from_grid_2d(&gv, &g), "a 3x3 heatmap");
+    g.nx = 0 - 3;
+    var e1, f1 = us_grid_visualization_from_grid_2d(&gv, &g);
+    errc(e1, f1, US_ERR_INVALID_PARAMETER, "nx below 0 (no usize holds one)");
+    assert_eq(gv.nx, 3, "the heatmap unchanged");
+    g.nx = 3;
+    g.ny = 0 - 1;
+    var hf: UsHeatFluxField;
+    okc(us_heat_flux_field_init(&hf), "init");
+    var e2, f2 = us_heat_flux_field_from_grid_2d(&hf, &g, 1.0);
+    errc(e2, f2, US_ERR_INVALID_PARAMETER, "ny below 0");
+    g.nx = 1048576;
+    g.ny = 1048576;
+    var e3, f3 = us_grid_visualization_from_grid_2d(&gv, &g);
+    errc(e3, f3, US_ERR_OUT_OF_MEMORY, "2^40 cells pass a vec's 2^28 words: refused, not aborted");
+    g.nx = 16384;
+    g.ny = 16384;
+    var e5, f5 = us_heat_flux_field_from_grid_2d(&hf, &g, 1.0);
+    errc(e5, f5, US_ERR_OUT_OF_MEMORY, "2^28 flux vectors need 2^29 words: refused");
+    var r: UsCycleResult;
+    okc(us_cycle_result_init(&r), "result init");
+    okc(us_otto_cycle(300.0, 101325.0, 8.0, 2000.0, 1.4, 1.0, &r), "Otto");
+    var cd: UsCycleDiagramData;
+    okc(us_cycle_diagram_data_init(&cd), "init");
+    var e6, f6 = us_cycle_diagram_data_from_cycle_result(&cd, &r, 4611686018427387904);
+    errc(e6, f6, US_ERR_OUT_OF_MEMORY, "2^62 points a process: refused, the product not overflowed");
+    r.kind = 99;
+    var e7, f7 = us_cycle_diagram_data_from_cycle_result(&cd, &r, 10);
+    errc(e7, f7, US_ERR_INVALID_PARAMETER, "a kind that is no UsCycle code");
+    assert_eq(cd.kind_len, 0, "the diagram data unchanged");
+    var net: UsNetwork;
+    var tn, vn = us_network_new(&net, 3);
+    var nv: UsNetworkVisualization;
+    okc(us_network_visualization_init(&nv), "init");
+    var tp1, vp1 = us_network_push_resistance(&net, 0 - 1, 1, 1.0);
+    var temps[8];
+    var e8, f8 = us_network_visualization_from_network(&nv, &net, &temps, 0);
+    errc(e8, f8, US_ERR_INVALID_PARAMETER, "a negative index");
+    vec_truncate(net.resistances, 0);
+    vec_push(net.resistances, 0);
+    var e9, f9 = us_network_visualization_from_network(&nv, &net, &temps, 0);
+    errc(e9, f9, US_ERR_INVALID_PARAMETER, "a resistance list that is not whole entries");
+    vec_truncate(net.resistances, 0);
+    var ea, fa = us_network_visualization_from_network(&nv, &net, &temps, 0 - 1);
+    errc(ea, fa, US_ERR_INVALID_PARAMETER, "a negative temperature count");
+    net.num_nodes = 0 - 2;
+    var eb, fb = us_network_visualization_from_network(&nv, &net, &temps, 0);
+    errc(eb, fb, US_ERR_INVALID_PARAMETER, "a negative node count");
+    net.num_nodes = 536870912;
+    var ec, fc = us_network_visualization_from_network(&nv, &net, &temps, 0);
+    errc(ec, fc, US_ERR_OUT_OF_MEMORY, "2^29 nodes pass a vec's 2^28 words: refused");
+    net.num_nodes = 3;
+    var tr, vr = us_network_push_resistance(&net, 7, 9, 0.0);
+    okc(us_network_visualization_from_network(&nv, &net, &temps, 0), "an index past num_nodes is drawn, as in Rust");
+    var c0: f64 = fat(nv.conductances, 0);
+    assert(c0 == 0.0 && vec_get(nv.edges, 0) == 7, "its edge kept, R = 0 a zero conductance");
+}
+
+# Each constructor refills its value in place: after the first call, none allocates.
+fn test_reuse() {
+    test_group("reuse");
+    var g: UsGrid2D;
+    grid2(&g, 20, 20, 300.0);
+    var bc: UsBoundaryCondition;
+    us_boundary_fixed(&bc, 400.0);
+    var g1: UsGrid1D;
+    var t1, v1 = us_grid1d_new(&g1, 50, 1.0, 0.0001, 300.0, &bc, &bc);
+    var r: UsCycleResult;
+    okc(us_cycle_result_init(&r), "result init");
+    okc(us_brayton_cycle(300.0, 101325.0, 10.0, 1400.0, 1.4, 1.0, &r), "Brayton");
+    var net: UsNetwork;
+    var tn, vn = us_network_new(&net, 5);
+    var k = 1;
+    while (k < 5) {
+        var tr, vr = us_network_add_resistance(&net, k - 1, k, 1.0);
+        k = k + 1;
+    }
+    var temps[40];
+    var o[24];
+    store64(&o, 0.0);
+    store64(&o + 8, 0.0);
+    store64(&o + 16, 0.0);
+    var gv: UsGridVisualization;
+    var tp: UsTemperatureProfile;
+    var cd: UsCycleDiagramData;
+    var nv: UsNetworkVisualization;
+    var hf: UsHeatFluxField;
+    okc(us_grid_visualization_init(&gv), "init");
+    okc(us_temperature_profile_init(&tp), "init");
+    okc(us_cycle_diagram_data_init(&cd), "init");
+    okc(us_network_visualization_init(&nv), "init");
+    okc(us_heat_flux_field_init(&hf), "init");
+    okc(us_grid_visualization_from_grid_2d(&gv, &g), "first heatmap");
+    okc(us_temperature_profile_from_grid_1d(&tp, &g1, &o, &o), "first profile");
+    okc(us_cycle_diagram_data_from_cycle_result(&cd, &r, 50), "first diagram");
+    okc(us_network_visualization_from_network(&nv, &net, &temps, 5), "first graph");
+    okc(us_heat_flux_field_from_grid_2d(&hf, &g, 1.0), "first flux");
+    var before = alloc_used();
+    var bad = 0;
+    var n = 0;
+    while (n < 1000) {
+        if (is_ok(us_grid_visualization_from_grid_2d(&gv, &g)) == 0) { bad = bad + 1; }
+        if (is_ok(us_temperature_profile_from_grid_1d(&tp, &g1, &o, &o)) == 0) { bad = bad + 1; }
+        if (is_ok(us_cycle_diagram_data_from_cycle_result(&cd, &r, 50)) == 0) { bad = bad + 1; }
+        if (is_ok(us_network_visualization_from_network(&nv, &net, &temps, 5)) == 0) { bad = bad + 1; }
+        if (is_ok(us_heat_flux_field_from_grid_2d(&hf, &g, 1.0)) == 0) { bad = bad + 1; }
+        n = n + 1;
+    }
+    assert_eq(bad, 0, "5,000 calls, all Ok");
+    assert_eq(alloc_used() - before, 0, "5,000 calls after the first: 0 heap bytes");
+    okc(us_cycle_diagram_data_from_cycle_result(&cd, &r, 2), "fewer points");
+    assert_eq(vec_len(cd.ts_points), 16, "the vecs truncated to the new size: 8 points");
+}
+
+# A refused allocation is Err(US_ERR_OUT_OF_MEMORY), never an abort; the value's lists are left empty.
+fn test_refused_allocations() {
+    test_group("refused allocations");
+    var ta = test_allocator();
+    test_allocator_fail_after(ta, 0);
+    var gv: UsGridVisualization;
+    var e1, f1 = us_grid_visualization_init_a(ta, &gv);
+    errc(e1, f1, US_ERR_OUT_OF_MEMORY, "the heatmap's vec refused");
+    var cd: UsCycleDiagramData;
+    var e2, f2 = us_cycle_diagram_data_init_a(ta, &cd);
+    errc(e2, f2, US_ERR_OUT_OF_MEMORY, "the diagram's vecs refused");
+    test_allocator_fail_after(ta, 0 - 1);
+    okc(us_grid_visualization_init_a(ta, &gv), "allowed, the heatmap");
+    okc(us_cycle_diagram_data_init_a(ta, &cd), "allowed, the diagram");
+    var g: UsGrid2D;
+    grid2(&g, 10, 10, 300.0);
+    test_allocator_fail_after(ta, test_allocator_alloc_count(ta));
+    var e3, f3 = us_grid_visualization_from_grid_2d(&gv, &g);
+    errc(e3, f3, US_ERR_OUT_OF_MEMORY, "the heatmap's first grow refused");
+    assert_eq(vec_len(gv.values), 0, "no values left");
+    var r: UsCycleResult;
+    okc(us_cycle_result_init(&r), "result init");
+    okc(us_otto_cycle(300.0, 101325.0, 8.0, 2000.0, 1.4, 1.0, &r), "Otto");
+    var e4, f4 = us_cycle_diagram_data_from_cycle_result(&cd, &r, 20);
+    errc(e4, f4, US_ERR_OUT_OF_MEMORY, "the diagram's first grow refused");
+    assert(vec_len(cd.ts_points) == 0 && vec_len(cd.state_points) == 0, "no points left");
+    test_allocator_fail_after(ta, 0 - 1);
+    okc(us_grid_visualization_from_grid_2d(&gv, &g), "allowed, the heatmap");
+    okc(us_cycle_diagram_data_from_cycle_result(&cd, &r, 20), "allowed, the diagram");
+    var doc = "[[1,2,3,4],[2,2],[0,0],[1,1],1,4]";
+    var arena = arena_allocator_growable(65536);
+    var gj: UsGridVisualization;
+    okc(us_grid_visualization_from_json_a(arena, doc, strlen(doc), &gj), "decoded on an arena");
+    assert(gj.alloc == arena && vec_len(gj.values) == 4, "its vec on the arena, which it grows on");
+    test_allocator_fail_after(ta, test_allocator_alloc_count(ta));
+    var gk: UsGridVisualization;
+    var e5, f5 = us_grid_visualization_from_json_a(ta, doc, strlen(doc), &gk);
+    assert_eq(is_err_result(e5), 1, "a decode on a refusing allocator is refused, not aborted");
+    test_allocator_fail_after(ta, 0 - 1);
+}
+
+# Each type's document reads back and is written again byte for byte; NaN is written `null` and that document refused;
+# the kind keeps its escapes; a refusal leaves the value unchanged.
+fn test_json() {
+    test_group("JSON");
+    var sb = str_builder_new();
+    var sb2 = str_builder_new();
+    var g: UsGrid2D;
+    grid2(&g, 4, 3, 300.0);
+    var s0 = us_grid2d_set_node(&g, 1, 1, 350.5);
+    var gv: UsGridVisualization;
+    okc(us_grid_visualization_init(&gv), "init");
+    okc(us_grid_visualization_from_grid_2d(&gv, &g), "a heatmap");
+    us_grid_visualization_to_json(sb, &gv);
+    var back: UsGridVisualization;
+    okc(us_grid_visualization_from_json(load64(sb), load64(sb + 8), &back), "the heatmap reads back");
+    us_grid_visualization_to_json(sb2, &back);
+    var n1 = load64(sb + 8);
+    assert(n1 == load64(sb2 + 8) && memeq(load64(sb), load64(sb2), n1) == 1, "written again, the same bytes");
+    vec_truncate(g.nodes, 0);
+    okc(us_grid_visualization_from_grid_2d(&gv, &g), "an empty field");
+    store64(sb + 8, 0);
+    us_grid_visualization_to_json(sb, &gv);
+    var tail = ",\"min_temp\":null,\"max_temp\":null}";
+    var tl = strlen(tail);
+    var n2 = load64(sb + 8);
+    assert(n2 > tl && memeq(load64(sb) + n2 - tl, tail, tl) == 1, "NaN bounds written null");
+    var e1, f1 = us_grid_visualization_from_json(load64(sb), n2, &back);
+    errc(e1, f1, US_ERR_DESERIALIZE, "and that document refused, as serde refuses it");
+    assert_eq(vec_len(back.values), 12, "the value unchanged");
+    var r: UsCycleResult;
+    okc(us_cycle_result_init(&r), "result init");
+    okc(us_diesel_cycle(300.0, 101325.0, 20.0, 2.0, 1.4, 1.0, &r), "Diesel");
+    var cd: UsCycleDiagramData;
+    okc(us_cycle_diagram_data_init(&cd), "init");
+    okc(us_cycle_diagram_data_from_cycle_result(&cd, &r, 3), "a diagram");
+    cd.kind = "a \"tab\"\there\\";
+    cd.kind_len = strlen(cd.kind);
+    store64(sb + 8, 0);
+    us_cycle_diagram_data_to_json(sb, &cd);
+    var cb: UsCycleDiagramData;
+    okc(us_cycle_diagram_data_from_json(load64(sb), load64(sb + 8), &cb), "the diagram reads back");
+    assert(cb.kind_len == cd.kind_len && memeq(cb.kind, cd.kind, cd.kind_len) == 1, "its kind through the escapes");
+    assert_eq(vec_len(cb.state_points), 16, "its four state points");
+    store64(sb2 + 8, 0);
+    us_cycle_diagram_data_to_json(sb2, &cb);
+    var n3 = load64(sb + 8);
+    assert(n3 == load64(sb2 + 8) && memeq(load64(sb), load64(sb2), n3) == 1, "written again, the same bytes");
+    var net: UsNetwork;
+    var tn, vn = us_network_new(&net, 2);
+    var tr, vr = us_network_add_resistance(&net, 0, 1, 4.0);
+    var temps[16];
+    store64(&temps, 300.0);
+    store64(&temps + 8, _nan);
+    var nv: UsNetworkVisualization;
+    okc(us_network_visualization_init(&nv), "init");
+    okc(us_network_visualization_from_network(&nv, &net, &temps, 2), "a graph");
+    store64(sb + 8, 0);
+    us_network_visualization_to_json(sb, &nv);
+    var nw = "{\"node_temperatures\":[300.0,null],\"edges\":[[0,1]],\"conductances\":[0.25]}";
+    assert_eq(sb_is(sb, nw), 1, "the graph as serde_json writes it, NaN as null");
+    var seq = "[[1.5,2],[[0,1],[1,0]],[0.5]]";
+    var nb: UsNetworkVisualization;
+    okc(us_network_visualization_from_json(seq, strlen(seq), &nb), "serde's sequence form");
+    assert(vec_len(nb.edges) == 4 && vec_len(nb.conductances) == 1, "two edges and one conductance, as given");
+    var hf: UsHeatFluxField;
+    okc(us_heat_flux_field_init(&hf), "init");
+    var hd = "{\"fluxes\":[[1,2],[3,4]],\"dimensions\":[2,1],\"spacing\":[0.1,0.1],\"max_magnitude\":5}";
+    okc(us_heat_flux_field_from_json(hd, strlen(hd), &hf), "a flux field");
+    var hb = "{\"fluxes\":[[1,2],[3]],\"dimensions\":[2,1],\"spacing\":[0.1,0.1],\"max_magnitude\":5}";
+    var e2, f2 = us_heat_flux_field_from_json(hb, strlen(hb), &hf);
+    errc(e2, f2, US_ERR_DESERIALIZE, "a one-element flux vector");
+    assert(vec_len(hf.fluxes) == 4 && hf.nx == 2, "the field unchanged");
+    var tp: UsTemperatureProfile;
+    var pd = "{\"temperatures\":[1],\"dx\":0.1,\"origin\":[0,0],\"direction\":[1,0,0],\"min_temp\":1,\"max_temp\":1}";
+    var e3, f3 = us_temperature_profile_from_json(pd, strlen(pd), &tp);
+    errc(e3, f3, US_ERR_DESERIALIZE, "a two-element origin for [f64; 3]");
+    var sp: UsCycleStatePoint;
+    var spd = "[1,2,3,4]";
+    okc(us_cycle_state_point_from_json(spd, strlen(spd), &sp), "a state point's sequence form");
+    var vol: f64 = sp.volume;
+    assert(vol == 3.0, "its volume");
+}
+
+# Runs every group and returns the failure count.
+fn main() {
+    alloc_init();
+    _nan = 0.0 / 0.0;
+    test_manual();
+    test_from_grids();
+    test_flux_and_network();
+    test_diagram();
+    test_malformed();
+    test_refusals();
+    test_reuse();
+    test_refused_allocations();
+    test_json();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

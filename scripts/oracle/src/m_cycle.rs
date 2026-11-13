@@ -817,7 +817,7 @@ fn dp_toks(p: &DiagramPoint) -> Vec<Tok> {
 }
 
 /// The results the comparison and diagram rows run on: every cycle's, then results edited to reach each guard.
-fn sample_results() -> Vec<CycleResult> {
+pub(crate) fn sample_results() -> Vec<CycleResult> {
     let otto = cy::otto_cycle(300.0, 101_325.0, 8.0, 50_000.0, 1.4, 1.0).expect("otto");
     let diesel = cy::diesel_cycle(300.0, 101_325.0, 20.0, 2.0, 1.4, 1.0).expect("diesel");
     let bray = cy::brayton_cycle(300.0, 101_325.0, 10.0, 1400.0, 1.4, 1.0).expect("brayton");

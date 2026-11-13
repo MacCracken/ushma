@@ -5,7 +5,7 @@
 > (`# rust <file>: <test>`), at its module's milestone. Nothing is deferred: a test not ported yet is one whose
 > milestone hasn't come. The golden corpus (`tests/golden/`) checks every ported function on its grid besides.
 
-**479 Rust tests:** 459 ported; 20 at M7.
+**479 Rust tests:** 472 ported; 7 at M7.
 
 | Rust file | Tests | Ported | Due, unported | Later (milestone) |
 |---|---:|---:|---:|---|
@@ -15,7 +15,7 @@
 | `src/cycle.rs` | 59 | 59 | 0 | — |
 | `src/entropy.rs` | 23 | 23 | 0 | — |
 | `src/error.rs` | 18 | 18 | 0 | — |
-| `src/integration/soorat.rs` | 13 | 0 | 0 | 13 (M7) |
+| `src/integration/soorat.rs` | 13 | 13 | 0 | — |
 | `src/logging.rs` | 1 | 1 | 0 | — |
 | `src/material.rs` | 8 | 8 | 0 | — |
 | `src/numerical.rs` | 27 | 27 | 0 | — |
@@ -26,7 +26,7 @@
 | `src/transfer.rs` | 67 | 67 | 0 | — |
 | `src/validate.rs` | 2 | 2 | 0 | — |
 | `tests/integration.rs` | 30 | 30 | 0 | — |
-| **Total** | **479** | **459** | **0** | |
+| **Total** | **479** | **472** | **0** | |
 
 ## Where each is ported
 
@@ -186,6 +186,19 @@
 | `src/error.rs` `test_steam_table_out_of_range` | `tests/foundation.tcyr` `test_rust_error_variants` |
 | `src/error.rs` `test_substance_not_found` | `tests/foundation.tcyr` `test_rust_error_variants` |
 | `src/error.rs` `test_superheat_out_of_range` | `tests/foundation.tcyr` `test_rust_error_variants` |
+| `src/integration/soorat.rs` `cycle_diagram_from_otto` | `tests/soorat.tcyr` `test_diagram` |
+| `src/integration/soorat.rs` `cycle_diagram_serializes` | `tests/soorat.tcyr` `test_manual` |
+| `src/integration/soorat.rs` `empty_or_nan_field_bounds_are_nan` | `tests/soorat.tcyr` `test_malformed` |
+| `src/integration/soorat.rs` `heat_flux_field_manual` | `tests/soorat.tcyr` `test_manual` |
+| `src/integration/soorat.rs` `heat_flux_from_grid_2d` | `tests/soorat.tcyr` `test_flux_and_network` |
+| `src/integration/soorat.rs` `malformed_grid_does_not_panic` | `tests/soorat.tcyr` `test_malformed` |
+| `src/integration/soorat.rs` `network_missing_temperatures_are_nan` | `tests/soorat.tcyr` `test_flux_and_network` |
+| `src/integration/soorat.rs` `temperature_profile_from_grid_1d` | `tests/soorat.tcyr` `test_from_grids` |
+| `src/integration/soorat.rs` `temperature_profile_serializes` | `tests/soorat.tcyr` `test_manual` |
+| `src/integration/soorat.rs` `thermal_grid_from_grid_2d` | `tests/soorat.tcyr` `test_from_grids` |
+| `src/integration/soorat.rs` `thermal_grid_viz_serializes` | `tests/soorat.tcyr` `test_manual` |
+| `src/integration/soorat.rs` `thermal_network_from_network` | `tests/soorat.tcyr` `test_flux_and_network` |
+| `src/integration/soorat.rs` `thermal_network_viz_manual` | `tests/soorat.tcyr` `test_manual` |
 | `src/logging.rs` `init_does_not_panic` | `tests/foundation.tcyr` `test_log_init` |
 | `src/material.rs` `test_air_low_conductivity` | `tests/material.tcyr` `test_rust_material` |
 | `src/material.rs` `test_all_materials_count` | `tests/material.tcyr` `test_rust_material` |

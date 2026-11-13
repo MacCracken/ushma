@@ -224,8 +224,22 @@ rest of the system at 380, connectivity at 126 and the check at 81:
 | bridge/skin_radiation_loss (Cyrius only) | — | 14 | three tests, the two T⁴ squarings |
 | bridge/muscle_activation_heat (Cyrius only) | — | 11 | Rust's clamp, |F| and two products |
 | bridge/evaporative_cooling (Cyrius only) | — | 10 | max and a product |
+| soorat/heatmap_20x20 (Cyrius only) | — | 3,113 | the solved 20×20 grid's 400 cells copied into the reused heatmap, and the finite bounds (M7b; 7,470 before its review) |
+| soorat/heat_flux_20x20 (Cyrius only) | — | 17,733 | 400 cells: five reads, two differences and divisions, −k·∇T, a square root and the largest magnitude each (19,367 before) |
+| soorat/profile_100 (Cyrius only) | — | 823 | 100 temperatures copied, the bounds, the frame (1,495 before) |
+| soorat/cycle_diagram_otto_50 (Cyrius only) | — | 37,223 | Otto's T-s and P-v diagrams at 50 points a process (M4c's: their correctly rounded pows) and its four state points |
+| soorat/network_graph_5 (Cyrius only) | — | 116 | the checks, 5 temperatures, 4 edges and their conductances |
+| soorat/heatmap_to_json_20x20 (Cyrius only) | — | 1,297,000 | 400 solved temperatures through fmtf's exact printer, about 3 µs each (ADR 0005) |
 
 **M7a.** Rust benches no bridge, so these are Cyrius-only rows, at the 1.4.0 tests' values. Each arithmetic
 conversion is the harness floor (the `noop` row, 4 ns) and a few operations. The rest is their correctly rounded
 primitives, timed alone in the same run: the wet bulb's 614 ns is its four atans and its pow, to within a nanosecond.
 Nothing in bridge's own code is worth changing.
+
+**M7b.** Rust benches no soorat path either, so these are Cyrius-only rows too, and each constructor refills one reused
+value, as a renderer would. The first build read each grid cell through a helper call and folded each bound through
+`_us_min` / `_us_max`, about 19 ns a heatmap cell and 48 a flux cell. Inlined, the heatmap went from 7.5 to 3.1 µs and
+the profile from 1.5 to 0.8 µs. The flux field gained less, 19.4 to 17.7 µs, as its cost is its five reads, two
+divisions and square root a cell. Every row is unchanged. The diagram is M4c's two diagrams. The heatmap's document is
+fmtf's: its exact bignum printer takes about 3 µs for a full 17-digit double (900 ns for a short one,
+`material/to_json`). fmtf is impetus's code, vendored, so its speed is recorded rather than changed here (plan §8).

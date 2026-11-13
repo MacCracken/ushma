@@ -1,0 +1,957 @@
+# soorat.cyr — the visualization data soorat renders (Rust 1.4.0 `integration::soorat`): a 2D grid's temperature
+# heatmap, a 1D grid's temperature profile, a cycle's T-s and P-v diagrams with its state points, a thermal network's
+# node-link graph, and a 2D grid's heat flux field by Fourier's law. SI: kelvins, metres, pascals, W/m².
+#
+# Each type is a struct the caller owns (ADR 0002 row 17): us_<t>_init makes one, its lists stdlib vecs that grow on
+# the allocator it was made with (us_<t>_init_a for another). Rust's Vec fields are those vecs, flat: f64 words, a
+# point list or flux field two words per entry (x then y, a UsDiagramPoint's layout), the network's edges two words
+# (node a, node b), the cycle's state points four (a UsCycleStatePoint). Rust's fixed arrays are scalar fields:
+# `dimensions` is nx and ny, `origin` origin_x … and `spacing` dx and dy. The cycle kind, Rust's String, is the
+# `kind_len` bytes at `kind`. Each constructor fills its value in place, sizing its vecs (a truncate once they are big
+# enough), so a value reused across calls allocates nothing after its first.
+#
+# Each constructor computes in the order Rust writes, so its values are 1.4.0's bit for bit: the bounds are Rust's
+# fold of f64::min and f64::max over the finite values (NaN for both when there are none), the flux's −k a sign flip
+# (_us_neg), and the diagrams us_cycle_ts_diagram's and us_cycle_pv_diagram's. A 2D grid is read as its flat nodes cut
+# by nx (ADR 0002 row 2): a cell past them is NaN, as 1.4.0's missing cells are. None fails where Rust's cannot, but
+# where Rust would abort or holds no such value the port refuses, leaving the value as it was:
+# Err(US_ERR_OUT_OF_MEMORY) for a refused allocation (the value's lists are then empty) or a size past a vec's 2²⁸
+# words, and Err(US_ERR_INVALID_PARAMETER) for a dimension, node count, index or temperature count below 0 (no usize
+# holds one), a network list that is not whole entries, and a cycle kind that is no UsCycle code. Rust instruments
+# none of them. JSON is serde_json's (ADR 0005; src/json.cyr has the rules).
+
+# A 2D temperature field for a heatmap (Rust's ThermalGridVisualization). `values` holds nx·ny temperatures (K),
+# row-major (column x of row y is word y·nx + x); origin_x and origin_y are its world-space origin (m), dx and dy its
+# spacing (m), and min_temp and max_temp the bounds of its finite values (K, NaN when none is finite).
+struct UsGridVisualization {
+    alloc;
+    values;
+    nx;
+    ny;
+    origin_x: f64;
+    origin_y: f64;
+    dx: f64;
+    dy: f64;
+    min_temp: f64;
+    max_temp: f64;
+}
+
+# A 1D temperature profile for a line or ribbon (Rust's TemperatureProfile): `temperatures` (K) at spacing dx (m), laid
+# out from the world-space origin (origin_x, origin_y, origin_z) along the unit vector (direction_x, direction_y,
+# direction_z), and the bounds of its finite temperatures (K, NaN when none is finite).
+struct UsTemperatureProfile {
+    alloc;
+    temperatures;
+    dx: f64;
+    origin_x: f64;
+    origin_y: f64;
+    origin_z: f64;
+    direction_x: f64;
+    direction_y: f64;
+    direction_z: f64;
+    min_temp: f64;
+    max_temp: f64;
+}
+
+# A state point for labelling a diagram (Rust's CycleStatePoint): temperature (K), pressure (Pa), volume (m³) and
+# entropy (J/K).
+struct UsCycleStatePoint {
+    temperature: f64;
+    pressure: f64;
+    volume: f64;
+    entropy: f64;
+}
+
+# A cycle's diagram data (Rust's CycleDiagramData): its T-s points (x the entropy, y the temperature) and P-v points
+# (x the volume, y the pressure), two words each; its state points, four words each (a UsCycleStatePoint); its kind's
+# label, the `kind_len` bytes at `kind`; and its thermal efficiency.
+struct UsCycleDiagramData {
+    alloc;
+    ts_points;
+    pv_points;
+    state_points;
+    kind;
+    kind_len;
+    efficiency: f64;
+}
+
+# A thermal network for a node-link graph (Rust's ThermalNetworkVisualization): the temperature of each node (K, NaN
+# where none was supplied), its edges (two words each, nodes a and b), and each edge's conductance 1/R (W/K) at the
+# same index.
+struct UsNetworkVisualization {
+    alloc;
+    node_temperatures;
+    edges;
+    conductances;
+}
+
+# A 2D field of heat flux vectors for arrows or streamlines (Rust's HeatFluxField): `fluxes` holds nx·ny vectors
+# (qx, qy) in W/m², two words each, row-major; dx and dy are the grid spacing (m), and max_magnitude the largest |q|.
+struct UsHeatFluxField {
+    alloc;
+    fluxes;
+    nx;
+    ny;
+    dx: f64;
+    dy: f64;
+    max_magnitude: f64;
+}
+
+# --- Construction ---
+
+# Makes *v an empty heatmap (no values, every number 0) whose vec grows on the global heap: Ok(0), or
+# Err(US_ERR_OUT_OF_MEMORY) when the vec was refused (*v is then not usable).
+#must_use
+fn us_grid_visualization_init(v: *UsGridVisualization): Result {
+    return us_grid_visualization_init_a(default_alloc(), v);
+}
+
+# us_grid_visualization_init with the vec on allocator `a`, which *v keeps and grows it on.
+#must_use
+fn us_grid_visualization_init_a(a, v: *UsGridVisualization): Result {
+    v.alloc = a;
+    v.values = vec_new_a(a);
+    v.nx = 0;
+    v.ny = 0;
+    v.origin_x = 0.0;
+    v.origin_y = 0.0;
+    v.dx = 0.0;
+    v.dy = 0.0;
+    v.min_temp = 0.0;
+    v.max_temp = 0.0;
+    if (v.values == 0) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_grid_visualization_init")); }
+    return Ok(0);
+}
+
+# Makes *p an empty profile (no temperatures, every number 0) whose vec grows on the global heap: Ok(0), or
+# Err(US_ERR_OUT_OF_MEMORY) when the vec was refused (*p is then not usable).
+#must_use
+fn us_temperature_profile_init(p: *UsTemperatureProfile): Result {
+    return us_temperature_profile_init_a(default_alloc(), p);
+}
+
+# us_temperature_profile_init with the vec on allocator `a`, which *p keeps and grows it on.
+#must_use
+fn us_temperature_profile_init_a(a, p: *UsTemperatureProfile): Result {
+    p.alloc = a;
+    p.temperatures = vec_new_a(a);
+    p.dx = 0.0;
+    p.origin_x = 0.0;
+    p.origin_y = 0.0;
+    p.origin_z = 0.0;
+    p.direction_x = 0.0;
+    p.direction_y = 0.0;
+    p.direction_z = 0.0;
+    p.min_temp = 0.0;
+    p.max_temp = 0.0;
+    if (p.temperatures == 0) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_temperature_profile_init")); }
+    return Ok(0);
+}
+
+# Makes *d empty diagram data (no points, an empty kind, efficiency 0) whose vecs grow on the global heap: Ok(0), or
+# Err(US_ERR_OUT_OF_MEMORY) when a vec was refused (*d is then not usable).
+#must_use
+fn us_cycle_diagram_data_init(d: *UsCycleDiagramData): Result {
+    return us_cycle_diagram_data_init_a(default_alloc(), d);
+}
+
+# us_cycle_diagram_data_init with the vecs on allocator `a`, which *d keeps and grows them on.
+#must_use
+fn us_cycle_diagram_data_init_a(a, d: *UsCycleDiagramData): Result {
+    d.alloc = a;
+    d.ts_points = vec_new_a(a);
+    d.pv_points = vec_new_a(a);
+    d.state_points = vec_new_a(a);
+    d.kind = "";
+    d.kind_len = 0;
+    d.efficiency = 0.0;
+    if (d.ts_points == 0 || d.pv_points == 0 || d.state_points == 0) {
+        return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_cycle_diagram_data_init"));
+    }
+    return Ok(0);
+}
+
+# Makes *v an empty network graph (no nodes, no edges) whose vecs grow on the global heap: Ok(0), or
+# Err(US_ERR_OUT_OF_MEMORY) when a vec was refused (*v is then not usable).
+#must_use
+fn us_network_visualization_init(v: *UsNetworkVisualization): Result {
+    return us_network_visualization_init_a(default_alloc(), v);
+}
+
+# us_network_visualization_init with the vecs on allocator `a`, which *v keeps and grows them on.
+#must_use
+fn us_network_visualization_init_a(a, v: *UsNetworkVisualization): Result {
+    v.alloc = a;
+    v.node_temperatures = vec_new_a(a);
+    v.edges = vec_new_a(a);
+    v.conductances = vec_new_a(a);
+    if (v.node_temperatures == 0 || v.edges == 0 || v.conductances == 0) {
+        return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_network_visualization_init"));
+    }
+    return Ok(0);
+}
+
+# Makes *f an empty flux field (no vectors, every number 0) whose vec grows on the global heap: Ok(0), or
+# Err(US_ERR_OUT_OF_MEMORY) when the vec was refused (*f is then not usable).
+#must_use
+fn us_heat_flux_field_init(f: *UsHeatFluxField): Result {
+    return us_heat_flux_field_init_a(default_alloc(), f);
+}
+
+# us_heat_flux_field_init with the vec on allocator `a`, which *f keeps and grows it on.
+#must_use
+fn us_heat_flux_field_init_a(a, f: *UsHeatFluxField): Result {
+    f.alloc = a;
+    f.fluxes = vec_new_a(a);
+    f.nx = 0;
+    f.ny = 0;
+    f.dx = 0.0;
+    f.dy = 0.0;
+    f.max_magnitude = 0.0;
+    if (f.fluxes == 0) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, "us_heat_flux_field_init")); }
+    return Ok(0);
+}
+
+# --- Helpers ---
+
+# Rust's finite_bounds over the `n` f64 words at `p`: the min and the max of the finite ones, folded from (+∞, −∞)
+# with f64::min and f64::max in Rust's order (so a signed zero lands as Rust's does), into the two words at `out`;
+# (NaN, NaN) when none is finite.
+fn _us_sr_bounds(p, n, out) {
+    var lo: f64 = _US_INF;
+    var hi: f64 = _US_NEG_INF;
+    var k = 0;
+    while (k < n) {
+        var t: f64 = load64(p + 8 * k);
+        var d: f64 = t - t;
+        if (d == 0.0) {
+            # _us_min(lo, t) and _us_max(hi, t) inline: t is finite, and an equal t (±0) replaces the bound.
+            if ((lo < t) == 0) { lo = t; }
+            if ((hi > t) == 0) { hi = t; }
+        }
+        k = k + 1;
+    }
+    if (lo <= hi) {
+        store64(out, lo);
+        store64(out + 8, hi);
+        return 0;
+    }
+    var nan: f64 = _us_nan();
+    store64(out, nan);
+    store64(out + 8, nan);
+    return 0;
+}
+
+# Copies the `n` words at `src` to `dst`, a word at a time (the stdlib memcpy copies a byte at a time).
+fn _us_sr_copy(dst, src, n) {
+    var k = 0;
+    while (k < n) {
+        store64(dst + 8 * k, load64(src + 8 * k));
+        k = k + 1;
+    }
+    return 0;
+}
+
+# 0 when grid *g's dimensions are usable for nx·ny cells of `words` words each, else the refusal's code (reported).
+fn _us_sr_dims(g: *UsGrid2D, words, fname): i64 {
+    var nx = g.nx;
+    var ny = g.ny;
+    if (nx < 0) { return _us_fail_i(US_ERR_INVALID_PARAMETER, fname, "nx", nx); }
+    if (ny < 0) { return _us_fail_i(US_ERR_INVALID_PARAMETER, fname, "ny", ny); }
+    if (ny > 0 && nx > VEC_CAP_MAX / words / ny) { return _us_fail_i(US_ERR_OUT_OF_MEMORY, fname, "nx", nx); }
+    return 0;
+}
+
+# --- The heatmap ---
+
+# Fills *v from 2D grid *grid (Rust's ThermalGridVisualization::from_grid_2d): its nx·ny temperatures (a cell past the
+# grid's nodes NaN), its dimensions, origin (0, 0), spacing (Δx, Δy), and the bounds of the finite values (NaN when
+# none is finite). Ok(0); Err(US_ERR_INVALID_PARAMETER) when nx or ny is below 0; Err(US_ERR_OUT_OF_MEMORY) when nx·ny
+# passes a vec's 2²⁸ words or a grow was refused (*v then has no values).
+#must_use
+fn us_grid_visualization_from_grid_2d(v: *UsGridVisualization, grid: *UsGrid2D): Result {
+    var code = _us_sr_dims(grid, 1, "us_grid_visualization_from_grid_2d");
+    if (code != 0) { return Err(code); }
+    var n = grid.nx * grid.ny;
+    if (_us_vec_size(v.alloc, v.values, n) == 0) {
+        return Err(_us_fail_i(US_ERR_OUT_OF_MEMORY, "us_grid_visualization_from_grid_2d", "cells", n));
+    }
+    var have = vec_len(grid.nodes);
+    if (have > n) { have = n; }
+    var dst = slice_ptr(v.values);
+    _us_sr_copy(dst, slice_ptr(grid.nodes), have);
+    var nan: f64 = _us_nan();
+    var k = have;
+    while (k < n) {
+        store64(dst + 8 * k, nan);
+        k = k + 1;
+    }
+    var b[16];
+    _us_sr_bounds(dst, n, &b);
+    var dx: f64 = grid.dx;
+    var dy: f64 = grid.dy;
+    var lo: f64 = load64(&b);
+    var hi: f64 = load64(&b + 8);
+    v.nx = grid.nx;
+    v.ny = grid.ny;
+    v.origin_x = 0.0;
+    v.origin_y = 0.0;
+    v.dx = dx;
+    v.dy = dy;
+    v.min_temp = lo;
+    v.max_temp = hi;
+    return Ok(0);
+}
+
+# --- The profile ---
+
+# Fills *p from 1D grid *grid (Rust's TemperatureProfile::from_grid_1d), laid out from `origin` along `direction`
+# (each three f64 words: x, y, z; Rust's [f64; 3]): the grid's temperatures, its Δx, and the bounds of the finite
+# temperatures (NaN when none is finite). Ok(0), or Err(US_ERR_OUT_OF_MEMORY) when a grow was refused (*p then has no
+# temperatures).
+#must_use
+fn us_temperature_profile_from_grid_1d(p: *UsTemperatureProfile, grid: *UsGrid1D, origin, direction): Result {
+    var n = vec_len(grid.nodes);
+    if (_us_vec_size(p.alloc, p.temperatures, n) == 0) {
+        return Err(_us_fail_i(US_ERR_OUT_OF_MEMORY, "us_temperature_profile_from_grid_1d", "nodes", n));
+    }
+    var dst = slice_ptr(p.temperatures);
+    _us_sr_copy(dst, slice_ptr(grid.nodes), n);
+    var b[16];
+    _us_sr_bounds(dst, n, &b);
+    var dx: f64 = grid.dx;
+    var ox: f64 = load64(origin);
+    var oy: f64 = load64(origin + 8);
+    var oz: f64 = load64(origin + 16);
+    var ux: f64 = load64(direction);
+    var uy: f64 = load64(direction + 8);
+    var uz: f64 = load64(direction + 16);
+    var lo: f64 = load64(&b);
+    var hi: f64 = load64(&b + 8);
+    p.dx = dx;
+    p.origin_x = ox;
+    p.origin_y = oy;
+    p.origin_z = oz;
+    p.direction_x = ux;
+    p.direction_y = uy;
+    p.direction_z = uz;
+    p.min_temp = lo;
+    p.max_temp = hi;
+    return Ok(0);
+}
+
+# --- The cycle diagram ---
+
+# Fills *d from cycle result *r (Rust's CycleDiagramData::from_cycle_result): its T-s and P-v diagrams at
+# `points_per_process` points a process (at least 2; us_cycle_ts_diagram and us_cycle_pv_diagram), its state points
+# without their enthalpy, its kind's Rust name ("Otto" …) and its efficiency. Ok(0); Err(US_ERR_INVALID_PARAMETER)
+# when r.kind is no UsCycle code; Err(US_ERR_OUT_OF_MEMORY) when a diagram would pass a vec's 2²⁸ words or a grow was
+# refused (*d then has no points).
+#must_use
+fn us_cycle_diagram_data_from_cycle_result(d: *UsCycleDiagramData, r: *UsCycleResult, points_per_process): Result {
+    var name = us_cycle_name(r.kind);
+    if (name == 0) {
+        return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, "us_cycle_diagram_data_from_cycle_result", "kind", r.kind));
+    }
+    var n = us_cycle_state_count(r);
+    var pts = points_per_process;
+    if (pts < 2) { pts = 2; }
+    if (n > 0 && pts > VEC_CAP_MAX / 2 / n) {
+        return Err(_us_fail_i(US_ERR_OUT_OF_MEMORY, "us_cycle_diagram_data_from_cycle_result", "points", pts));
+    }
+    var len = n * pts;
+    var ok = _us_vec_size(d.alloc, d.ts_points, 2 * len);
+    if (ok == 1) { ok = _us_vec_size(d.alloc, d.pv_points, 2 * len); }
+    if (ok == 1) { ok = _us_vec_size(d.alloc, d.state_points, 4 * n); }
+    if (ok == 0) {
+        vec_truncate(d.ts_points, 0);
+        vec_truncate(d.pv_points, 0);
+        vec_truncate(d.state_points, 0);
+        return Err(_us_fail_i(US_ERR_OUT_OF_MEMORY, "us_cycle_diagram_data_from_cycle_result", "points", len));
+    }
+    var tt, vt = us_cycle_ts_diagram(r, points_per_process, slice_ptr(d.ts_points), len);
+    var tp, vp = us_cycle_pv_diagram(r, points_per_process, slice_ptr(d.pv_points), len);
+    var st = slice_ptr(r.states);
+    var sp = slice_ptr(d.state_points);
+    var i = 0;
+    while (i < n) {
+        _us_sr_copy(sp + 32 * i, st + 40 * i, 4);
+        i = i + 1;
+    }
+    var eff: f64 = r.efficiency;
+    d.kind = name;
+    d.kind_len = strlen(name);
+    d.efficiency = eff;
+    return Ok(0);
+}
+
+# --- The network graph ---
+
+# Fills *v from network *net and the `n` temperatures (K) at `temperatures` (Rust's
+# ThermalNetworkVisualization::from_network): one temperature per node, the first num_nodes given (NaN for each node
+# past n), and per resistance its edge (a, b) and its conductance 1/R (0 unless R > 0), in the network's order. The
+# lists are taken as they stand, as Rust takes them (an index past num_nodes, or an R that is not positive, is drawn).
+# Ok(0); Err(US_ERR_INVALID_PARAMETER) when num_nodes, n or an index is below 0, or the resistance list is not whole
+# entries; Err(US_ERR_OUT_OF_MEMORY) when num_nodes passes a vec's 2²⁸ words or a grow was refused (*v then has no
+# nodes or edges).
+#must_use
+fn us_network_visualization_from_network(v: *UsNetworkVisualization, net: *UsNetwork, temperatures, n): Result {
+    var nn = net.num_nodes;
+    var words = vec_len(net.resistances);
+    var fname = "us_network_visualization_from_network";
+    if (nn < 0) { return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, fname, "num_nodes", nn)); }
+    if (n < 0) { return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, fname, "temperatures", n)); }
+    if (words % 3 != 0) { return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, fname, "resistance words", words)); }
+    if (nn > VEC_CAP_MAX) { return Err(_us_fail_i(US_ERR_OUT_OF_MEMORY, fname, "num_nodes", nn)); }
+    var nr = words / 3;
+    var rp = slice_ptr(net.resistances);
+    var k = 0;
+    while (k < nr) {
+        if (load64(rp + 24 * k) < 0 || load64(rp + 24 * k + 8) < 0) {
+            return Err(_us_fail_i(US_ERR_INVALID_PARAMETER, fname, "resistance", k));
+        }
+        k = k + 1;
+    }
+    var ok = _us_vec_size(v.alloc, v.node_temperatures, nn);
+    if (ok == 1) { ok = _us_vec_size(v.alloc, v.edges, 2 * nr); }
+    if (ok == 1) { ok = _us_vec_size(v.alloc, v.conductances, nr); }
+    if (ok == 0) {
+        vec_truncate(v.node_temperatures, 0);
+        vec_truncate(v.edges, 0);
+        vec_truncate(v.conductances, 0);
+        return Err(_us_fail_i(US_ERR_OUT_OF_MEMORY, fname, "num_nodes", nn));
+    }
+    var tp = slice_ptr(v.node_temperatures);
+    var given = n;
+    if (given > nn) { given = nn; }
+    _us_sr_copy(tp, temperatures, given);
+    var nan: f64 = _us_nan();
+    k = given;
+    while (k < nn) {
+        store64(tp + 8 * k, nan);
+        k = k + 1;
+    }
+    var ep = slice_ptr(v.edges);
+    var cp = slice_ptr(v.conductances);
+    k = 0;
+    while (k < nr) {
+        store64(ep + 16 * k, load64(rp + 24 * k));
+        store64(ep + 16 * k + 8, load64(rp + 24 * k + 8));
+        var r: f64 = load64(rp + 24 * k + 16);
+        var g: f64 = 0.0;
+        if (r > 0.0) { g = 1.0 / r; }
+        store64(cp + 8 * k, g);
+        k = k + 1;
+    }
+    return Ok(0);
+}
+
+# --- The heat flux field ---
+
+# Fills *f from 2D grid *grid and conductivity k (W/(m·K)) by Fourier's law, q = −k·∇T (Rust's
+# HeatFluxField::from_grid_2d): the gradient by central differences inside, one-sided at the edges and 0 along an axis
+# one cell wide, a cell past the grid's nodes read as NaN; its dimensions, spacing (Δx, Δy), and the largest |q| (0
+# when none is greater; a NaN magnitude is never greater). Ok(0); Err(US_ERR_INVALID_PARAMETER) when nx or ny is below
+# 0; Err(US_ERR_OUT_OF_MEMORY) when 2·nx·ny passes a vec's 2²⁸ words or a grow was refused (*f then has no vectors).
+#must_use
+fn us_heat_flux_field_from_grid_2d(f: *UsHeatFluxField, grid: *UsGrid2D, conductivity: f64): Result {
+    var code = _us_sr_dims(grid, 2, "us_heat_flux_field_from_grid_2d");
+    if (code != 0) { return Err(code); }
+    var nx = grid.nx;
+    var ny = grid.ny;
+    var n = nx * ny;
+    if (_us_vec_size(f.alloc, f.fluxes, 2 * n) == 0) {
+        return Err(_us_fail_i(US_ERR_OUT_OF_MEMORY, "us_heat_flux_field_from_grid_2d", "cells", n));
+    }
+    var src = slice_ptr(grid.nodes);
+    var len = vec_len(grid.nodes);
+    var dst = slice_ptr(f.fluxes);
+    var dx: f64 = grid.dx;
+    var dy: f64 = grid.dy;
+    var dx2: f64 = 2.0 * dx;
+    var dy2: f64 = 2.0 * dy;
+    var nk: f64 = _us_neg(conductivity);
+    var nan: f64 = _us_nan();
+    var max_mag: f64 = 0.0;
+    var iy = 0;
+    while (iy < ny) {
+        var row = iy * nx;
+        var ix = 0;
+        while (ix < nx) {
+            # The cell and its four neighbours, each NaN past the grid's nodes (Rust's grid_value).
+            var c = row + ix;
+            var tc: f64 = nan;
+            if (c < len) { tc = load64(src + 8 * c); }
+            var tl: f64 = nan;
+            if (ix > 0 && c - 1 < len) { tl = load64(src + 8 * (c - 1)); }
+            var tr: f64 = nan;
+            if (ix + 1 < nx && c + 1 < len) { tr = load64(src + 8 * (c + 1)); }
+            var td: f64 = nan;
+            if (iy > 0 && c - nx < len) { td = load64(src + 8 * (c - nx)); }
+            var tu: f64 = nan;
+            if (iy + 1 < ny && c + nx < len) { tu = load64(src + 8 * (c + nx)); }
+            var dt_dx: f64 = 0.0;
+            if (ix > 0 && ix + 1 < nx) {
+                dt_dx = (tr - tl) / dx2;
+            } elif (ix == 0 && nx > 1) {
+                dt_dx = (tr - tc) / dx;
+            } elif (ix + 1 == nx && nx > 1) {
+                dt_dx = (tc - tl) / dx;
+            }
+            var dt_dy: f64 = 0.0;
+            if (iy > 0 && iy + 1 < ny) {
+                dt_dy = (tu - td) / dy2;
+            } elif (iy == 0 && ny > 1) {
+                dt_dy = (tu - tc) / dy;
+            } elif (iy + 1 == ny && ny > 1) {
+                dt_dy = (tc - td) / dy;
+            }
+            var qx: f64 = nk * dt_dx;
+            var qy: f64 = nk * dt_dy;
+            var mag: f64 = f64_sqrt(qx * qx + qy * qy);
+            if (mag > max_mag) { max_mag = mag; }
+            store64(dst + 16 * c, qx);
+            store64(dst + 16 * c + 8, qy);
+            ix = ix + 1;
+        }
+        iy = iy + 1;
+    }
+    f.nx = nx;
+    f.ny = ny;
+    f.dx = dx;
+    f.dy = dy;
+    f.max_magnitude = max_mag;
+    return Ok(0);
+}
+
+# --- JSON ---
+
+# Appends the `n` f64 words at `p` as one JSON array (Rust's [f64; n], or a Vec<f64>'s elements).
+fn _us_jw_f64s(sb, p, n) {
+    str_builder_putc(sb, 91);
+    var k = 0;
+    while (k < n) {
+        if (k > 0) { str_builder_putc(sb, 44); }
+        var x: f64 = load64(p + 8 * k);
+        _us_jw_f64(sb, x);
+        k = k + 1;
+    }
+    str_builder_putc(sb, 93);
+    return 0;
+}
+
+# Appends vec `w`'s word pairs as a JSON array of two-element arrays: f64 pairs, or usize pairs when `usize` is 1.
+fn _us_jw_pairs(sb, w, usize) {
+    var p = slice_ptr(w);
+    var n = vec_len(w) / 2;
+    str_builder_putc(sb, 91);
+    var k = 0;
+    while (k < n) {
+        if (k > 0) { str_builder_putc(sb, 44); }
+        if (usize == 1) {
+            str_builder_putc(sb, 91);
+            _us_jw_usize(sb, load64(p + 16 * k));
+            str_builder_putc(sb, 44);
+            _us_jw_usize(sb, load64(p + 16 * k + 8));
+            str_builder_putc(sb, 93);
+        } else {
+            _us_jw_f64s(sb, p + 16 * k, 2);
+        }
+        k = k + 1;
+    }
+    str_builder_putc(sb, 93);
+    return 0;
+}
+
+# Appends the f64 field `name` (preceded by a comma unless `first` is 1) and its value x.
+fn _us_jw_f64_field(sb, name, first, x: f64) {
+    _us_jw_key(sb, name, first);
+    _us_jw_f64(sb, x);
+    return 0;
+}
+
+# Appends the elements of array node `v`, f64s, to vec `w` on allocator `a`: 0, 1 unless `v` is an array of numbers
+# serde reads as f64, or 3 for a refused grow.
+fn _us_jr_f64_vec(a, v, w): i64 {
+    if (v == 0 || bayan_json_v_tag(v) != JTAG_ARR) { return 1; }
+    var n = bayan_json_v_arr_len(v);
+    var x[8];
+    var k = 0;
+    while (k < n) {
+        if (_us_jr_f64(bayan_json_v_arr_get(v, k), &x) == 0) { return 1; }
+        if (vec_push_a(a, w, load64(&x)) < 0) { return 3; }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# Appends the elements of array node `v`, each a serde tuple of `n` (its first `nu` usizes, the rest f64s;
+# _us_jr_tuple), to vec `w` on allocator `a`, n words each: 0, 1 for a malformed element, or 3 for a refused grow.
+fn _us_jr_tuple_vec(a, v, n, nu, w): i64 {
+    if (v == 0 || bayan_json_v_tag(v) != JTAG_ARR) { return 1; }
+    var len = bayan_json_v_arr_len(v);
+    var t[32];
+    var k = 0;
+    while (k < len) {
+        if (_us_jr_tuple(bayan_json_v_arr_get(v, k), n, nu, &t) == 0) { return 1; }
+        var j = 0;
+        while (j < n) {
+            if (vec_push_a(a, w, load64(&t + 8 * j)) < 0) { return 3; }
+            j = j + 1;
+        }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# The Err of a decoder's code: 0 Ok(0), 1 Err(US_ERR_DESERIALIZE), 3 Err(US_ERR_OUT_OF_MEMORY), reported as `fname`.
+fn _us_sr_result(code, fname): Result {
+    if (code == 3) { return Err(_us_fail(US_ERR_OUT_OF_MEMORY, fname)); }
+    if (code != 0) { return Err(_us_fail(US_ERR_DESERIALIZE, fname)); }
+    return Ok(0);
+}
+
+# Appends *v as serde_json writes a `ThermalGridVisualization` (NaN and ±∞ as `null`).
+fn us_grid_visualization_to_json(sb, v: *UsGridVisualization) {
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "values", 1);
+    _us_jw_f64s(sb, slice_ptr(v.values), vec_len(v.values));
+    _us_jw_key(sb, "dimensions", 0);
+    str_builder_putc(sb, 91);
+    _us_jw_usize(sb, v.nx);
+    str_builder_putc(sb, 44);
+    _us_jw_usize(sb, v.ny);
+    str_builder_putc(sb, 93);
+    var base = v;
+    _us_jw_key(sb, "origin", 0);
+    _us_jw_f64s(sb, base + 32, 2);
+    _us_jw_key(sb, "spacing", 0);
+    _us_jw_f64s(sb, base + 48, 2);
+    var lo: f64 = v.min_temp;
+    var hi: f64 = v.max_temp;
+    _us_jw_f64_field(sb, "min_temp", 0, lo);
+    _us_jw_f64_field(sb, "max_temp", 0, hi);
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# A ThermalGridVisualization node `v` (object or 6-element sequence) into *out, its vec on allocator `a`: 0, 1 for a
+# malformed document, or 3 for a refused vec. *out is unchanged unless 0.
+fn _us_jr_grid_visualization(a, v, out: *UsGridVisualization): i64 {
+    var form = _us_jr_form(v, 6);
+    if (form == 0) { return 1; }
+    var x: UsGridVisualization;
+    if (is_err_result(us_grid_visualization_init_a(a, &x)) == 1) { return 3; }
+    var c = _us_jr_f64_vec(a, _us_jr_at(v, form, 0, "values"), x.values);
+    if (c != 0) { return c; }
+    var w[48];
+    if (_us_jr_tuple(_us_jr_at(v, form, 1, "dimensions"), 2, 2, &w) == 0) { return 1; }
+    if (_us_jr_tuple(_us_jr_at(v, form, 2, "origin"), 2, 0, &w + 16) == 0) { return 1; }
+    if (_us_jr_tuple(_us_jr_at(v, form, 3, "spacing"), 2, 0, &w + 32) == 0) { return 1; }
+    var b[16];
+    if (_us_jr_f64(_us_jr_at(v, form, 4, "min_temp"), &b) == 0) { return 1; }
+    if (_us_jr_f64(_us_jr_at(v, form, 5, "max_temp"), &b + 8) == 0) { return 1; }
+    x.nx = load64(&w);
+    x.ny = load64(&w + 8);
+    var xb = &x;
+    _us_sr_copy(xb + 32, &w + 16, 4);
+    _us_sr_copy(xb + 64, &b, 2);
+    memcpy(out, &x, sizeof(UsGridVisualization));
+    return 0;
+}
+
+# Reads a `ThermalGridVisualization` document (`n` bytes at `buf`) into *out, its vec (which then grows on `a`) and
+# the parse tree on allocator `a`. Rust checks nothing at decode, and nor does this: the values need not number nx·ny.
+# Ok(0), or Err(US_ERR_DESERIALIZE), or Err(US_ERR_OUT_OF_MEMORY) for a refused vec, leaving *out unchanged.
+#must_use
+fn us_grid_visualization_from_json_a(a, buf, n, out: *UsGridVisualization): Result {
+    var c = _us_jr_grid_visualization(a, _us_jr_parse(a, buf, n), out);
+    return _us_sr_result(c, "us_grid_visualization_from_json");
+}
+
+# us_grid_visualization_from_json_a on the global heap: for a one-off read (its tree and vec stay allocated).
+#must_use
+fn us_grid_visualization_from_json(buf, n, out: *UsGridVisualization): Result {
+    return us_grid_visualization_from_json_a(default_alloc(), buf, n, out);
+}
+
+# Appends *p as serde_json writes a `TemperatureProfile` (NaN and ±∞ as `null`).
+fn us_temperature_profile_to_json(sb, p: *UsTemperatureProfile) {
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "temperatures", 1);
+    _us_jw_f64s(sb, slice_ptr(p.temperatures), vec_len(p.temperatures));
+    var dx: f64 = p.dx;
+    _us_jw_f64_field(sb, "dx", 0, dx);
+    var base = p;
+    _us_jw_key(sb, "origin", 0);
+    _us_jw_f64s(sb, base + 24, 3);
+    _us_jw_key(sb, "direction", 0);
+    _us_jw_f64s(sb, base + 48, 3);
+    var lo: f64 = p.min_temp;
+    var hi: f64 = p.max_temp;
+    _us_jw_f64_field(sb, "min_temp", 0, lo);
+    _us_jw_f64_field(sb, "max_temp", 0, hi);
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# A TemperatureProfile node `v` (object or 6-element sequence) into *out, its vec on allocator `a`: 0, 1 for a
+# malformed document, or 3 for a refused vec. *out is unchanged unless 0.
+fn _us_jr_temperature_profile(a, v, out: *UsTemperatureProfile): i64 {
+    var form = _us_jr_form(v, 6);
+    if (form == 0) { return 1; }
+    var x: UsTemperatureProfile;
+    if (is_err_result(us_temperature_profile_init_a(a, &x)) == 1) { return 3; }
+    var c = _us_jr_f64_vec(a, _us_jr_at(v, form, 0, "temperatures"), x.temperatures);
+    if (c != 0) { return c; }
+    var w[72];
+    if (_us_jr_f64(_us_jr_at(v, form, 1, "dx"), &w) == 0) { return 1; }
+    if (_us_jr_tuple(_us_jr_at(v, form, 2, "origin"), 3, 0, &w + 8) == 0) { return 1; }
+    if (_us_jr_tuple(_us_jr_at(v, form, 3, "direction"), 3, 0, &w + 32) == 0) { return 1; }
+    if (_us_jr_f64(_us_jr_at(v, form, 4, "min_temp"), &w + 56) == 0) { return 1; }
+    if (_us_jr_f64(_us_jr_at(v, form, 5, "max_temp"), &w + 64) == 0) { return 1; }
+    var xb = &x;
+    _us_sr_copy(xb + 16, &w, 9);
+    memcpy(out, &x, sizeof(UsTemperatureProfile));
+    return 0;
+}
+
+# Reads a `TemperatureProfile` document (`n` bytes at `buf`) into *out, its vec (which then grows on `a`) and the
+# parse tree on allocator `a`: Ok(0), or Err(US_ERR_DESERIALIZE), or Err(US_ERR_OUT_OF_MEMORY) for a refused vec,
+# leaving *out unchanged.
+#must_use
+fn us_temperature_profile_from_json_a(a, buf, n, out: *UsTemperatureProfile): Result {
+    var c = _us_jr_temperature_profile(a, _us_jr_parse(a, buf, n), out);
+    return _us_sr_result(c, "us_temperature_profile_from_json");
+}
+
+# us_temperature_profile_from_json_a on the global heap: for a one-off read (its tree and vec stay allocated).
+#must_use
+fn us_temperature_profile_from_json(buf, n, out: *UsTemperatureProfile): Result {
+    return us_temperature_profile_from_json_a(default_alloc(), buf, n, out);
+}
+
+# The field names of a CycleStatePoint, in declaration order.
+fn _us_csp_field(k): cstring {
+    match k {
+        0 => { return "temperature"; }
+        1 => { return "pressure"; }
+        2 => { return "volume"; }
+        3 => { return "entropy"; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+# Appends *sp as serde_json writes a `CycleStatePoint`.
+fn us_cycle_state_point_to_json(sb, sp: *UsCycleStatePoint) {
+    return _us_jw_f64_struct(sb, sp, 4, &_us_csp_field);
+}
+
+# Reads a `CycleStatePoint` document (`n` bytes at `buf`; its tree on allocator `a`) into *out: Ok(0), or
+# Err(US_ERR_DESERIALIZE), leaving *out unchanged.
+#must_use
+fn us_cycle_state_point_from_json_a(a, buf, n, out: *UsCycleStatePoint): Result {
+    var w[32];
+    if (_us_jr_f64_struct(a, buf, n, &w, 4, &_us_csp_field) == 0) {
+        return Err(_us_fail(US_ERR_DESERIALIZE, "us_cycle_state_point_from_json"));
+    }
+    memcpy(out, &w, 32);
+    return Ok(0);
+}
+
+# us_cycle_state_point_from_json_a on the global heap: for a one-off read (its tree stays allocated).
+#must_use
+fn us_cycle_state_point_from_json(buf, n, out: *UsCycleStatePoint): Result {
+    return us_cycle_state_point_from_json_a(default_alloc(), buf, n, out);
+}
+
+# Appends *d as serde_json writes a `CycleDiagramData`: the points as two-element arrays, the state points as their
+# documents, the kind with serde_json's escapes.
+fn us_cycle_diagram_data_to_json(sb, d: *UsCycleDiagramData) {
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "ts_points", 1);
+    _us_jw_pairs(sb, d.ts_points, 0);
+    _us_jw_key(sb, "pv_points", 0);
+    _us_jw_pairs(sb, d.pv_points, 0);
+    _us_jw_key(sb, "state_points", 0);
+    str_builder_putc(sb, 91);
+    var sp = slice_ptr(d.state_points);
+    var n = vec_len(d.state_points) / 4;
+    var k = 0;
+    while (k < n) {
+        if (k > 0) { str_builder_putc(sb, 44); }
+        us_cycle_state_point_to_json(sb, sp + 32 * k);
+        k = k + 1;
+    }
+    str_builder_putc(sb, 93);
+    _us_jw_key(sb, "kind", 0);
+    _us_jw_str(sb, d.kind, d.kind_len);
+    var e: f64 = d.efficiency;
+    _us_jw_f64_field(sb, "efficiency", 0, e);
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# A CycleDiagramData node `v` (object or 5-element sequence) into *out, its vecs and kind on allocator `a`: 0, 1 for a
+# malformed document, or 3 for a refused allocation. *out is unchanged unless 0.
+fn _us_jr_cycle_diagram_data(a, v, out: *UsCycleDiagramData): i64 {
+    var form = _us_jr_form(v, 5);
+    if (form == 0) { return 1; }
+    var x: UsCycleDiagramData;
+    if (is_err_result(us_cycle_diagram_data_init_a(a, &x)) == 1) { return 3; }
+    var c = _us_jr_tuple_vec(a, _us_jr_at(v, form, 0, "ts_points"), 2, 0, x.ts_points);
+    if (c != 0) { return c; }
+    c = _us_jr_tuple_vec(a, _us_jr_at(v, form, 1, "pv_points"), 2, 0, x.pv_points);
+    if (c != 0) { return c; }
+    var sps = _us_jr_at(v, form, 2, "state_points");
+    if (sps == 0 || bayan_json_v_tag(sps) != JTAG_ARR) { return 1; }
+    var ns = bayan_json_v_arr_len(sps);
+    var w[32];
+    var i = 0;
+    while (i < ns) {
+        var e = bayan_json_v_arr_get(sps, i);
+        var ef = _us_jr_form(e, 4);
+        if (ef == 0) { return 1; }
+        var k = 0;
+        while (k < 4) {
+            if (_us_jr_f64(_us_jr_at(e, ef, k, _us_csp_field(k)), &w + 8 * k) == 0) { return 1; }
+            if (vec_push_a(a, x.state_points, load64(&w + 8 * k)) < 0) { return 3; }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    var kp[8];
+    var kn[8];
+    var kv = _us_jr_at(v, form, 3, "kind");
+    if (kv == 0 || bayan_json_v_tag(kv) != JTAG_STR) { return 1; }
+    if (_us_jr_str(a, kv, &kp, &kn) == 0) {
+        if (_us_utf8_valid(str_data(bayan_json_v_str(kv)), str_len(bayan_json_v_str(kv))) == 0) { return 1; }
+        return 3;
+    }
+    var eff[8];
+    if (_us_jr_f64(_us_jr_at(v, form, 4, "efficiency"), &eff) == 0) { return 1; }
+    x.kind = load64(&kp);
+    x.kind_len = load64(&kn);
+    var ev: f64 = load64(&eff);
+    x.efficiency = ev;
+    memcpy(out, &x, sizeof(UsCycleDiagramData));
+    return 0;
+}
+
+# Reads a `CycleDiagramData` document (`n` bytes at `buf`) into *out, its vecs (which then grow on `a`), its kind and
+# the parse tree on allocator `a`. Rust checks nothing at decode, and nor does this: the kind may be any string.
+# Ok(0), or Err(US_ERR_DESERIALIZE), or Err(US_ERR_OUT_OF_MEMORY) for a refused allocation, leaving *out unchanged.
+#must_use
+fn us_cycle_diagram_data_from_json_a(a, buf, n, out: *UsCycleDiagramData): Result {
+    var c = _us_jr_cycle_diagram_data(a, _us_jr_parse(a, buf, n), out);
+    return _us_sr_result(c, "us_cycle_diagram_data_from_json");
+}
+
+# us_cycle_diagram_data_from_json_a on the global heap: for a one-off read (its tree, vecs and kind stay allocated).
+#must_use
+fn us_cycle_diagram_data_from_json(buf, n, out: *UsCycleDiagramData): Result {
+    return us_cycle_diagram_data_from_json_a(default_alloc(), buf, n, out);
+}
+
+# Appends *v as serde_json writes a `ThermalNetworkVisualization` (NaN and ±∞ as `null`).
+fn us_network_visualization_to_json(sb, v: *UsNetworkVisualization) {
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "node_temperatures", 1);
+    _us_jw_f64s(sb, slice_ptr(v.node_temperatures), vec_len(v.node_temperatures));
+    _us_jw_key(sb, "edges", 0);
+    _us_jw_pairs(sb, v.edges, 1);
+    _us_jw_key(sb, "conductances", 0);
+    _us_jw_f64s(sb, slice_ptr(v.conductances), vec_len(v.conductances));
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# A ThermalNetworkVisualization node `v` (object or 3-element sequence) into *out, its vecs on allocator `a`: 0, 1 for
+# a malformed document, or 3 for a refused vec. *out is unchanged unless 0.
+fn _us_jr_network_visualization(a, v, out: *UsNetworkVisualization): i64 {
+    var form = _us_jr_form(v, 3);
+    if (form == 0) { return 1; }
+    var x: UsNetworkVisualization;
+    if (is_err_result(us_network_visualization_init_a(a, &x)) == 1) { return 3; }
+    var c = _us_jr_f64_vec(a, _us_jr_at(v, form, 0, "node_temperatures"), x.node_temperatures);
+    if (c != 0) { return c; }
+    c = _us_jr_tuple_vec(a, _us_jr_at(v, form, 1, "edges"), 2, 2, x.edges);
+    if (c != 0) { return c; }
+    c = _us_jr_f64_vec(a, _us_jr_at(v, form, 2, "conductances"), x.conductances);
+    if (c != 0) { return c; }
+    memcpy(out, &x, sizeof(UsNetworkVisualization));
+    return 0;
+}
+
+# Reads a `ThermalNetworkVisualization` document (`n` bytes at `buf`) into *out, its vecs (which then grow on `a`) and
+# the parse tree on allocator `a`. Rust checks nothing at decode, and nor does this: the edges and conductances need
+# not number alike. Ok(0), or Err(US_ERR_DESERIALIZE), or Err(US_ERR_OUT_OF_MEMORY) for a refused vec, leaving *out
+# unchanged.
+#must_use
+fn us_network_visualization_from_json_a(a, buf, n, out: *UsNetworkVisualization): Result {
+    var c = _us_jr_network_visualization(a, _us_jr_parse(a, buf, n), out);
+    return _us_sr_result(c, "us_network_visualization_from_json");
+}
+
+# us_network_visualization_from_json_a on the global heap: for a one-off read (its tree and vecs stay allocated).
+#must_use
+fn us_network_visualization_from_json(buf, n, out: *UsNetworkVisualization): Result {
+    return us_network_visualization_from_json_a(default_alloc(), buf, n, out);
+}
+
+# Appends *f as serde_json writes a `HeatFluxField` (NaN and ±∞ as `null`).
+fn us_heat_flux_field_to_json(sb, f: *UsHeatFluxField) {
+    str_builder_putc(sb, 123);
+    _us_jw_key(sb, "fluxes", 1);
+    _us_jw_pairs(sb, f.fluxes, 0);
+    _us_jw_key(sb, "dimensions", 0);
+    str_builder_putc(sb, 91);
+    _us_jw_usize(sb, f.nx);
+    str_builder_putc(sb, 44);
+    _us_jw_usize(sb, f.ny);
+    str_builder_putc(sb, 93);
+    var base = f;
+    _us_jw_key(sb, "spacing", 0);
+    _us_jw_f64s(sb, base + 32, 2);
+    var m: f64 = f.max_magnitude;
+    _us_jw_f64_field(sb, "max_magnitude", 0, m);
+    str_builder_putc(sb, 125);
+    return 0;
+}
+
+# A HeatFluxField node `v` (object or 4-element sequence) into *out, its vec on allocator `a`: 0, 1 for a malformed
+# document, or 3 for a refused vec. *out is unchanged unless 0.
+fn _us_jr_heat_flux_field(a, v, out: *UsHeatFluxField): i64 {
+    var form = _us_jr_form(v, 4);
+    if (form == 0) { return 1; }
+    var x: UsHeatFluxField;
+    if (is_err_result(us_heat_flux_field_init_a(a, &x)) == 1) { return 3; }
+    var c = _us_jr_tuple_vec(a, _us_jr_at(v, form, 0, "fluxes"), 2, 0, x.fluxes);
+    if (c != 0) { return c; }
+    var w[40];
+    if (_us_jr_tuple(_us_jr_at(v, form, 1, "dimensions"), 2, 2, &w) == 0) { return 1; }
+    if (_us_jr_tuple(_us_jr_at(v, form, 2, "spacing"), 2, 0, &w + 16) == 0) { return 1; }
+    if (_us_jr_f64(_us_jr_at(v, form, 3, "max_magnitude"), &w + 32) == 0) { return 1; }
+    x.nx = load64(&w);
+    x.ny = load64(&w + 8);
+    var xb = &x;
+    _us_sr_copy(xb + 32, &w + 16, 3);
+    memcpy(out, &x, sizeof(UsHeatFluxField));
+    return 0;
+}
+
+# Reads a `HeatFluxField` document (`n` bytes at `buf`) into *out, its vec (which then grows on `a`) and the parse
+# tree on allocator `a`. Rust checks nothing at decode, and nor does this: the vectors need not number nx·ny. Ok(0),
+# or Err(US_ERR_DESERIALIZE), or Err(US_ERR_OUT_OF_MEMORY) for a refused vec, leaving *out unchanged.
+#must_use
+fn us_heat_flux_field_from_json_a(a, buf, n, out: *UsHeatFluxField): Result {
+    var c = _us_jr_heat_flux_field(a, _us_jr_parse(a, buf, n), out);
+    return _us_sr_result(c, "us_heat_flux_field_from_json");
+}
+
+# us_heat_flux_field_from_json_a on the global heap: for a one-off read (its tree and vec stay allocated).
+#must_use
+fn us_heat_flux_field_from_json(buf, n, out: *UsHeatFluxField): Result {
+    return us_heat_flux_field_from_json_a(default_alloc(), buf, n, out);
+}
