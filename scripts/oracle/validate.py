@@ -2314,6 +2314,88 @@ def m_net_solve(ins, p):
     return [f"v:{n}"] + [fbits(t) for t in temps]
 
 
+# ── bridge (M7a) ──
+# Every conversion returns one f64: its fallback (0, a clamp, or the NaN Rust lets through) or its formula, in Rust's
+# operation order. `-x` is Python's sign flip, as Rust's unary minus.
+
+BR_R = 8.31446261815324
+BR_KLEIBER_W = 70.0 * 4184.0 / 86400.0
+
+
+def m_br_joule(a, p):
+    pw, m, c = a
+    d = m * c
+    if math.isnan(d) or d <= 0.0:
+        return F(0.0)
+    return F(fdiv(pw, d))
+
+
+def m_br_equilibrium_t(a, p):
+    g, k = a
+    if k <= 0.0:
+        return F(0.0)
+    lk = p.log(k)
+    if abs(lk) < 1e-15:
+        return F(0.0)
+    return F(rust_max(fdiv(-g, BR_R * lk), 0.0))
+
+
+def m_br_wet_bulb(a, p):
+    t, rhf = a
+    t_c = t - 273.15
+    rh = rust_clamp(rhf * 100.0, 0.0, 100.0)
+    tw_c = (t_c * p.atan(0.151977 * rust_sqrt(rh + 8.313659)) + p.atan(t_c + rh) - p.atan(rh - 1.676331)
+            + 0.00391838 * p.pow(rh, 1.5) * p.atan(0.023101 * rh) - 4.686035)
+    tw = tw_c + 273.15
+    return F(t if tw > t else tw)
+
+
+def m_br_convection(a, p):
+    v, rho, mu, k, cp, d = a
+    if not all(fgt(x, 0.0) for x in (mu, d, k, rho, cp)) or not math.isfinite(v):
+        return F(0.0)
+    re_ = fdiv(rho * rust_abs(v) * d, mu)
+    pr = fdiv(cp * mu, k)
+    nu = 0.023 * p.pow(re_, 0.8) * p.pow(pr, 0.4)
+    return F(fdiv(nu * k, d))
+
+
+def m_br_tke(a, p):
+    k, length = a
+    if k <= 0.0:
+        return F(0.0)
+    return F(fdiv(0.5477 * rust_sqrt(k) * length, 0.85))
+
+
+def m_br_muscle_work(a, p):
+    pw, eff = a
+    ap = rust_abs(pw)
+    if not (eff > 0.0 and eff <= 1.0):
+        return F(ap * 3.0)
+    return F(rust_max(fdiv(ap, eff) - ap, 0.0))
+
+
+def m_br_bmr(a, p):
+    m = a[0]
+    if math.isnan(m) or m <= 0.0:
+        return F(0.0)
+    return F(BR_KLEIBER_W * p.pow(m, 0.75))
+
+
+def m_br_bsa(a, p):
+    m, h = a
+    if m <= 0.0 or h <= 0.0:
+        return F(0.0)
+    return F(0.007184 * p.pow(m, 0.425) * p.pow(h * 100.0, 0.725))
+
+
+def m_br_skin(a, p):
+    ar, ts, te = a
+    if ar <= 0.0 or ts <= 0.0 or te <= 0.0:
+        return F(0.0)
+    return F(0.98 * 5.670374419e-8 * ar * (powidf2(ts, 4) - powidf2(te, 4)))
+
+
 # Functions whose rows hold whole cycle results or term lists: their models read the raw tokens.
 RAW_ARGS = {
     "numerical::ThermalGrid1D::new",
@@ -2462,6 +2544,24 @@ def unmodelled(fn, ins):
 
 
 MODELS = {
+    "bridge": {
+        "bridge::joule_heating_to_temperature_rate": m_br_joule,
+        "bridge::em_absorption_to_heat_source": lambda a, p: F(rust_max(a[0], 0.0)),
+        "bridge::reaction_heat_rate": lambda a, p: F(-a[0] * a[1]),
+        "bridge::equilibrium_temperature": m_br_equilibrium_t,
+        "bridge::temperature_to_thermal_strain": lambda a, p: F(a[1] * (a[0] - a[2])),
+        "bridge::thermal_gradient_to_stress": lambda a, p: F(a[1] * a[2] * a[0] * a[3]),
+        "bridge::altitude_to_temperature": lambda a, p: F(rust_max(a[0] - a[2] * a[1], 0.0)),
+        "bridge::humidity_to_wet_bulb": m_br_wet_bulb,
+        "bridge::velocity_to_convection_coefficient": m_br_convection,
+        "bridge::tke_to_eddy_thermal_diffusivity": m_br_tke,
+        "bridge::muscle_work_to_heat": m_br_muscle_work,
+        "bridge::basal_metabolic_rate": m_br_bmr,
+        "bridge::body_surface_area": m_br_bsa,
+        "bridge::skin_radiation_loss": m_br_skin,
+        "bridge::muscle_activation_heat": lambda a, p: F(0.15 * rust_clamp(a[0], 0.0, 1.0) * rust_abs(a[1])),
+        "bridge::evaporative_cooling": lambda a, p: F(rust_max(a[0], 0.0) * 2430000.0),
+    },
     "numerical": {
         "numerical::ThermalGrid1D::new": m_g1_new,
         "numerical::ThermalGrid1D::fourier_number": m_g1_fourier,

@@ -18,6 +18,7 @@
 
 include "tests/ulp.cyr"
 include "src/constants.cyr"
+include "src/constants_private.cyr"
 include "src/error.cyr"
 include "src/mathx_data.cyr"
 include "src/mathx.cyr"
@@ -40,6 +41,7 @@ include "src/cycle.cyr"
 include "src/chem.cyr"
 include "src/stat.cyr"
 include "src/numerical.cyr"
+include "src/bridge.cyr"
 
 alloc_init();
 
@@ -2252,6 +2254,56 @@ fn _par_entropy(fp, fl): i64 {
     return 0;
 }
 
+# ── bridge ──────────────────────────────────────────────────────────────────────────
+
+# Every conversion returns one f64.
+fn _par_bridge(fp, fl): i64 {
+    var a: f64 = _par_in(0);
+    var b: f64 = _par_in(1);
+    var c: f64 = _par_in(2);
+    var d: f64 = _par_in(3);
+    var e: f64 = _par_in(4);
+    var g: f64 = _par_in(5);
+    var r: f64 = 0.0;
+    if (_par_eq(fp, fl, "bridge::joule_heating_to_temperature_rate") == 1) {
+        r = us_joule_heating_to_temperature_rate(a, b, c);
+    } elif (_par_eq(fp, fl, "bridge::em_absorption_to_heat_source") == 1) {
+        r = us_em_absorption_to_heat_source(a);
+    } elif (_par_eq(fp, fl, "bridge::reaction_heat_rate") == 1) {
+        r = us_reaction_heat_rate(a, b);
+    } elif (_par_eq(fp, fl, "bridge::equilibrium_temperature") == 1) {
+        r = us_equilibrium_temperature(a, b);
+    } elif (_par_eq(fp, fl, "bridge::temperature_to_thermal_strain") == 1) {
+        r = us_temperature_to_thermal_strain(a, b, c);
+    } elif (_par_eq(fp, fl, "bridge::thermal_gradient_to_stress") == 1) {
+        r = us_thermal_gradient_to_stress(a, b, c, d);
+    } elif (_par_eq(fp, fl, "bridge::altitude_to_temperature") == 1) {
+        r = us_altitude_to_temperature(a, b, c);
+    } elif (_par_eq(fp, fl, "bridge::humidity_to_wet_bulb") == 1) {
+        r = us_humidity_to_wet_bulb(a, b);
+    } elif (_par_eq(fp, fl, "bridge::velocity_to_convection_coefficient") == 1) {
+        r = us_velocity_to_convection_coefficient(a, b, c, d, e, g);
+    } elif (_par_eq(fp, fl, "bridge::tke_to_eddy_thermal_diffusivity") == 1) {
+        r = us_tke_to_eddy_thermal_diffusivity(a, b);
+    } elif (_par_eq(fp, fl, "bridge::muscle_work_to_heat") == 1) {
+        r = us_muscle_work_to_heat(a, b);
+    } elif (_par_eq(fp, fl, "bridge::basal_metabolic_rate") == 1) {
+        r = us_basal_metabolic_rate(a);
+    } elif (_par_eq(fp, fl, "bridge::body_surface_area") == 1) {
+        r = us_body_surface_area(a, b);
+    } elif (_par_eq(fp, fl, "bridge::skin_radiation_loss") == 1) {
+        r = us_skin_radiation_loss(a, b, c);
+    } elif (_par_eq(fp, fl, "bridge::muscle_activation_heat") == 1) {
+        r = us_muscle_activation_heat(a, b);
+    } elif (_par_eq(fp, fl, "bridge::evaporative_cooling") == 1) {
+        r = us_evaporative_cooling(a);
+    } else {
+        return 0;
+    }
+    _par_got_f(r);
+    return 1;
+}
+
 # ── transfer ────────────────────────────────────────────────────────────────────────
 
 # Appends a Result: the f64 payload of Ok, or `E:Variant` for Err.
@@ -2459,6 +2511,7 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "fmtf") == 1) { return _par_fmtf(fp, fl); }
     if (_par_eq(mp, ml, "transfer") == 1) { return _par_transfer(fp, fl); }
     if (_par_eq(mp, ml, "entropy") == 1) { return _par_entropy(fp, fl); }
+    if (_par_eq(mp, ml, "bridge") == 1) { return _par_bridge(fp, fl); }
     if (_par_eq(mp, ml, "steam") == 1) { return _par_steam(fp, fl); }
     if (_par_eq(mp, ml, "cycle") == 1) { return _par_cycle(fp, fl); }
     if (_par_eq(mp, ml, "stat") == 1) { return _par_stat(fp, fl); }
@@ -2584,6 +2637,7 @@ fn _par_c_bound(fp, fl): i64 {
     if (fl > 6 && _par_eq(fp, 6, "chem::") == 1) { return 0; }
     if (fl > 6 && _par_eq(fp, 6, "stat::") == 1) { return 0; }
     if (fl > 11 && _par_eq(fp, 11, "numerical::") == 1) { return 0; }
+    if (fl > 8 && _par_eq(fp, 8, "bridge::") == 1) { return 0; }
     return 0 - 1;
 }
 

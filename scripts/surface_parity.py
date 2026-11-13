@@ -28,10 +28,10 @@ from pathlib import Path
 root = Path(sys.argv[1]).resolve()
 
 # The modules whose milestone has come.
-PORTED = ["error", "validate", "logging", "material", "transfer", "state", "entropy", "phase", "steam", "cycle", "chem", "stat", "numerical"]
+PORTED = ["error", "validate", "logging", "material", "transfer", "state", "entropy", "phase", "steam", "cycle", "chem", "stat", "numerical", "bridge"]
 # The rest, with their milestone (port plan §3.1).
 SCHEDULED = {
-    "bridge": "M7", "integration/soorat": "M7", "ai": "M7",
+    "integration/soorat": "M7", "ai": "M7",
 }
 WIRING = {
     "lib": "module declarations and re-exports: the [lib] / [lib.ai] module lists in cyrius.cyml",

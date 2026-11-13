@@ -203,3 +203,29 @@ rest of the system at 380, connectivity at 126 and the check at 81:
   and the 600-network comparison with `ganita_mat_lu_solve` are unchanged. The rest is ganita's LU and the port's
   per-statement cost, so it stays about 4× Rust.
 
+
+## M7
+
+| Benchmark | Rust 1.4.0 (ns) | Cyrius (ns) | Notes |
+|---|---|---|---|
+| bridge/joule_heating_to_temperature_rate (Cyrius only) | — | 8 | a product, two tests, a division |
+| bridge/em_absorption_to_heat_source (Cyrius only) | — | 9 | Rust's NaN-ignoring max |
+| bridge/reaction_heat_rate (Cyrius only) | — | 10 | the sign flip and a product |
+| bridge/equilibrium_temperature (Cyrius only) | — | 83 | a correctly rounded ln (ADR 0004), the threshold, a division, max |
+| bridge/temperature_to_thermal_strain (Cyrius only) | — | 9 | a difference and a product |
+| bridge/thermal_gradient_to_stress (Cyrius only) | — | 8 | three products |
+| bridge/altitude_to_temperature (Cyrius only) | — | 11 | a product, a difference, max |
+| bridge/humidity_to_wet_bulb (Cyrius only) | — | 614 | four correctly rounded atans (about 118 ns each, as `_us_cr_atan2(x, 1)`) and a pow (142) |
+| bridge/velocity_to_convection_coefficient (Cyrius only) | — | 315 | five finite checks and two correctly rounded pows |
+| bridge/tke_to_eddy_thermal_diffusivity (Cyrius only) | — | 12 | a square root, two products, a division |
+| bridge/muscle_work_to_heat (Cyrius only) | — | 14 | the η test, a division, max |
+| bridge/basal_metabolic_rate (Cyrius only) | — | 150 | one correctly rounded pow |
+| bridge/body_surface_area (Cyrius only) | — | 294 | two correctly rounded pows |
+| bridge/skin_radiation_loss (Cyrius only) | — | 14 | three tests, the two T⁴ squarings |
+| bridge/muscle_activation_heat (Cyrius only) | — | 11 | Rust's clamp, |F| and two products |
+| bridge/evaporative_cooling (Cyrius only) | — | 10 | max and a product |
+
+**M7a.** Rust benches no bridge, so these are Cyrius-only rows, at the 1.4.0 tests' values. Each arithmetic
+conversion is the harness floor (the `noop` row, 4 ns) and a few operations. The rest is their correctly rounded
+primitives, timed alone in the same run: the wet bulb's 614 ns is its four atans and its pow, to within a nanosecond.
+Nothing in bridge's own code is worth changing.

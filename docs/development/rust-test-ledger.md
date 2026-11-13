@@ -5,12 +5,12 @@
 > (`# rust <file>: <test>`), at its module's milestone. Nothing is deferred: a test not ported yet is one whose
 > milestone hasn't come. The golden corpus (`tests/golden/`) checks every ported function on its grid besides.
 
-**479 Rust tests:** 428 ported; 51 at M7.
+**479 Rust tests:** 459 ported; 20 at M7.
 
 | Rust file | Tests | Ported | Due, unported | Later (milestone) |
 |---|---:|---:|---:|---|
 | `src/ai.rs` | 7 | 0 | 0 | 7 (M7) |
-| `src/bridge.rs` | 31 | 0 | 0 | 31 (M7) |
+| `src/bridge.rs` | 31 | 31 | 0 | — |
 | `src/chem.rs` | 23 | 23 | 0 | — |
 | `src/cycle.rs` | 59 | 59 | 0 | — |
 | `src/entropy.rs` | 23 | 23 | 0 | — |
@@ -26,12 +26,43 @@
 | `src/transfer.rs` | 67 | 67 | 0 | — |
 | `src/validate.rs` | 2 | 2 | 0 | — |
 | `tests/integration.rs` | 30 | 30 | 0 | — |
-| **Total** | **479** | **428** | **0** | |
+| **Total** | **479** | **459** | **0** | |
 
 ## Where each is ported
 
 | Rust test | Cyrius test |
 |---|---|
+| `src/bridge.rs` `altitude_temperature_1km` | `tests/bridge.tcyr` `test_badal` |
+| `src/bridge.rs` `altitude_temperature_sea_level` | `tests/bridge.tcyr` `test_badal` |
+| `src/bridge.rs` `bmr_human` | `tests/bridge.tcyr` `test_sharira` |
+| `src/bridge.rs` `bmr_zero_mass` | `tests/bridge.tcyr` `test_sharira` |
+| `src/bridge.rs` `bsa_human` | `tests/bridge.tcyr` `test_sharira` |
+| `src/bridge.rs` `bsa_zero_inputs` | `tests/bridge.tcyr` `test_sharira` |
+| `src/bridge.rs` `convection_coefficient_invalid_properties` | `tests/bridge.tcyr` `test_pravash` |
+| `src/bridge.rs` `convection_coefficient_positive` | `tests/bridge.tcyr` `test_pravash` |
+| `src/bridge.rs` `convection_coefficient_zero_velocity` | `tests/bridge.tcyr` `test_pravash` |
+| `src/bridge.rs` `convection_coefficient_zero_viscosity` | `tests/bridge.tcyr` `test_pravash` |
+| `src/bridge.rs` `eddy_diffusivity_positive` | `tests/bridge.tcyr` `test_pravash` |
+| `src/bridge.rs` `eddy_diffusivity_zero_tke` | `tests/bridge.tcyr` `test_pravash` |
+| `src/bridge.rs` `em_absorption_clamps` | `tests/bridge.tcyr` `test_bijli` |
+| `src/bridge.rs` `equilibrium_temp_basic` | `tests/bridge.tcyr` `test_kimiya` |
+| `src/bridge.rs` `equilibrium_temp_invalid_k` | `tests/bridge.tcyr` `test_kimiya` |
+| `src/bridge.rs` `evaporative_cooling_basic` | `tests/bridge.tcyr` `test_sharira` |
+| `src/bridge.rs` `joule_heating_basic` | `tests/bridge.tcyr` `test_bijli` |
+| `src/bridge.rs` `joule_heating_zero_mass` | `tests/bridge.tcyr` `test_bijli` |
+| `src/bridge.rs` `muscle_activation_heat_basic` | `tests/bridge.tcyr` `test_sharira` |
+| `src/bridge.rs` `muscle_heat_basic` | `tests/bridge.tcyr` `test_sharira` |
+| `src/bridge.rs` `muscle_heat_default_efficiency` | `tests/bridge.tcyr` `test_sharira` |
+| `src/bridge.rs` `muscle_heat_edge_efficiencies` | `tests/bridge.tcyr` `test_sharira` |
+| `src/bridge.rs` `nan_inputs_fall_back_to_zero` | `tests/bridge.tcyr` `test_nan_fallbacks` |
+| `src/bridge.rs` `reaction_heat_exothermic` | `tests/bridge.tcyr` `test_kimiya` |
+| `src/bridge.rs` `skin_radiation_positive` | `tests/bridge.tcyr` `test_sharira` |
+| `src/bridge.rs` `skin_radiation_zero_area` | `tests/bridge.tcyr` `test_sharira` |
+| `src/bridge.rs` `thermal_strain_steel` | `tests/bridge.tcyr` `test_dravya` |
+| `src/bridge.rs` `thermal_stress_basic` | `tests/bridge.tcyr` `test_dravya` |
+| `src/bridge.rs` `wet_bulb_dry_conditions` | `tests/bridge.tcyr` `test_badal` |
+| `src/bridge.rs` `wet_bulb_never_exceeds_dry_bulb` | `tests/bridge.tcyr` `test_badal` |
+| `src/bridge.rs` `wet_bulb_saturated` | `tests/bridge.tcyr` `test_badal` |
 | `src/chem.rs` `test_all_species_count` | `tests/chem.tcyr` `test_species` |
 | `src/chem.rs` `test_chem_rejects_nan` | `tests/chem.tcyr` `test_regressions` |
 | `src/chem.rs` `test_elements_zero_formation` | `tests/chem.tcyr` `test_species` |

@@ -12384,3 +12384,252 @@ fn us_network_from_json_a(a, buf, n, out: *UsNetwork): Result {
 fn us_network_from_json(buf, n, out: *UsNetwork): Result {
     return us_network_from_json_a(default_alloc(), buf, n, out);
 }
+
+# --- bridge.cyr ---
+
+# bridge.cyr — conversions between the other AGNOS science crates' primitive values and ushma's thermal parameters
+# (Rust 1.4.0 `bridge`): bijli (electromagnetism), kimiya (chemistry), dravya (materials), badal (atmosphere), pravash
+# (fluids) and sharira (physiology). Each takes and returns plain f64s, SI throughout, and depends on no other crate.
+#
+# None of them fails. An input outside a function's domain gives that function's fallback, which its comment states:
+# most fall back to 0, a clamp clamps, and the rest let a NaN through as Rust 1.4.0 does. Each computes in the order
+# Rust writes, its unary minus a sign flip (_us_neg), its max and clamp Rust's (_us_max ignores a NaN operand), its
+# T⁴ the two squarings Rust's powi(4) makes: class B. Its ln, pow and atan are correctly rounded (ADR 0004): class C.
+# The exponents are the doubles Rust wrote (ADR 0002 row 9). Rust instruments none of them.
+
+# The smallest |ln K| equilibrium_temperature divides by (Rust's 1e-15, written positionally).
+var _US_BRIDGE_LN_K_MIN: f64 = 0.000000000000001;
+
+# Rust's `x.clamp(lo, hi)`: lo below lo, hi above hi, otherwise x (NaN stays NaN).
+#must_use
+#pure
+fn _us_clamp(x: f64, lo: f64, hi: f64): f64 {
+    if (x < lo) { return lo; }
+    if (x > hi) { return hi; }
+    return x;
+}
+
+# --- bijli (electromagnetism) ---
+
+# The temperature rise rate of a body heated by Joule power P, dT/dt = P / (m·c_p) (K/s). 0 when m·c_p is not positive
+# or is NaN.
+#must_use
+#pure
+fn us_joule_heating_to_temperature_rate(power_w: f64, mass_kg: f64, specific_heat_j_per_kg_k: f64): f64 {
+    var denom: f64 = mass_kg * specific_heat_j_per_kg_k;
+    if (denom != denom) { return 0.0; }
+    if (denom <= 0.0) { return 0.0; }
+    var r: f64 = power_w / denom;
+    return r;
+}
+
+# An EM absorption rate (W/m³) as a volumetric heat source (W/m³): the same value, clamped to non-negative. A NaN rate
+# gives 0.
+#must_use
+#pure
+fn us_em_absorption_to_heat_source(absorption_w_m3: f64): f64 {
+    var r: f64 = _us_max(absorption_w_m3, 0.0);
+    return r;
+}
+
+# --- kimiya (chemistry) ---
+
+# The heat release rate of a reaction, Q̇ = −ΔH·ṅ (W), from its enthalpy ΔH (J/mol) and molar rate ṅ (mol/s): an
+# exothermic reaction (ΔH < 0) releases heat. A NaN input gives NaN.
+#must_use
+#pure
+fn us_reaction_heat_rate(enthalpy_j_per_mol: f64, molar_rate_mol_per_s: f64): f64 {
+    var nh: f64 = _us_neg(enthalpy_j_per_mol);
+    var q: f64 = nh * molar_rate_mol_per_s;
+    return q;
+}
+
+# The temperature at which a reaction with standard Gibbs energy ΔG° (J/mol) has equilibrium constant K, from
+# ΔG° = −R·T·ln K: T = −ΔG° / (R·ln K) (K), clamped to non-negative. ΔG° depends on T itself, so the result is
+# self-consistent only when ΔG° is the value at that T; with ΔH° and ΔS° known, ΔH° / (ΔS° − R·ln K) is the better
+# estimate. 0 when K ≤ 0, when |ln K| < 1e-15 (K = 1), or when T comes out NaN (a NaN input).
+#must_use
+#pure
+fn us_equilibrium_temperature(gibbs_energy_j_per_mol: f64, equilibrium_constant: f64): f64 {
+    if (equilibrium_constant <= 0.0) { return 0.0; }
+    var ln_k: f64 = _us_cr_ln(equilibrium_constant);
+    var al: f64 = f64_abs(ln_k);
+    if (al < _US_BRIDGE_LN_K_MIN) { return 0.0; }
+    var ng: f64 = _us_neg(gibbs_energy_j_per_mol);
+    var t: f64 = ng / (_US_BRIDGE_R * ln_k);
+    var r: f64 = _us_max(t, 0.0);
+    return r;
+}
+
+# --- dravya (materials) ---
+
+# The thermal expansion strain ε = α·(T − T_ref) of a body at T (K), with expansion coefficient α (1/K) and reference
+# temperature T_ref (K, typically 293.15). A NaN input gives NaN.
+#must_use
+#pure
+fn us_temperature_to_thermal_strain(temperature_k: f64, expansion_coeff_per_k: f64, reference_temp_k: f64): f64 {
+    var e: f64 = expansion_coeff_per_k * (temperature_k - reference_temp_k);
+    return e;
+}
+
+# The thermal stress σ = E·α·(dT/dx)·L (Pa) of a constrained bar of length L (m), from the temperature gradient
+# (K/m), Young's modulus E (Pa) and expansion coefficient α (1/K). A NaN input gives NaN.
+#must_use
+#pure
+fn us_thermal_gradient_to_stress(gradient_k_per_m: f64, youngs_modulus_pa: f64, expansion_coeff_per_k: f64,
+    length_m: f64): f64 {
+    var s: f64 = youngs_modulus_pa * expansion_coeff_per_k * gradient_k_per_m * length_m;
+    return s;
+}
+
+# --- badal (atmosphere) ---
+
+# The atmospheric temperature T(h) = T_surface − Γ·h (K) at altitude h (m) for a lapse rate Γ (K/m; the standard
+# troposphere's is 0.0065), clamped to non-negative. Valid within the troposphere (about 0–11 km): the isothermal
+# layer above the tropopause is not modelled. A NaN result gives 0.
+#must_use
+#pure
+fn us_altitude_to_temperature(surface_temperature_k: f64, altitude_m: f64, lapse_rate_k_per_m: f64): f64 {
+    var t: f64 = surface_temperature_k - lapse_rate_k_per_m * altitude_m;
+    var r: f64 = _us_max(t, 0.0);
+    return r;
+}
+
+# The wet-bulb temperature (K) at a dry-bulb temperature (K) and relative humidity (a fraction, 0–1), by Stull's
+# (2011) fit at sea-level pressure. The fit holds for RH 5–99 % and −20 to 50 °C (within about ±1 °C) and is an
+# extrapolation outside them. The humidity is clamped to 0–100 %, and the result never exceeds the dry-bulb
+# temperature (the fit overshoots by a few hundredths of a kelvin near saturation). A NaN input gives NaN.
+#must_use
+#pure
+fn us_humidity_to_wet_bulb(dry_bulb_k: f64, relative_humidity_fraction: f64): f64 {
+    var t_c: f64 = dry_bulb_k - 273.15;
+    var rh: f64 = _us_clamp(relative_humidity_fraction * 100.0, 0.0, 100.0);
+    var sq: f64 = f64_sqrt(rh + 8.313659);
+    var a1: f64 = _us_cr_atan2(0.151977 * sq, 1.0);
+    var a2: f64 = _us_cr_atan2(t_c + rh, 1.0);
+    var a3: f64 = _us_cr_atan2(rh - 1.676331, 1.0);
+    var p: f64 = _us_cr_pow(rh, 1.5);
+    var a4: f64 = _us_cr_atan2(0.023101 * rh, 1.0);
+    var tw_c: f64 = t_c * a1 + a2 - a3 + 0.00391838 * p * a4 - 4.686035;
+    var tw: f64 = tw_c + 273.15;
+    if (tw > dry_bulb_k) { return dry_bulb_k; }
+    return tw;
+}
+
+# --- pravash (fluids) ---
+
+# The convective heat transfer coefficient h = Nu·k/D (W/(m²·K)) of a fluid flowing at a velocity (m/s), by
+# Dittus–Boelter for heating: Nu = 0.023·Re^0.8·Pr^0.4, with Re = ρ·|v|·D/μ and Pr = c_p·μ/k. It holds for fully
+# developed turbulent flow in a pipe or duct (Re ≳ 10⁴, 0.6 ≤ Pr ≤ 160); it is neither a flat-plate nor a laminar
+# correlation. D is the hydraulic diameter (m), μ the dynamic viscosity (Pa·s), k the fluid's conductivity
+# (W/(m·K)). 0 unless μ, D, k, ρ and c_p are finite and positive and the velocity is finite.
+#must_use
+#pure
+fn us_velocity_to_convection_coefficient(velocity_ms: f64, fluid_density_kg_m3: f64, fluid_viscosity_pa_s: f64,
+    fluid_conductivity_w_per_m_k: f64, specific_heat_j_per_kg_k: f64, characteristic_length_m: f64): f64 {
+    if (_us_finite_gt(fluid_viscosity_pa_s, 0.0) == 0) { return 0.0; }
+    if (_us_finite_gt(characteristic_length_m, 0.0) == 0) { return 0.0; }
+    if (_us_finite_gt(fluid_conductivity_w_per_m_k, 0.0) == 0) { return 0.0; }
+    if (_us_finite_gt(fluid_density_kg_m3, 0.0) == 0) { return 0.0; }
+    if (_us_finite_gt(specific_heat_j_per_kg_k, 0.0) == 0) { return 0.0; }
+    if (_us_is_finite(velocity_ms) == 0) { return 0.0; }
+    var av: f64 = f64_abs(velocity_ms);
+    var re: f64 = fluid_density_kg_m3 * av * characteristic_length_m / fluid_viscosity_pa_s;
+    var pr: f64 = specific_heat_j_per_kg_k * fluid_viscosity_pa_s / fluid_conductivity_w_per_m_k;
+    var pre: f64 = _us_cr_pow(re, 0.8);
+    var ppr: f64 = _us_cr_pow(pr, 0.4);
+    var nu: f64 = 0.023 * pre * ppr;
+    var h: f64 = nu * fluid_conductivity_w_per_m_k / characteristic_length_m;
+    return h;
+}
+
+# The eddy thermal diffusivity α_t = ν_t / Pr_t (m²/s) of turbulence with kinetic energy k (m²/s²) and length scale L
+# (m), with ν_t = C_μ^(1/4)·√k·L: C_μ^(1/4) = 0.5477 and Pr_t = 0.85, as Rust writes them. 0 when k ≤ 0; a NaN input
+# gives NaN.
+#must_use
+#pure
+fn us_tke_to_eddy_thermal_diffusivity(tke: f64, length_scale_m: f64): f64 {
+    if (tke <= 0.0) { return 0.0; }
+    var sk: f64 = f64_sqrt(tke);
+    var a: f64 = 0.5477 * sk * length_scale_m / 0.85;
+    return a;
+}
+
+# --- sharira (physiology) ---
+
+# The heat (W) a muscle sheds while doing mechanical work at a power P (W) with efficiency η in (0, 1]:
+# |P|/η − |P|, clamped to non-negative; η = 1 gives no heat. An η outside (0, 1], or NaN, falls back to the typical
+# 25 %: 3·|P|. A NaN power gives 0 at a valid η (the clamp) and NaN at the fallback.
+#must_use
+#pure
+fn us_muscle_work_to_heat(mechanical_power_w: f64, efficiency: f64): f64 {
+    var ap: f64 = f64_abs(mechanical_power_w);
+    if (efficiency > 0.0 && efficiency <= 1.0) {
+        var h: f64 = ap / efficiency - ap;
+        var r: f64 = _us_max(h, 0.0);
+        return r;
+    }
+    var d: f64 = ap * 3.0;
+    return d;
+}
+
+# The basal metabolic rate (W) of a body of mass m (kg), by Kleiber's law: 70 kcal/day·m^0.75, about 3.39·m^0.75 W.
+# It holds for mammals and birds across seven orders of magnitude. 0 when m ≤ 0 or is NaN.
+#must_use
+#pure
+fn us_basal_metabolic_rate(mass_kg: f64): f64 {
+    if (mass_kg != mass_kg) { return 0.0; }
+    if (mass_kg <= 0.0) { return 0.0; }
+    var p: f64 = _us_cr_pow(mass_kg, 0.75);
+    var b: f64 = _US_BRIDGE_KLEIBER_W * p;
+    return b;
+}
+
+# The body surface area (m²) of a body of mass m (kg) and height h (m), by Du Bois: 0.007184·m^0.425·h_cm^0.725, with
+# the height in centimetres. 0 when m ≤ 0 or h ≤ 0; a NaN input gives NaN.
+#must_use
+#pure
+fn us_body_surface_area(mass_kg: f64, height_m: f64): f64 {
+    if (mass_kg <= 0.0 || height_m <= 0.0) { return 0.0; }
+    var height_cm: f64 = height_m * 100.0;
+    var pm: f64 = _us_cr_pow(mass_kg, 0.425);
+    var ph: f64 = _us_cr_pow(height_cm, 0.725);
+    var a: f64 = 0.007184 * pm * ph;
+    return a;
+}
+
+# The heat (W) skin of area A (m²) at T_skin radiates to surroundings at T_env (K), Q = ε·σ·A·(T_skin⁴ − T_env⁴),
+# with the skin's emissivity ε = 0.98. Negative when the surroundings are warmer. 0 unless A, T_skin and T_env are
+# positive; a NaN input gives NaN.
+#must_use
+#pure
+fn us_skin_radiation_loss(surface_area_m2: f64, skin_temperature_k: f64, environment_temperature_k: f64): f64 {
+    if (surface_area_m2 <= 0.0 || skin_temperature_k <= 0.0 || environment_temperature_k <= 0.0) { return 0.0; }
+    # Rust's powi(4): __powidf2 squares twice, so T⁴ is (T·T)·(T·T) exactly.
+    var s2: f64 = skin_temperature_k * skin_temperature_k;
+    var e2: f64 = environment_temperature_k * environment_temperature_k;
+    var d: f64 = s2 * s2 - e2 * e2;
+    var q: f64 = _US_BRIDGE_SKIN_EMISSIVITY * _US_BRIDGE_STEFAN_BOLTZMANN * surface_area_m2 * d;
+    return q;
+}
+
+# The heat (W) a contracting muscle generates at an activation level (0–1, clamped) and maximum force F (N): about
+# 0.15 W per newton at full activation, 0.15·a·|F|. A NaN input gives NaN.
+#must_use
+#pure
+fn us_muscle_activation_heat(activation: f64, max_force_n: f64): f64 {
+    var a: f64 = _us_clamp(activation, 0.0, 1.0);
+    var af: f64 = f64_abs(max_force_n);
+    var h: f64 = 0.15 * a * af;
+    return h;
+}
+
+# The evaporative cooling (W) of sweat evaporating at a rate ṁ (kg/s), Q = ṁ·L_v with the latent heat of sweat
+# L_v = 2.43 MJ/kg. The rate is clamped to non-negative; a NaN rate gives 0.
+#must_use
+#pure
+fn us_evaporative_cooling(sweat_rate_kg_per_s: f64): f64 {
+    var m: f64 = _us_max(sweat_rate_kg_per_s, 0.0);
+    var q: f64 = m * _US_BRIDGE_LATENT_HEAT_SWEAT;
+    return q;
+}

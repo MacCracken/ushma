@@ -39,6 +39,15 @@ Exact-constant misses in Rust's formulas are reviewed as each module ports, one 
 exponent that is a physical constant is restored to its exact value; a correlation's fitted exponent is kept as the
 double Rust wrote (row 9).
 
+M7a reviewed bridge and found no miss, so it adds no row:
+- Kleiber's 0.75 and Stull's 1.5 are exact doubles.
+- Du Bois's 0.425 and 0.725, Dittus–Boelter's 0.8 and 0.4, and Stull's coefficients are fitted. They keep the doubles
+  Rust wrote, as row 9 rules.
+- The eddy diffusivity's 0.5477 is C_μ^(1/4) to four places (0.09^(1/4) = 0.54772…), and its Pr_t = 0.85 is
+  empirical. Both are coefficients of an approximate turbulence model, not physical constants, and stay as written.
+- R is N_A·k_B, exact in the 2019 SI and exactly the decimal Rust wrote. Kleiber's 70 kcal/day is 70 × 4184 / 86 400
+  W, computed as Rust computes it.
+
 ## Consequences
 
 - **Positive** — the port's API is native Cyrius and talks to the real daimon, and no function

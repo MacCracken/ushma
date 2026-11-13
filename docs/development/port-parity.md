@@ -742,3 +742,22 @@ after M6b: 146,288 ok, 138 accepted).
   - **Surface parity:** numerical 36 of 36. **Tests:** all 27 of numerical's. The ledger has 428 of 479 ported, and the
     51 left are M7's.
 
+
+## 10. M7 (2026-11-12)
+
+After M7a the harness's summary is `14 modules, 0 failing | rows: 153459 ok, 0 failed, 0 measured, 0 pending, 155
+accepted (ADR 4: 66)`, identical on x86_64 ELF, `--bounds`, PE and aarch64.
+
+- **bridge** (M7a): 6,439 rows (class B 3,676, C 2,763), every one at 0 ulp. The 3 rows where glibc misrounds a
+  `pow` (Kleiber's m^0.75) are accepted under ADR 4, the port giving the correctly rounded value. glibc misrounds
+  one of the wet bulb's 3,716 `atan` calls, by 1 ulp, and that row's result is the same either way, so it needs no
+  correction.
+  - **The fallbacks**, each tried on both sides of its switch: m·c_p at 0, negative and under- or overflowing; K =
+    1 ± 12 ulps across `|ln K| < 1e-15` (1 + 4 ulps gives 0, 1 + 5 ulps a temperature; below 1 the switch is
+    between 9 and 10 ulps); the altitude where T reaches 0, ± 2 ulps; η at 0, at 1 ± 2 ulps, above 1 and NaN; the
+    activation at and across 0 and 1; the wet bulb's clamp near saturation over a 13 × 8 grid of temperatures and
+    humidities. The signed zeros of `max(−0, 0)` and of `−ΔH·ṅ` at ΔH = +0 are compared bit for bit.
+  - **The ranges:** each conversion is seeded over its physical range (Stull's fitted range and 200 draws outside it,
+    turbulent pipe flow, human physiology), then each argument of its base cases at every edge value.
+  - **Surface parity:** bridge 16 of 16. **Tests:** all 31 of bridge's. The ledger has 459 of 479 ported, and the 20
+    left are soorat's 13 and ai's 7 (M7b, M7c).

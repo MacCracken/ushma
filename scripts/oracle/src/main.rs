@@ -26,6 +26,7 @@ mod cyr;
 mod glibc;
 mod grids;
 mod json_cases;
+mod m_bridge;
 mod m_chem;
 mod m_constants;
 mod m_cycle;
@@ -52,11 +53,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-/// Every golden emitter, sorted by file name: the modules emitted whole (`constants`, `cycle`, `entropy`, `fmtf`, `math`,
+/// Every golden emitter, sorted by file name: the modules emitted whole (`bridge`, `constants`, `cycle`, `entropy`, `fmtf`, `math`,
 /// `numerical`, `stat`, `steam`, `transfer`) and the four the public tables seed (`chem`, `material`, `phase`, `state`; M0 part 2b), with their
 /// function and JSON rows added (`chem`, `material`, `phase`, `state`).
 fn golden_modules() -> Result<Vec<tsv::Module>, String> {
     let mut v = vec![
+        m_bridge::emit(),
         m_constants::emit(),
         m_cycle::emit(),
         m_entropy::emit(),

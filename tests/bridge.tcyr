@@ -1,0 +1,234 @@
+# bridge tests.
+#
+# Rust 1.4.0's 31 bridge.rs tests, one for one, grouped by the crate each conversion serves. Then two reference tests:
+# every conversion's fallback on a NaN input, as its comment documents, and the 1e-15 threshold written positionally
+# (it must be the double nearest 1e-15). The golden corpus (tests/golden/bridge.tsv) checks every value bit for bit.
+
+include "src/constants.cyr"
+include "src/constants_private.cyr"
+include "src/error.cyr"
+include "src/mathx_data.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/validate.cyr"
+include "src/logging.cyr"
+include "src/bridge.cyr"
+
+var _nan: f64 = 0.0;
+
+# |a − b| as an f64.
+fn absdiff(a: f64, b: f64): f64 {
+    var d: f64 = a - b;
+    if (d < 0.0) { d = 0.0 - d; }
+    return d;
+}
+
+# Asserts |got − want| < tol.
+fn near(got: f64, want: f64, tol: f64, name) {
+    var d: f64 = absdiff(got, want);
+    assert(d < tol, name);
+    return 0;
+}
+
+# Asserts x is +0.0 exactly (its bits), not −0.0 or NaN.
+fn zero(x: f64, name) {
+    assert_eq(load64(&x), 0, name);
+    return 0;
+}
+
+# Joule heating's temperature rate and the EM heat source.
+# rust src/bridge.rs: joule_heating_basic, joule_heating_zero_mass, em_absorption_clamps
+fn test_bijli() {
+    test_group("bijli");
+    var rate: f64 = us_joule_heating_to_temperature_rate(100.0, 1.0, 4186.0);
+    near(rate, 0.0239, 0.001, "100 W into 1 kg of water: 0.0239 K/s");
+    var r0: f64 = us_joule_heating_to_temperature_rate(100.0, 0.0, 4186.0);
+    zero(r0, "zero mass gives 0");
+    var e1: f64 = us_em_absorption_to_heat_source(0.0 - 100.0);
+    zero(e1, "a negative absorption clamps to 0");
+    var e2: f64 = us_em_absorption_to_heat_source(500.0);
+    assert(e2 == 500.0, "a positive absorption passes through");
+}
+
+# The reaction heat rate and the equilibrium temperature.
+# rust src/bridge.rs: reaction_heat_exothermic, equilibrium_temp_basic, equilibrium_temp_invalid_k
+fn test_kimiya() {
+    test_group("kimiya");
+    var q: f64 = us_reaction_heat_rate(0.0 - 100000.0, 0.1);
+    near(q, 10000.0, 0.1, "ΔH = −100 kJ/mol at 0.1 mol/s releases 10 kW");
+    var t: f64 = us_equilibrium_temperature(0.0 - 10000.0, 100.0);
+    near(t, 261.3, 1.0, "ΔG = −10 kJ/mol, K = 100: about 261 K");
+    var t0: f64 = us_equilibrium_temperature(0.0 - 10000.0, 0.0);
+    zero(t0, "K = 0 gives 0");
+}
+
+# Thermal strain and stress.
+# rust src/bridge.rs: thermal_strain_steel, thermal_stress_basic
+fn test_dravya() {
+    test_group("dravya");
+    var e: f64 = us_temperature_to_thermal_strain(393.15, 0.000012, 293.15);
+    near(e, 0.0012, 0.000001, "steel 100 K above the reference: ε = 0.0012");
+    var s: f64 = us_thermal_gradient_to_stress(10.0, 200000000000.0, 0.000012, 1.0);
+    near(s, 24000000.0, 1.0, "10 K/m, 200 GPa, α = 12e-6, 1 m: 24 MPa");
+}
+
+# The atmosphere's temperature with altitude, and the wet-bulb temperature.
+# rust src/bridge.rs: altitude_temperature_sea_level, altitude_temperature_1km, wet_bulb_dry_conditions
+# rust src/bridge.rs: wet_bulb_saturated, wet_bulb_never_exceeds_dry_bulb
+fn test_badal() {
+    test_group("badal");
+    var t0: f64 = us_altitude_to_temperature(288.15, 0.0, 0.0065);
+    near(t0, 288.15, 0.01, "sea level: the surface temperature");
+    var t1: f64 = us_altitude_to_temperature(288.15, 1000.0, 0.0065);
+    near(t1, 281.65, 0.01, "1 km: 6.5 K colder");
+    var tc: f64 = us_altitude_to_temperature(288.15, 1000000.0, 0.0065);
+    zero(tc, "far above the troposphere: clamped to 0");
+    var wd: f64 = us_humidity_to_wet_bulb(300.0, 0.2);
+    assert(wd < 300.0, "dry air: the wet bulb is below the dry bulb");
+    var ws: f64 = us_humidity_to_wet_bulb(300.0, 1.0);
+    near(ws, 300.0, 2.0, "saturated air: the wet bulb is near the dry bulb");
+    # Stull's fit overshoots near saturation: (300 K, 100 %) gave 300.059 K before 1.4.0 clamped it.
+    var w1: f64 = us_humidity_to_wet_bulb(300.0, 1.0);
+    assert(w1 <= 300.0, "300 K, 100 %: never above the dry bulb");
+    var w2: f64 = us_humidity_to_wet_bulb(310.0, 0.99);
+    assert(w2 <= 310.0, "310 K, 99 %: never above the dry bulb");
+    var w3: f64 = us_humidity_to_wet_bulb(273.15, 1.0);
+    assert(w3 <= 273.15, "273.15 K, 100 %: never above the dry bulb");
+}
+
+# The Dittus–Boelter coefficient and the eddy diffusivity.
+# rust src/bridge.rs: convection_coefficient_positive, convection_coefficient_zero_velocity
+# rust src/bridge.rs: convection_coefficient_zero_viscosity, convection_coefficient_invalid_properties
+# rust src/bridge.rs: eddy_diffusivity_positive, eddy_diffusivity_zero_tke
+fn test_pravash() {
+    test_group("pravash");
+    var h: f64 = us_velocity_to_convection_coefficient(1.0, 1000.0, 0.001, 0.6, 4186.0, 0.1);
+    assert(h > 0.0, "water at 1 m/s: h > 0");
+    var h0: f64 = us_velocity_to_convection_coefficient(0.0, 1000.0, 0.001, 0.6, 4186.0, 0.1);
+    assert(h0 >= 0.0 && h0 < 1.0, "zero velocity: Re = 0, h about 0");
+    var hm: f64 = us_velocity_to_convection_coefficient(1.0, 1000.0, 0.0, 0.6, 4186.0, 0.1);
+    zero(hm, "zero viscosity gives 0");
+    # k = 0 used to give Pr = ∞ and h = NaN.
+    var hk: f64 = us_velocity_to_convection_coefficient(1.0, 998.0, 0.001, 0.0, 4180.0, 0.05);
+    zero(hk, "zero conductivity gives 0");
+    var hn: f64 = us_velocity_to_convection_coefficient(_nan, 998.0, 0.001, 0.6, 4180.0, 0.05);
+    zero(hn, "NaN velocity gives 0");
+    var hv: f64 = us_velocity_to_convection_coefficient(1.0, 998.0, 0.001, 0.6, 4180.0, 0.05);
+    assert(_us_is_finite(hv) == 1 && hv > 0.0, "water at 1 m/s in a 5 cm pipe: h finite and positive");
+    var a: f64 = us_tke_to_eddy_thermal_diffusivity(1.0, 0.1);
+    assert(a > 0.0, "k = 1 m²/s²: α_t > 0");
+    var a0: f64 = us_tke_to_eddy_thermal_diffusivity(0.0, 0.1);
+    zero(a0, "k = 0 gives 0");
+}
+
+# Muscle heat, metabolic rate, body surface area, skin radiation and sweat.
+# rust src/bridge.rs: muscle_heat_basic, muscle_heat_default_efficiency, muscle_heat_edge_efficiencies, bmr_human
+# rust src/bridge.rs: bmr_zero_mass, bsa_human, bsa_zero_inputs, skin_radiation_positive, skin_radiation_zero_area
+# rust src/bridge.rs: muscle_activation_heat_basic, evaporative_cooling_basic
+fn test_sharira() {
+    test_group("sharira");
+    var w: f64 = us_muscle_work_to_heat(100.0, 0.25);
+    near(w, 300.0, 0.1, "100 W at 25 %: 300 W of heat");
+    var wd: f64 = us_muscle_work_to_heat(100.0, 0.0);
+    near(wd, 300.0, 0.1, "η = 0 falls back to 25 %");
+    var w1: f64 = us_muscle_work_to_heat(100.0, 1.0);
+    zero(w1, "η = 1: no heat");
+    var wn: f64 = us_muscle_work_to_heat(100.0, _nan);
+    near(wn, 300.0, 0.000000001, "NaN η falls back to 25 %");
+    var wh: f64 = us_muscle_work_to_heat(100.0, 1.5);
+    near(wh, 300.0, 0.000000001, "η > 1 falls back to 25 %");
+    # Kleiber: 70 kcal/day × 70^0.75 ≈ 1694 kcal/day ≈ 82.0 W.
+    var b: f64 = us_basal_metabolic_rate(70.0);
+    near(b, 82.0, 0.2, "a 70 kg human: about 82 W");
+    var b0: f64 = us_basal_metabolic_rate(0.0);
+    zero(b0, "zero mass gives 0");
+    var s: f64 = us_body_surface_area(70.0, 1.75);
+    near(s, 1.85, 0.1, "70 kg, 1.75 m: about 1.85 m² (Du Bois)");
+    var s1: f64 = us_body_surface_area(0.0, 1.75);
+    zero(s1, "zero mass gives 0");
+    var s2: f64 = us_body_surface_area(70.0, 0.0);
+    zero(s2, "zero height gives 0");
+    var q: f64 = us_skin_radiation_loss(1.85, 310.0, 293.0);
+    assert(q > 0.0, "skin warmer than the room loses heat");
+    assert(q > 50.0 && q < 300.0, "a human radiates 50–300 W");
+    var q0: f64 = us_skin_radiation_loss(0.0, 310.0, 293.0);
+    zero(q0, "zero area gives 0");
+    var ma: f64 = us_muscle_activation_heat(0.5, 1000.0);
+    near(ma, 75.0, 0.1, "half activation of 1 kN: 0.15 × 0.5 × 1000 = 75 W");
+    # 0.5 L/h = 0.5/3600 kg/s: about 337.5 W.
+    var ev: f64 = us_evaporative_cooling(0.5 / 3600.0);
+    near(ev, 337.5, 1.0, "0.5 L/h of sweat: about 337.5 W");
+}
+
+# Each conversion's fallback on a NaN input, as its comment documents: 0, or a NaN let through.
+# rust src/bridge.rs: nan_inputs_fall_back_to_zero
+fn test_nan_fallbacks() {
+    test_group("NaN fallbacks");
+    var j: f64 = us_joule_heating_to_temperature_rate(100.0, _nan, 385.0);
+    zero(j, "joule heating, NaN mass: 0");
+    var b: f64 = us_basal_metabolic_rate(_nan);
+    zero(b, "basal metabolic rate, NaN mass: 0");
+    var t: f64 = us_equilibrium_temperature(0.0 - 10000.0, _nan);
+    zero(t, "equilibrium temperature, NaN K: 0");
+    var em: f64 = us_em_absorption_to_heat_source(_nan);
+    zero(em, "EM heat source, NaN: 0");
+    var al: f64 = us_altitude_to_temperature(_nan, 1000.0, 0.0065);
+    zero(al, "altitude, NaN surface temperature: 0");
+    var ev: f64 = us_evaporative_cooling(_nan);
+    zero(ev, "evaporative cooling, NaN rate: 0");
+    var mw: f64 = us_muscle_work_to_heat(_nan, 0.25);
+    zero(mw, "muscle work, NaN power at a valid η: 0");
+    var mf: f64 = us_muscle_work_to_heat(_nan, 1.5);
+    assert_eq(_us_is_nan(mf), 1, "muscle work, NaN power at the fallback η: NaN");
+    var rh: f64 = us_reaction_heat_rate(_nan, 0.1);
+    assert_eq(_us_is_nan(rh), 1, "reaction heat, NaN ΔH: NaN");
+    var st: f64 = us_temperature_to_thermal_strain(_nan, 0.000012, 293.15);
+    assert_eq(_us_is_nan(st), 1, "thermal strain, NaN T: NaN");
+    var ss: f64 = us_thermal_gradient_to_stress(_nan, 200000000000.0, 0.000012, 1.0);
+    assert_eq(_us_is_nan(ss), 1, "thermal stress, NaN gradient: NaN");
+    var wb: f64 = us_humidity_to_wet_bulb(300.0, _nan);
+    assert_eq(_us_is_nan(wb), 1, "wet bulb, NaN humidity: NaN");
+    var tk: f64 = us_tke_to_eddy_thermal_diffusivity(_nan, 0.1);
+    assert_eq(_us_is_nan(tk), 1, "eddy diffusivity, NaN k: NaN");
+    var bs: f64 = us_body_surface_area(_nan, 1.75);
+    assert_eq(_us_is_nan(bs), 1, "body surface area, NaN mass: NaN");
+    var sk: f64 = us_skin_radiation_loss(1.85, _nan, 293.0);
+    assert_eq(_us_is_nan(sk), 1, "skin radiation, NaN skin temperature: NaN");
+    var ma: f64 = us_muscle_activation_heat(_nan, 1000.0);
+    assert_eq(_us_is_nan(ma), 1, "muscle activation, NaN activation: NaN");
+    var hv: f64 = us_velocity_to_convection_coefficient(1.0, _nan, 0.001, 0.6, 4180.0, 0.05);
+    zero(hv, "convection, NaN density: 0");
+}
+
+# equilibrium_temperature's 1e-15, written positionally, is the double nearest 1e-15 (0x3CD203AF9EE75616), and the
+# switch falls where Rust's does: K = 1 + 4 ulps gives 0, 1 + 5 ulps a temperature.
+fn test_threshold() {
+    test_group("the 1e-15 threshold");
+    var lit: f64 = _US_BRIDGE_LN_K_MIN;
+    assert_eq(load64(&lit), 0x3CD203AF9EE75616, "1e-15's bits");
+    var k4: f64 = 0x3FF0000000000004;
+    var t4: f64 = us_equilibrium_temperature(0.0 - 10000.0, k4);
+    zero(t4, "K = 1 + 4 ulps: |ln K| below 1e-15, 0");
+    var k5: f64 = 0x3FF0000000000005;
+    var t5: f64 = us_equilibrium_temperature(0.0 - 10000.0, k5);
+    assert(t5 > 0.0, "K = 1 + 5 ulps: a temperature");
+}
+
+# Runs every group and returns the failure count.
+fn main() {
+    alloc_init();
+    _nan = 0.0 / 0.0;
+    test_bijli();
+    test_kimiya();
+    test_dravya();
+    test_badal();
+    test_pravash();
+    test_sharira();
+    test_nan_fallbacks();
+    test_threshold();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

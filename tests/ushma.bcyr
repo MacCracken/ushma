@@ -5,6 +5,7 @@
 # runs in batches of 10^6 to amortize the clock (~240 ns per start/stop pair on x86_64 Linux; lib/bench.cyr's header).
 
 include "src/constants.cyr"
+include "src/constants_private.cyr"
 include "src/error.cyr"
 include "src/mathx_data.cyr"
 include "src/mathx.cyr"
@@ -27,6 +28,7 @@ include "src/chem_data.cyr"
 include "src/chem.cyr"
 include "src/stat.cyr"
 include "src/numerical.cyr"
+include "src/bridge.cyr"
 
 # Keeps results observable, so no call can be dropped.
 var _bn_sink = 0;
@@ -580,6 +582,103 @@ fn b_span(m): i64 {
     return 0;
 }
 
+# The bridge conversions (Cyrius-only rows: Rust benches none), at the 1.4.0 tests' values.
+# joule_heating_to_temperature_rate: 100 W into 1 kg of water.
+fn b_br_joule(x): i64 {
+    var r: f64 = us_joule_heating_to_temperature_rate(100.0, 1.0, 4186.0);
+    return r;
+}
+
+# em_absorption_to_heat_source of 500 W/m³.
+fn b_br_em(x): i64 {
+    var r: f64 = us_em_absorption_to_heat_source(500.0);
+    return r;
+}
+
+# reaction_heat_rate: ΔH = −100 kJ/mol at 0.1 mol/s.
+fn b_br_reaction(x): i64 {
+    var r: f64 = us_reaction_heat_rate(0.0 - 100000.0, 0.1);
+    return r;
+}
+
+# equilibrium_temperature: ΔG° = −10 kJ/mol, K = 100.
+fn b_br_equilibrium(x): i64 {
+    var r: f64 = us_equilibrium_temperature(0.0 - 10000.0, 100.0);
+    return r;
+}
+
+# temperature_to_thermal_strain: steel 100 K above 293.15 K.
+fn b_br_strain(x): i64 {
+    var r: f64 = us_temperature_to_thermal_strain(393.15, 0.000012, 293.15);
+    return r;
+}
+
+# thermal_gradient_to_stress: 10 K/m, 200 GPa, α = 12e-6, 1 m.
+fn b_br_stress(x): i64 {
+    var r: f64 = us_thermal_gradient_to_stress(10.0, 200000000000.0, 0.000012, 1.0);
+    return r;
+}
+
+# altitude_to_temperature at 1 km.
+fn b_br_altitude(x): i64 {
+    var r: f64 = us_altitude_to_temperature(288.15, 1000.0, 0.0065);
+    return r;
+}
+
+# humidity_to_wet_bulb at 300 K, 20 %.
+fn b_br_wet_bulb(x): i64 {
+    var r: f64 = us_humidity_to_wet_bulb(300.0, 0.2);
+    return r;
+}
+
+# velocity_to_convection_coefficient: water at 1 m/s in a 10 cm pipe.
+fn b_br_convection(x): i64 {
+    var r: f64 = us_velocity_to_convection_coefficient(1.0, 1000.0, 0.001, 0.6, 4186.0, 0.1);
+    return r;
+}
+
+# tke_to_eddy_thermal_diffusivity: k = 1 m²/s², L = 0.1 m.
+fn b_br_tke(x): i64 {
+    var r: f64 = us_tke_to_eddy_thermal_diffusivity(1.0, 0.1);
+    return r;
+}
+
+# muscle_work_to_heat: 100 W at 25 %.
+fn b_br_muscle_work(x): i64 {
+    var r: f64 = us_muscle_work_to_heat(100.0, 0.25);
+    return r;
+}
+
+# basal_metabolic_rate of 70 kg.
+fn b_br_bmr(x): i64 {
+    var r: f64 = us_basal_metabolic_rate(70.0);
+    return r;
+}
+
+# body_surface_area: 70 kg, 1.75 m.
+fn b_br_bsa(x): i64 {
+    var r: f64 = us_body_surface_area(70.0, 1.75);
+    return r;
+}
+
+# skin_radiation_loss: 1.85 m², 310 K skin, 293 K room.
+fn b_br_skin(x): i64 {
+    var r: f64 = us_skin_radiation_loss(1.85, 310.0, 293.0);
+    return r;
+}
+
+# muscle_activation_heat: half activation of 1 kN.
+fn b_br_activation(x): i64 {
+    var r: f64 = us_muscle_activation_heat(0.5, 1000.0);
+    return r;
+}
+
+# evaporative_cooling of 0.5 L/h.
+fn b_br_evaporative(x): i64 {
+    var r: f64 = us_evaporative_cooling(0.0001388888888888889);
+    return r;
+}
+
 # Benchmark entry point: runs every benchmark and reports each one.
 fn main(): i64 {
     alloc_init();
@@ -716,6 +815,22 @@ fn main(): i64 {
     var tng, vng = us_network_set_fixed_temperature(&net, 4, 300.0);
     _bn_net_t = alloc(40);
     bn_run("numerical/thermal_network_5", &b_network, &net, 100000);
+    bn_run("bridge/joule_heating_to_temperature_rate", &b_br_joule, 0, 1000000);
+    bn_run("bridge/em_absorption_to_heat_source", &b_br_em, 0, 1000000);
+    bn_run("bridge/reaction_heat_rate", &b_br_reaction, 0, 1000000);
+    bn_run("bridge/equilibrium_temperature", &b_br_equilibrium, 0, 1000000);
+    bn_run("bridge/temperature_to_thermal_strain", &b_br_strain, 0, 1000000);
+    bn_run("bridge/thermal_gradient_to_stress", &b_br_stress, 0, 1000000);
+    bn_run("bridge/altitude_to_temperature", &b_br_altitude, 0, 1000000);
+    bn_run("bridge/humidity_to_wet_bulb", &b_br_wet_bulb, 0, 1000000);
+    bn_run("bridge/velocity_to_convection_coefficient", &b_br_convection, 0, 1000000);
+    bn_run("bridge/tke_to_eddy_thermal_diffusivity", &b_br_tke, 0, 1000000);
+    bn_run("bridge/muscle_work_to_heat", &b_br_muscle_work, 0, 1000000);
+    bn_run("bridge/basal_metabolic_rate", &b_br_bmr, 0, 1000000);
+    bn_run("bridge/body_surface_area", &b_br_bsa, 0, 1000000);
+    bn_run("bridge/skin_radiation_loss", &b_br_skin, 0, 1000000);
+    bn_run("bridge/muscle_activation_heat", &b_br_activation, 0, 1000000);
+    bn_run("bridge/evaporative_cooling", &b_br_evaporative, 0, 1000000);
     return 0;
 }
 
