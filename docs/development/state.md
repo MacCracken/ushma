@@ -165,6 +165,6 @@ crates.io for "ushma" and waits on the maintainer.
 ## Next
 
 The port is complete: every Rust module, function, test, benchmark and example has its Cyrius counterpart, checked
-against 1.4.0. What follows is the roadmap's demand-gated backlog, the upstream items in the port plan §8 (each
-filed only on the maintainer's word), and switching the vendored `mathx.cyr` and `fmtf.cyr` to upstream versions
-when those land (plan §9).
+against 1.4.0. What follows is in the [roadmap](roadmap.md): the 2.x.x work, demand-gated, and the upstream
+blockers, each with the catch-up to do when its fix lands (retiring the vendored `mathx.cyr` and `fmtf.cyr` among
+them).

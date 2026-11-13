@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **docs/development/roadmap.md** — reorganized for 2.x. The completed version lists (V0.1–V2.0, the bridges, the
+  soorat data) are removed; that history is in this file and the port plan. What is left:
+  - the 2.x.x work, demand-gated and grouped by module, with the rules it lands under (Rust 1.4.0 stays the oracle;
+    a result change gets an ADR 0002 row);
+  - the upstream blockers, each with its issue, what ushma does meanwhile, and the catch-up when the fix lands.
+
+  The plan's §9, `state.md` and CLAUDE.md's documentation map point to it.
+
 ## [2.0.0] - 2026-11-12
 
 ushma is now a Cyrius library: the Rust crate ported whole, every module, feature, test, benchmark and example. The

@@ -1,210 +1,112 @@
 # Ushma Roadmap
 
-> **Ushma** is the thermodynamics simulation crate. Math foundations come from [hisab](https://github.com/MacCracken/hisab).
+> **Ushma** is the thermodynamics simulation library for AGNOS, in Cyrius. Math foundations come from the Cyrius
+> stdlib (ganita) and [hisab](https://github.com/MacCracken/hisab).
+
+This page is what is still to do. What is done is in the [CHANGELOG](../../CHANGELOG.md): 1.0–1.4 (Rust) and 2.0.0,
+the Cyrius port. The port's own record is the [port plan](ushma-port-plan.md).
 
 ## Scope
 
-Ushma owns the **physics of heat**: how thermal energy transfers, transforms, and equilibrates. It provides the math; consumers decide what to do with it (simulate engines, model climate, thermal effects in games).
+Ushma owns the **physics of heat**: how thermal energy transfers, transforms, and equilibrates. It provides the math;
+consumers decide what to do with it (simulate engines, model climate, thermal effects in games).
 
 Ushma does NOT own:
 - **Physics engine** → impetus (rigid body dynamics, collision)
-- **Math primitives** → hisab (vectors, geometry, calculus, ODE/PDE solvers)
+- **Math primitives** → hisab, ganita (vectors, geometry, calculus, linear algebra, ODE/PDE solvers)
 - **Rendering** → soorat/kiran (they consume ushma for thermal visualization)
-- **Fluid dynamics** → future crate (CFD, Navier-Stokes)
+- **Fluid dynamics** → pravash (CFD, Navier-Stokes)
 
-## V0.1 — Foundation (done)
+## How 2.x work lands
 
-### transfer
-- [x] Fourier's law (conduction through solids)
-- [x] Newton's law of cooling (convection)
-- [x] Stefan-Boltzmann law (radiation)
-- [x] Thermal resistance: conduction, convection, series, parallel
-- [x] Heat stored (Q = mcΔT)
-- [x] Thermal diffusivity (α = k/ρc_p)
-- [x] Biot number
-- [x] Lumped capacitance transient model
+- **Rust 1.4.0 stays the oracle.** It is frozen in `rust-old/` and never changes. A change that moves a result away
+  from 1.4.0's gets an [ADR 0002](../adr/0002-port-api-divergences.md) row, and the golden rows it moves are mapped
+  under it, so the corpus keeps comparing every function against 1.4.0.
+- **New physics has no oracle.** It comes with reference tests against the literature and an independent model in
+  `scripts/oracle/validate.py`, as the port's own refusals did.
+- **The API only grows.** Enums and error codes are append-only, and a new form joins beside the old one rather than
+  replacing it. Nothing below needs a 3.0.
+- **Versions:** new capability is a minor release (2.x.0); a fix, or catch-up work that changes no result, a patch
+  (2.x.y).
+- **Demand-gated:** each item waits for a consumer that needs it (kiran, joshua, soorat, or a bridge's crate).
 
-### state
-- [x] Ideal gas law (P, V, T)
-- [x] Van der Waals equation
-- [x] Isothermal work
-- [x] Isobaric work
-- [x] Adiabatic temperature change
-- [x] Compressibility factor
+## 2.x.x — planned work
 
-### entropy
-- [x] Ideal gas entropy change
-- [x] Isothermal entropy change
-- [x] Heat transfer entropy (ΔS = Q/T)
-- [x] Carnot efficiency
-- [x] Carnot COP (refrigeration)
-- [x] Helmholtz free energy
-- [x] Gibbs free energy
-- [x] Clausius inequality (spontaneity check)
-- [x] Entropy of mixing
+### numerical
+- [ ] **2D walls, second order.** A ghost-node treatment for insulated and convective walls. They are first-order at
+  the wall now; the 1D grid is second-order already. Moves results: needs an ADR 0002 row.
+- [ ] **Gauss–Seidel:** a residual-based stopping criterion, and SOR acceleration, as options beside today's
+  largest-change test.
 
-### material
-- [x] ThermalMaterial struct (k, c_p, ρ, melting/boiling points)
-- [x] 10 built-in materials (copper, aluminum, iron, steel, glass, water, air, wood, concrete, diamond)
-- [x] Diffusivity and volumetric heat capacity methods
+### transfer and bridge
+- [ ] **Dittus–Boelter for cooling** (n = 0.3), beside today's heating form (n = 0.4).
+- [ ] **`us_velocity_to_convection_coefficient`:** laminar and flat-plate branches. It is a turbulent pipe-flow
+  correlation only today.
+- [ ] **`us_altitude_to_temperature` above the tropopause:** the isothermal layer past about 11 km. The troposphere's
+  lapse rate holds below it.
 
-## V0.2 — Phase Transitions (done)
+### steam
+- [ ] **A denser superheated grid.** The gap between the 5 and 10 MPa tiers limits h to about 0.2 %.
+- [ ] **The compressed-liquid region.**
+- [ ] **The saturation dome** in the T-s diagrams of steam cycles. Their processes are straight lines today.
 
-- [x] Clausius-Clapeyron equation (phase boundary slope dP/dT)
-- [x] Latent heat of fusion and vaporization
-- [x] Phase diagram lookup (solid/liquid/gas regions)
-- [x] Triple point and critical point data for common substances
-- [x] Saturated steam tables (temperature and pressure indexed)
-- [x] Quality (dryness fraction) for wet steam
-- [x] Superheated steam properties
+### phase
+- [ ] **A sloped melting curve**, for water's negative dT/dP.
+- [ ] **Two data points to review:** ETHANOL's triple-point pressure and MERCURY's critical pressure.
 
-## V0.3 — Heat Engines & Cycles (done)
+### ai
+- [ ] **A dedicated error code for network failures.** Today every registration failure is `US_ERR_INVALID_PARAMETER`,
+  as 1.4.0's is `InvalidParameter`. A new code, appended, moves the outcome of the golden registrations it covers (a
+  refused connection, a timeout, perhaps an HTTP error status): needs an ADR 0002 row.
 
-- [x] Otto cycle (spark ignition engine)
-- [x] Diesel cycle (compression ignition)
-- [x] Rankine cycle (steam power plant)
-- [x] Brayton cycle (gas turbine)
-- [x] Refrigeration cycle (vapor compression)
-- [x] Heat pump COP
-- [x] Cycle T-s and P-v diagram data generation
-- [x] Thermal efficiency comparison across cycles
+## Upstream blockers — catch-up when fixes land
 
-## V0.4 — Extended Heat Transfer (done)
+Each item is a workaround ushma carries for a defect or a gap upstream. When the fix ships, the catch-up removes the
+workaround. Every result stays bit-identical: the corpus, the gates on all four targets and the benchmark record show
+it. Each is patch-level unless its row says otherwise. The issues and their repros are in
+[`upstream/`](upstream/README.md). An item marked *not filed* waits for the maintainer's word.
 
-- [x] Fin heat transfer (rectangular, insulated tip)
-- [x] Fin efficiency and effectiveness
-- [x] Heat exchangers: LMTD method (parallel/counter flow)
-- [x] Heat exchangers: ε-NTU method
-- [x] Nusselt number correlations (Dittus-Boelter, Churchill-Chu)
-- [x] Reynolds and Prandtl number calculations
-- [x] Thermal boundary layer thickness (Blasius)
-- [x] View factors for radiation (parallel plates, perpendicular plates, coaxial disks)
+### Math, JSON and memory
 
-## V0.5 — Numerical Methods (done)
+| Upstream | Status | What ushma does meanwhile | Catch-up when it lands |
+|---|---|---|---|
+| ganita: correctly rounded exp, expm1, ln, pow, atan2, tanh (`2026-11-09-correctly-rounded-exp-sin-cos-hypot`, ushma's addendum) | filed | vendors kimiya's `src/mathx.cyr` and its tables, plus its own `_us_cr_tanh` (ADR 0004) | call ganita's; delete `mathx.cyr`, `mathx_data.cyr` and `mathx_tables.py`; run `cr_verify.py` against ganita's; every class-C row stays at 0 ulp |
+| bayan: a serde_json-compatible shortest f64 printer (`2026-11-11-no-serde-compatible-shortest-f64-printer`) | filed | vendors impetus's `src/fmtf.cyr`, an exact bignum printer: about 3 µs for a full 17-digit double (a 20 × 20 heatmap's document, 1.1–1.3 ms) | write f64 through bayan's; delete `fmtf.cyr` and `vendor_fmtf.py`; `fmtf.tsv`'s 26,088 rows and every JSON row unchanged; re-measure the JSON benches |
+| bayan: refuse raw control bytes and invalid UTF-8 in strings (`2026-11-11-json-strings-accept-raw-control-bytes-and-invalid-utf8`) | filed | `json.cyr` pre-scans each document (`_us_jr_raw_ok`) and validates each string (`_us_utf8_valid`) | delete both; the JSON rows unchanged |
+| bayan: the integer `-0` keeps its sign (pravash's `2026-11-11-json-integer-negative-zero-loses-its-sign`, ushma's addendum) | filed | the decoder rows that read an integer `-0` are accepted under ADR 5 | those rows become ok; drop the harness's `-0` acceptance; amend ADR 0005 |
+| bayan: an opt-in for duplicate keys and deep nesting in ignored members (`2026-11-09-json-duplicate-key-has-no-opt-in-for-ignored-members`, ushma's addendum) | filed | such documents are refused, ADR 5's mapped rows | opt in; those rows become ok; amend ADR 0005 |
+| bayan: integers above i64::MAX (`2026-11-09-json-integer-above-i64-max-refuses-the-document`, ushma's addendum) | filed | refused, ADR 5's mapped rows (a usize or an f64 field ≥ 2⁶³) | read them into f64 fields. A usize ≥ 2⁶³ needs a decision first: ushma holds counts as i64 words. Then those rows become ok, under an ADR 0005 amendment |
+| ganita: an allocator-taking `mat_lu_solve` (`2026-11-11-mat-lu-solve-allocates-per-call`) | filed | `numerical.cyr` runs the forward and back substitution itself over ganita's factors (ADR 0003, second amendment) | call ganita's with the network's scratch; the 600-network bit-identity test, all 476 solve rows and the 0-byte soak unchanged; re-measure `thermal_network_5` |
+| cyrius stdlib (math): Rust-semantics `f64_min` / `f64_max` (`2026-11-11-f64-min-max-drop-nan-only-as-first-operand`, ushma's addendum); `f64_is_nan`, `f64_is_finite`, `F64_INF`, `F64_NAN`, `F64_EPSILON` (*not filed*: add to impetus's filing first) | min/max filed; the rest not filed | `_us_min`, `_us_max`, `_us_is_nan`, `_us_is_finite`, `_us_nan`, `_US_INF`, `_US_EPSILON` | use the stdlib's; delete the private copies |
+| cyrius stdlib (string): `memcpy` and `memset` copy a byte at a time (ranga's `2026-11-02` issue) | open; ushma's numbers not yet added | copies words itself (soorat's `_us_sr_copy`; the cycle results store in place instead, M4a) | use `memcpy`; re-measure `soorat/*` |
+| cyrius stdlib (fmt): `fmt_float_buf` at 0 decimals writes `123.0`, and rounds in f64 rather than exactly | *not filed* | `docs/examples/print.cyr` cuts the text at the point | drop the cut; `scripts/examples.sh` stays byte-identical |
 
-- [x] 1D transient conduction (explicit finite difference)
-- [x] 1D transient conduction (implicit/Crank-Nicolson)
-- [x] 2D steady-state conduction (Gauss-Seidel iteration)
-- [x] Thermal network solver (conductance matrix via hisab gaussian elimination)
-- [x] Integration with hisab (Simpson integration, lerp, bisection, gaussian elimination)
-- [x] Adaptive time stepping for stability
+### Tooling, logging and the network
 
-## V0.6 — Real Gas Models (done)
+| Upstream | Status | What ushma does meanwhile | Catch-up when it lands |
+|---|---|---|---|
+| hisab: drop its `[deps.sakshi]` (`2026-11-11-deps-sakshi-package-warns-every-consumer`) | filed | every resolve warns `refusing to overwrite stdlib leaf 'sakshi'`, filtered by the gates | bump the hisab pin and `cyrius deps --relock`; drop the warning from `gates.sh`'s known list and `state.md` |
+| sakshi: a level-taking span entry (`2026-11-11-span-enter-has-no-level-check`) | filed | `_us_span_enter` / `_us_span_exit` test the level first (probe 8: 192 ns into the ring otherwise) | call sakshi's; re-measure the span cost |
+| sandhi: `total_ms` bounds a read blocked before the first byte (`2026-11-11-total-ms-does-not-bound-a-blocked-first-read`) | filed | the daimon client sets `read_ms` as well as `total_ms` (ADR 0002 row 7) | `read_ms` may stay (it is harmless) or go: amend row 7, and re-run `tests/ai.tcyr`'s silent-server case with `total_ms` alone |
+| cyrius: `#inline` takes a small body with an `if` or a local (pravash's `2026-11-11-inline-refuses-small-numeric-helpers`, ushma's addendum) | filed | the finite checks are written as one expression; the level-gated spans can't be, and cost 7 ns a call | `#inline` the span helpers and the predicates; re-measure |
+| cyrius: the `field-store-of-struct-call-copies-a-field-argument` miscompile (`2026-11-09`) | open (not ushma's filing) | CLAUDE.md's workaround: bind a struct-returning call to a local before storing it into a field | relax the rule in CLAUDE.md |
+| cyrius stdlib (fdlopen, dynlib): six raw syscalls with no PE route (`2026-11-11-fdlopen-dynlib-raw-syscalls-warn-on-every-pe-build`) | filed | every `[lib.ai]` PE build keeps one warning, filtered as `^warning:lib/` | drop the note from `state.md` |
+| sigil: its TLS buffers' `large static data` warning (prakash's record) | open (not ushma's filing) | filtered by the gates | drop it from `gates.sh`'s known list and `state.md` |
 
-- [x] Redlich-Kwong equation of state
-- [x] Peng-Robinson equation of state
-- [x] Virial equation of state (B, C coefficients)
-- [x] Generalized compressibility charts (Pitzer correlation)
-- [x] Acentric factor database (8 gases)
-- [x] Mixture rules (Kay's rule for Tc, Pc, ω)
+### Filed, with nothing to catch up
 
-## V0.7 — Chemical Thermodynamics (done)
+These are fixed in ushma's design, so a fix upstream changes nothing here:
+- **cyrius `mod` scope** (`2026-11-11-mod-scope-runs-past-the-included-file`) and **duplicate functions across
+  bundles** (`2026-11-11-duplicate-fn-across-bundles-last-wins`). ushma's names carry the written `us_` prefix (ADR
+  0001), and that prefix is the 2.x API.
+- **cyrius `#derive(Serialize)`** (`2026-11-11-derive-writer-faults-on-a-zero-str-field` and the derive-json shapes
+  addendum). ushma's JSON codecs are hand-written (ADR 0005).
+- **ganita `mat_gaussian_elim`'s pivot scale** (`2026-11-11-gaussian-elim-pivot-scale-includes-rhs`). ushma solves
+  on LU (ADR 0003).
+- **`cyrius port` clobbering project docs** (`2026-11-08`). It was a one-time scaffold.
 
-- [x] Standard enthalpy of formation (12 species)
-- [x] Hess's law (reaction enthalpy from formation enthalpies)
-- [x] Gibbs free energy of reaction
-- [x] Equilibrium constant from ΔG
-- [x] Van't Hoff equation (K vs temperature)
-- [x] Adiabatic flame temperature
-
-## V0.8 — Statistical Thermodynamics (done)
-
-- [x] Boltzmann distribution
-- [x] Partition functions (translational, rotational, vibrational)
-- [x] Maxwell-Boltzmann speed distribution
-- [x] Einstein and Debye models for solid heat capacity
-- [x] Equipartition theorem
-- [x] Entropy from microstates (S = k⋅ln(W))
-
-## V0.9 — Examples & Documentation (done)
-
-- [x] Example: heat engine cycle simulator
-- [x] Example: building thermal model (walls, windows, insulation)
-- [x] Example: cooling system design
-- [x] Example: phase change material storage
-- [x] Module-level documentation with feature tables
-- [x] README with full module/feature matrix
-
-## V1.0 — Stable Release (done)
-
-- [x] API review: naming consistency, parameter ordering
-- [x] `#[must_use]` on all pure functions and accessors
-- [x] Feature gate audit (all 10 features compile independently)
-- [x] Documentation coverage check (rustdoc -D warnings clean)
-- [x] README update with full feature matrix
-- [x] hisab integration (Simpson, lerp, bisection, gaussian elimination)
-- [x] Performance: 57 benchmarked functions with CSV history
-
-## V1.1 — P(-1) Hardening (done)
-
-- [x] Remove unused `impetus` dependency
-- [x] Fix `unwrap()` in library code (numerical.rs, ai.rs)
-- [x] Standardize temperature validation (T=0 handling)
-- [x] Add input validation: `ideal_gas_temperature`, `heat_for_phase_change`
-- [x] Fix `entropy_of_mixing` to accept zero mole fractions
-- [x] Add `#[tracing::instrument]` to 23 core functions
-- [x] Baseline benchmarks (57 functions, 14 runs in history)
-
-## V1.4 — Toolchain Update & Correctness Audit (done)
-
-- [x] MSRV 1.89 → 1.99 (latest stable), edition 2024; reqwest 0.13, criterion 0.8, hisab 1.4; GitHub Actions to current majors
-- [x] NaN/±∞ rejected by every positivity/range guard (`validate::finite_gt` / `finite_ge`)
-- [x] Steam tables regenerated from IAPWS-IF97; exact Region 4 saturation line; ln-P superheated interpolation; `superheated_by_entropy`
-- [x] Rankine superheated exhaust, refrigeration compressor exit, refrigeration second-law efficiency, refrigeration net-work sign
-- [x] T-s / P-v diagrams follow the real process paths (incl. steam isentropes)
-- [x] Phase boundaries through triple/boiling/critical points; sublimation curve; CO₂ at 1 atm
-- [x] Perpendicular-plate view factor formula; stable coaxial-disk and small-plate view factors
-- [x] Explicit FD stability with convective boundaries (Fo·(1+Bi) ≤ 0.5); adaptive-step round-off; 2D convective BC; network connectivity check
-- [x] Debye Cv at low T; equilibrium-constant overflow (`ln_equilibrium_constant`); Pitzer Z validity; exact R
-
-## V2.0 — Cyrius port (done, 2026-11-12)
-
-Rust 1.4.0 is the final Rust feature release and becomes the frozen parity oracle in `rust-old/`;
-the Cyrius port ships as 2.0.0 and carries **everything** — every module, feature, test,
-benchmark and example. Plan of record: [ushma-port-plan.md](ushma-port-plan.md).
-
-- [x] M0 — tag 1.4.0 (Rust frozen as it stands), `cyrius port`, oracle generator, parity harness, probes, upstream filings (2026-11-11)
-- [x] M1 — foundation, logging (sakshi) & transfer (2026-11-12)
-- [x] M2 — equations of state & entropy (2026-11-12)
-- [x] M3 — phase & steam (2026-11-12)
-- [x] M4 — cycles (2026-11-12)
-- [x] M5 — chemical & statistical (2026-11-12)
-- [x] M6 — numerical (2026-11-12)
-- [x] M7 — integrations: bridges, soorat-compat, ai (sandhi) (2026-11-12)
-- [x] M8 — release 2.0.0 (155/155 functions, 479/479 tests, 5 examples) (2026-11-12)
-
-## Backlog (from the 1.4 audit, demand-gated)
-
-- [ ] 2D boundary nodes: second-order ghost-node treatment (insulated/convective are first-order at the wall; 1D is second-order)
-- [ ] Gauss-Seidel: residual-based stopping criterion and SOR acceleration
-- [x] `ThermalGrid2D` flat `Vec<f64>` storage and reusable Crank-Nicolson scratch buffers (both change public struct layout → breaking). Done in the Cyrius port: ADR 0002 rows 2 and 15; the network keeps its solve scratch too (row 16)
-- [ ] Dittus-Boelter cooling exponent (n = 0.3); laminar / flat-plate branch for `bridge::velocity_to_convection_coefficient`
-- [ ] Tropopause handling in `bridge::altitude_to_temperature`
-- [ ] Dedicated network error variant for `ai` (currently `InvalidParameter`)
-- [ ] Steam: denser superheated grid (5 → 10 MPa gap limits h to ~0.2 %), compressed-liquid region, saturation dome in T-s diagrams
-- [ ] Phase: sloped melting curve (water's negative dT/dP); review ETHANOL triple-point pressure and MERCURY critical pressure data
-
-## Cross-Crate Bridges (done — 1.2.0, sharira in 1.3.0)
-
-- [x] **`bridge.rs` module** — primitive-value conversions for cross-crate thermodynamics
-- [x] **bijli bridge**: Joule heating power (W) → temperature rise rate (K/s); EM absorption → volumetric heat source
-- [x] **kimiya bridge**: reaction enthalpy (J/mol) → heat release rate; equilibrium constant → temperature-dependent yield
-- [x] **dravya bridge**: temperature (K) → thermal expansion strain; thermal gradient (K/m) → thermal stress (Pa)
-- [x] **badal bridge**: altitude (m), lapse rate (K/m) → atmospheric temperature; humidity ratio → wet-bulb temperature
-- [x] **pravash bridge**: fluid velocity → convective heat transfer coefficient; turbulent kinetic energy → eddy thermal diffusivity
-
----
-
-## Soorat Integration (rendering visualization) (done — 1.2.0)
-
-- [x] **`integration/soorat.rs` module** — feature-gated `soorat-compat`, visualization data structures for soorat to consume
-- [x] **Thermal grid heatmap**: Expose `ThermalGridVisualization` from `ThermalGrid2D` (temperature values, dimensions, spacing, min/max bounds) for 2D heatmap rendering
-- [x] **1D temperature profile**: Expose `TemperatureProfile` from `ThermalGrid1D` (node temperatures, spacing, boundary conditions) for line/ribbon rendering
-- [x] **Cycle diagrams**: Expose `CycleDiagramData` wrapping `cycle_ts_diagram()` / `cycle_pv_diagram()` output (Vec<DiagramPoint>, CycleKind, state points) for T-s and P-v plot rendering
-- [x] **Thermal network graph**: Expose `ThermalNetworkVisualization` from `ThermalNetwork` (node positions/temperatures, resistance edges) for node-link rendering
-- [x] **Heat flux vectors**: Expose `HeatFluxField` — grid of flux vectors from `ThermalGrid2D` gradients for arrow/streamline rendering
-
----
+Notes for the sibling ports (kimiya, pravash, impetus, tanmatra) that are not filed while those ports are in progress
+are in the port plan's §8. They need nothing from ushma.
 
 ## Consumers
 
@@ -212,8 +114,11 @@ benchmark and example. Plan of record: [ushma-port-plan.md](ushma-port-plan.md).
 |----------|-------------|
 | **kiran** | Thermal simulation in game worlds (heat zones, fire, cooling) |
 | **joshua** | Simulation: heat engines, thermal experiments, climate models |
-| **badal** | Weather/atmospheric modeling (thermo feature) |
-| **dravya** | Material/substance modeling |
+| **soorat** | Thermal visualization (the soorat data types) |
+| **badal** | Weather/atmospheric modeling (the badal bridges) |
+| **dravya** | Material/substance modeling (the dravya bridges) |
+
+None consumes the Cyrius library yet; they use the Rust crate, 1.4.0. The current list is in [state.md](state.md).
 
 ## Boundary with Other Crates
 
@@ -222,7 +127,7 @@ benchmark and example. Plan of record: [ushma-port-plan.md](ushma-port-plan.md).
 | Heat transfer math | Yes | — |
 | Rigid body dynamics | — | impetus |
 | ODE/PDE solvers | — | hisab |
-| Fluid dynamics (CFD) | — | future crate |
-| Vector/matrix math | — | hisab |
+| Fluid dynamics (CFD) | — | pravash |
+| Vector/matrix math | — | hisab, ganita |
 | Thermal visualization | — | kiran/soorat |
-| Material science (stress/strain) | — | impetus |
+| Material science (stress/strain) | — | dravya |

@@ -227,7 +227,7 @@ Root files (required):
 docs/:
   development/ushma-port-plan.md — the port plan of record
   development/state.md           — live state
-  development/roadmap.md         — completed items, backlog, future features, v1.0 criteria
+  development/roadmap.md         — the 2.x.x work and the upstream catch-up list (done work is in the CHANGELOG)
   development/port-parity.md     — measured parity baselines (M0 step 8)
   benchmarks-rust-v-cyrius.md    — Rust vs Cyrius benchmark record
   adr/NNNN-title.md              — architectural decision records (template.md)
